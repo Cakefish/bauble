@@ -10,7 +10,7 @@ use chumsky::{primitive::end, Parser};
 
 fn main() {
     let mut src = String::new();
-    File::open("test.rsn")
+    File::open("test.bbl")
         .unwrap()
         .read_to_string(&mut src)
         .unwrap();
