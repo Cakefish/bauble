@@ -33,7 +33,7 @@ fn test_tuple() {
     struct Test(i32, u32);
     assert_eq!(
         Ok(Test(-5, 5)),
-        simple_convert("test = derive::Test { x: -5, y: 5 }", "test")
+        simple_convert("test = derive::Test(-5, 5)", "test")
     );
 }
 
@@ -52,7 +52,7 @@ fn test_flattened() {
     );
     assert_eq!(
         Ok(Test::Bar { x: -5, y: 5 }),
-        simple_convert("test = derive::Test(-5, 5)", "test")
+        simple_convert("test = derive::Test { x: -5, y: 5 }", "test")
     );
     assert_eq!(Ok(Test::Baz), simple_convert("test = derive::Test", "test"));
 }
