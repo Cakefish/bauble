@@ -1,3 +1,7 @@
 [workspace]
 
-members = ["bauble", "bauble_macros"]
+members = [
+    "bauble",
+    "bauble_macros",
+    "bauble_macro_util"
+]
