@@ -8,7 +8,7 @@ fn simple_convert<T: FromBauble>(
     let allocator = bauble::DefaultAllocator;
     for object in objects {
         if object.object_path.ends_with(object_name) {
-            return Ok(T::from_bauble(object.value, &allocator)?.0);
+            return Ok(T::from_bauble(object.value, &allocator)?);
         }
     }
     panic!("`object` not found");
