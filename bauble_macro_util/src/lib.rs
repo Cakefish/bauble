@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{
-    AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields, ImplGenerics,
-    Index, Token, Type, WhereClause, parse2,
+    parse2, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index,
+    Token, Type, WhereClause,
 };
 
 // Related fields used by `derive_struct` and `derive_fields` containing type info
@@ -468,7 +468,6 @@ fn parse_attributes(attributes: &Vec<Attribute>) -> Result<Vec<Ident>, proc_macr
 }
 
 pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
-
     // Type-level attributes
     // For an enum, whether the variant's field is directly deserialized in this type's place
     let mut flatten = false;

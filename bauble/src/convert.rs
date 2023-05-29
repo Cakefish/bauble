@@ -146,26 +146,44 @@ impl<T: FromBauble> FromBauble for Vec<T> {
     }
 }
 
+/// Match on a simple value, assumes no attributes, and only one valid Value to convert from.
+#[macro_export]
+macro_rules! match_val {
+    ($value:expr, ($ident:ident$(($field:ident))?, $span:ident) => $block:expr $(,)?) => {
+        {
+            let value = $value;
+            if let Some((attribute, _)) = value.attributes.value.0.iter().next() {
+                Err($crate::DeserializeError::UnexpectedAttribute {
+                    attribute: attribute.clone(),
+                    ty: $crate::TypeInfo::simple(stringify!($ident)),
+                })?
+            }
+
+            let $crate::Spanned { value, span } = value.value;
+            Ok(match (value, span) {
+                ($crate::Value::$ident $(($field))?, $span) => $block,
+                (value, span) => Err($crate::DeserializeError::WrongKind {
+                    expected: $crate::ValueKind::$ident,
+                    found: value.kind(),
+                    ty: $crate::TypeInfo::simple(stringify!($ident)),
+                    span,
+                })?,
+            })
+        }
+    };
+}
+
 macro_rules! impl_nums {
     ($($ty:ty,)*) => {
         $(
             impl<A: BaubleAllocator> FromBauble<A> for $ty {
                 fn from_bauble(
-                    Val {
-                        attributes: Spanned { value: Attributes(attributes), .. },
-                        value: Spanned { value, span },
-                    }: Val,
+                    val: Val,
                     allocator: &A,
                 ) -> Result<A::Out<Self>, Box<DeserializeError>> {
-                    if let Some((attribute, _)) = attributes.into_iter().next() {
-                        Err(DeserializeError::UnexpectedAttribute {
-                            attribute,
-                            ty: TypeInfo::simple(stringify!($ty)),
-                        })?
-                    }
-
-                    Ok(match value {
-                        Value::Num(number) => {
+                    match_val!(
+                        val,
+                        (Num(number), span) => {
                             let number = paste::paste!(number.[< to_ $ty >]())
                                 .ok_or_else(|| DeserializeError::Custom {
                                     message: format!("{} is not a valid {}", number, stringify!($ty)),
@@ -173,14 +191,8 @@ macro_rules! impl_nums {
                                 })?;
                             // SAFETY: No allocations are contained in these types.
                             unsafe { allocator.wrap(number) }
-                        },
-                        _ => Err(DeserializeError::WrongKind {
-                            expected: ValueKind::Num,
-                            found: value.kind(),
-                            ty: TypeInfo::simple(stringify!($ty)),
-                            span,
-                        })?,
-                    })
+                        }
+                    )
                 }
             }
         )*
@@ -194,135 +206,49 @@ impl_nums! {
 }
 
 impl<A: BaubleAllocator> FromBauble<A> for bool {
-    fn from_bauble(
-        Val {
-            attributes: Spanned { value: Attributes(attributes), .. },
-            value: Spanned { value, span },
-        }: Val,
-        allocator: &A,
-    ) -> Result<A::Out<Self>, Box<DeserializeError>> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: TypeInfo::simple("bool"),
-            })?
-        }
-
-        Ok(match value {
-            Value::Bool(v) => {
-                // TODO: No allocations are contained in a bool.
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
+        match_val!(
+            val,
+            (Bool(v), _span) => {
+                // SAFETY: No allocations are contained in a bool.
                 unsafe { allocator.wrap(v) }
-            },
-            _ => Err(DeserializeError::WrongKind {
-                expected: ValueKind::Num,
-                found: value.kind(),
-                ty: TypeInfo::simple(stringify!($ty)),
-                span,
-            })?,
-        })
+            }
+        )
     }
 }
 
 impl FromBauble for String {
-    fn from_bauble(
-        Val {
-            attributes:
-                Spanned {
-                    value: Attributes(attributes),
-                    ..
-                },
-            value: Spanned { value, span },
-        }: Val,
-        _: &DefaultAllocator,
-    ) -> Result<Self, Box<DeserializeError>> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: TypeInfo::simple("String"),
-            })?
-        }
-
-        Ok(match value {
-            Value::Str(string) => string,
-            _ => Err(DeserializeError::WrongKind {
-                expected: ValueKind::Str,
-                found: value.kind(),
-                ty: TypeInfo::simple("String"),
-                span,
-            })?,
-        })
+    fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
+        match_val!(
+            val,
+            (Str(string), _span) => string,
+        )
     }
 }
 
 impl<A: BaubleAllocator, T: FromBauble<A>> FromBauble<A> for Option<T> {
-    fn from_bauble(
-        Val {
-            attributes:
-                Spanned {
-                    value: Attributes(attributes),
-                    ..
-                },
-            value: Spanned { value, span },
-        }: Val,
-        allocator: &A,
-    ) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: TypeInfo::simple("Option"),
-            })?
-        }
-
-        match value {
-            Value::Opt(opt) => {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
+        match_val!(
+            val,
+            (Opt(opt), _span) => {
                 let opt = opt
                 .map(|val| T::from_bauble(*val, allocator).and_then(|t| allocator.validate(t)))
                 .transpose();
 
                 // SAFETY: The contained value in the option was validated,
                 // and outside of that option doesn't contain any allocations.
-                unsafe { opt.map(|opt| allocator.wrap(opt)) }
-            },
-            _ => Err(Box::new(DeserializeError::WrongKind {
-                expected: ValueKind::Unit,
-                found: value.kind(),
-                ty: TypeInfo::simple("Option"),
-                span,
-            })),
-        }
+                unsafe { opt.map(|opt| allocator.wrap(opt))? }
+            }
+        )
     }
 }
 
 impl FromBauble for () {
-    fn from_bauble(
-        Val {
-            attributes:
-                Spanned {
-                    value: Attributes(attributes),
-                    ..
-                },
-            value: Spanned { value, span },
-        }: Val,
-        _: &DefaultAllocator,
-    ) -> Result<Self, Box<DeserializeError>> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: TypeInfo::simple("()"),
-            })?
-        }
-
-        match value {
-            Value::Unit => (),
-            _ => Err(DeserializeError::WrongKind {
-                expected: ValueKind::Unit,
-                found: value.kind(),
-                ty: TypeInfo::simple("()"),
-                span,
-            })?,
-        }
-
-        Ok(())
+    fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
+        match_val!(
+            val,
+            (Unit, _span) => (),
+        )
     }
 }
 
@@ -330,45 +256,26 @@ macro_rules! impl_tuple {
     ($($ident:ident),+) => {
         impl<$($ident: FromBauble),*> FromBauble for ($($ident),*,) {
             fn from_bauble(
-                Val {
-                    attributes:
-                        Spanned {
-                            value: Attributes(attributes),
-                            ..
-                        },
-                    value: Spanned { value, span },
-                }: Val,
+                val: Val,
                 allocator: &DefaultAllocator,
             ) -> Result<Self, Box<DeserializeError>> {
                 const LEN: usize = [$(stringify!($ident)),*].len();
-                if let Some((attribute, _)) = attributes.into_iter().next() {
-                    Err(DeserializeError::UnexpectedAttribute {
-                        attribute,
-                        ty: TypeInfo::simple("Tuple"),
-                    })?
-                }
-
-                match value {
-                    Value::Tuple(seq) => {
+                match_val!(
+                    val,
+                    (Tuple(seq), span) => {
                         if seq.len() == LEN {
                             let mut seq = seq.into_iter();
-                            Ok(($($ident::from_bauble(seq.next().expect("We checked tuple length"), allocator)?),*,))
+                            ($($ident::from_bauble(seq.next().expect("We checked tuple length"), allocator)?),*,)
                         } else {
                             Err(Box::new(DeserializeError::WrongTupleLength {
                                 expected: LEN,
                                 found: seq.len(),
                                 ty: TypeInfo::simple("Tuple"),
                                 span,
-                            }))
+                            }))?
                         }
-                    },
-                    _ => Err(Box::new(DeserializeError::WrongKind {
-                        expected: ValueKind::Unit,
-                        found: value.kind(),
-                        ty: TypeInfo::simple("Tuple"),
-                        span,
-                    })),
-                }
+                    }
+                )
             }
         }
     };
@@ -393,50 +300,30 @@ impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15
 
 impl<T: FromBauble, const N: usize> FromBauble for [T; N] {
     fn from_bauble(
-        Val {
-            attributes:
-                Spanned {
-                    value: Attributes(attributes),
-                    ..
-                },
-            value: Spanned { value, span },
-        }: Val,
+        val: Val,
         allocator: &DefaultAllocator,
     ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: TypeInfo::simple("Array"),
-            })?
-        }
-
-        match value {
-            Value::Array(seq) => {
+        match_val!(
+            val,
+            (Array(seq), span) => {
                 if seq.len() == N {
-                    let seq = <[T; N]>::try_from(
+                    <[T; N]>::try_from(
                         seq.into_iter()
                             .map(|s| T::from_bauble(s, allocator).map(|i| i))
                             .try_collect::<Vec<_>>()?,
                     )
                     .map_err(|_| ())
-                    .expect("We checked the length");
-                    Ok(seq)
+                    .expect("We checked the length")
                 } else {
                     Err(Box::new(DeserializeError::WrongArrayLength {
                         expected: N,
                         found: seq.len(),
-                        ty: TypeInfo::simple("Tuple"),
+                        ty: TypeInfo::simple("Array"),
                         span,
-                    }))
+                    }))?
                 }
             }
-            _ => Err(Box::new(DeserializeError::WrongKind {
-                expected: ValueKind::Unit,
-                found: value.kind(),
-                ty: TypeInfo::simple("Tuple"),
-                span,
-            })),
-        }
+        )
     }
 }
 
@@ -444,25 +331,12 @@ impl<K: FromBauble + Eq + std::hash::Hash, V: FromBauble> FromBauble
     for std::collections::HashMap<K, V>
 {
     fn from_bauble(
-        Val {
-            attributes:
-                Spanned {
-                    value: Attributes(attributes),
-                    ..
-                },
-            value: Spanned { value, span },
-        }: Val,
+        val: Val,
         allocator: &DefaultAllocator,
     ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: TypeInfo::simple("std::collections::HashMap"),
-            })?
-        }
-
-        match value {
-            Value::Map(seq) => {
+        match_val!(
+            val,
+            (Map(seq), _span) => {
                 let seq = seq
                     .into_iter()
                     .map(|(k, v)| {
@@ -472,14 +346,8 @@ impl<K: FromBauble + Eq + std::hash::Hash, V: FromBauble> FromBauble
                         ))
                     })
                     .try_collect()?;
-                Ok(seq)
+                seq
             }
-            _ => Err(Box::new(DeserializeError::WrongKind {
-                expected: ValueKind::Unit,
-                found: value.kind(),
-                ty: TypeInfo::simple("Tuple"),
-                span,
-            })),
-        }
+        )
     }
 }

@@ -182,7 +182,9 @@ impl RefCopy {
         match self {
             RefCopy::Unresolved | RefCopy::Resolved(_) => Err(ConvertionError::AmbigousUse),
             RefCopy::Ref(reference) => Ok(RefCopy::Ref(
-                reference.combine(other).ok_or(ConvertionError::AmbigousUse)?,
+                reference
+                    .combine(other)
+                    .ok_or(ConvertionError::AmbigousUse)?,
             )),
         }
     }
@@ -651,9 +653,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             if fields.len() == 1 {
                                 Value::Opt(fields.next().map(Box::new))
                             } else {
-                                return Err(
-                                    ConvertionError::TooManyArguments.span(path.last.span)
-                                );
+                                return Err(ConvertionError::TooManyArguments.span(path.last.span));
                             }
                         } else {
                             return Err(conversion_error);
@@ -693,9 +693,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
 
             Value::BitFlags(type_info, values)
         }
-        parse::Value::Error => {
-            return Err(ConvertionError::ParseError.span(value.value.span))
-        }
+        parse::Value::Error => return Err(ConvertionError::ParseError.span(value.value.span)),
         parse::Value::Unit => Value::Unit,
         parse::Value::Raw(data) => Value::Raw(data.clone()),
     };
