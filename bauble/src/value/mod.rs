@@ -183,7 +183,7 @@ impl RefCopy {
             RefCopy::Unresolved | RefCopy::Resolved(_) => Err(ConvertionError::AmbigousUse),
             RefCopy::Ref(reference) => Ok(RefCopy::Ref(
                 reference
-                    .combine(other)
+                    .combined(other)
                     .ok_or(ConvertionError::AmbigousUse)?,
             )),
         }

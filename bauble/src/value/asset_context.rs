@@ -110,7 +110,7 @@ impl Reference {
         }
     }
 
-    pub fn combine(self, other: Reference) -> Option<Reference> {
+    pub fn combined(self, other: Reference) -> Option<Reference> {
         fn xor_option<T>(a: Option<T>, b: Option<T>) -> Option<Option<T>> {
             match (a, b) {
                 (Some(_), Some(_)) => None,
@@ -134,6 +134,32 @@ impl Reference {
                 module: xor_option(module, other_module)?,
             }),
         }
+    }
+
+    pub fn combine_override(&mut self, other: Reference) -> bool {
+        let mut overrode = false;
+        match (self, other) {
+            (this, other @ Reference::Any(_)) => {
+                *this = other;
+                overrode = true;
+            },
+            (Reference::Specific { ty, asset, module }, Reference::Specific { ty: other_ty, asset: other_asset, module: other_module }) => {
+                if other_ty.is_some() {
+                    overrode |= ty.is_some();
+                    *ty = other_ty;
+                }
+                if other_asset.is_some() {
+                    overrode |= asset.is_some();
+                    *asset = other_asset;
+                }
+                if other_module.is_some() {
+                    overrode |= module.is_some() && *module == other_module;
+                    *module = other_module;
+                }
+            },
+            _ => {}
+        }
+        overrode
     }
 }
 
