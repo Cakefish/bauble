@@ -91,7 +91,9 @@ pub trait BaubleAllocator<'a> {
     /// # Safety
     /// Allocations in `value` have to be allocated with the allocator from `allocator`
     unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T>;
-    fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>>;
+    /// # Safety
+    /// If validated an item must be placed within the same allocator.
+    unsafe fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>>;
 }
 
 pub struct DefaultAllocator;
@@ -103,7 +105,7 @@ impl<'a> BaubleAllocator<'a> for DefaultAllocator {
         value
     }
 
-    fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>> {
+    unsafe fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>> {
         Ok(value)
     }
 }
@@ -232,7 +234,10 @@ impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Opt
             val,
             (Opt(opt), _span) => {
                 let opt = opt
-                .map(|val| T::from_bauble(*val, allocator).and_then(|t| allocator.validate(t)))
+                .map(|val| T::from_bauble(*val, allocator).and_then(|t| {
+                    // SAFETY: We wrap this value again inside the option.
+                    unsafe { allocator.validate(t) }
+                }))
                 .transpose();
 
                 // SAFETY: The contained value in the option was validated,
