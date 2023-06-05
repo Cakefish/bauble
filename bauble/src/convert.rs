@@ -85,34 +85,34 @@ pub enum DeserializeError {
 }
 
 // TODO Maybe `unsafe trait`?
-pub trait BaubleAllocator {
-    type Out<T>;
+pub trait BaubleAllocator<'a> {
+    type Out<T> where Self: 'a;
 
     /// # Safety
     /// Allocations in `value` have to be allocated with the allocator from `allocator`
-    unsafe fn wrap<T>(&self, value: T) -> Self::Out<T>;
-    fn validate<T>(&self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>>;
+    unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T>;
+    fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>>;
 }
 
 pub struct DefaultAllocator;
 
-impl BaubleAllocator for DefaultAllocator {
+impl<'a> BaubleAllocator<'a> for DefaultAllocator {
     type Out<T> = T;
 
-    unsafe fn wrap<T>(&self, value: T) -> Self::Out<T> {
+    unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T> {
         value
     }
 
-    fn validate<T>(&self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>> {
+    fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>> {
         Ok(value)
     }
 }
 
-pub trait FromBauble<A: BaubleAllocator = DefaultAllocator>: Sized {
-    fn from_bauble(data: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>>;
+pub trait FromBauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized {
+    fn from_bauble(data: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>>;
 }
 
-impl<T: FromBauble> FromBauble for Vec<T> {
+impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
     fn from_bauble(
         Val {
             attributes:
@@ -122,7 +122,7 @@ impl<T: FromBauble> FromBauble for Vec<T> {
                 },
             value: Spanned { value, span },
         }: Val,
-        allocator: &DefaultAllocator,
+        allocator: &'a DefaultAllocator,
     ) -> Result<Self, Box<DeserializeError>> {
         if let Some((attribute, _)) = attributes.into_iter().next() {
             Err(DeserializeError::UnexpectedAttribute {
@@ -176,10 +176,10 @@ macro_rules! match_val {
 macro_rules! impl_nums {
     ($($ty:ty,)*) => {
         $(
-            impl<A: BaubleAllocator> FromBauble<A> for $ty {
+            impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for $ty {
                 fn from_bauble(
                     val: Val,
-                    allocator: &A,
+                    allocator: &'a A,
                 ) -> Result<A::Out<Self>, Box<DeserializeError>> {
                     match_val!(
                         val,
@@ -205,8 +205,8 @@ impl_nums! {
     f32, f64,
 }
 
-impl<A: BaubleAllocator> FromBauble<A> for bool {
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
+impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
+    fn from_bauble(val: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
             (Bool(v), _span) => {
@@ -217,7 +217,7 @@ impl<A: BaubleAllocator> FromBauble<A> for bool {
     }
 }
 
-impl FromBauble for String {
+impl<'a> FromBauble<'a> for String {
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
         match_val!(
             val,
@@ -226,8 +226,8 @@ impl FromBauble for String {
     }
 }
 
-impl<A: BaubleAllocator, T: FromBauble<A>> FromBauble<A> for Option<T> {
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
+impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Option<T> {
+    fn from_bauble(val: Val, allocator: &'a A) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
         match_val!(
             val,
             (Opt(opt), _span) => {
@@ -243,7 +243,7 @@ impl<A: BaubleAllocator, T: FromBauble<A>> FromBauble<A> for Option<T> {
     }
 }
 
-impl FromBauble for () {
+impl<'a> FromBauble<'a> for () {
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
         match_val!(
             val,
@@ -254,10 +254,10 @@ impl FromBauble for () {
 
 macro_rules! impl_tuple {
     ($($ident:ident),+) => {
-        impl<$($ident: FromBauble),*> FromBauble for ($($ident),*,) {
+        impl<'a, $($ident: FromBauble<'a>),*> FromBauble<'a> for ($($ident),*,) {
             fn from_bauble(
                 val: Val,
-                allocator: &DefaultAllocator,
+                allocator: &'a DefaultAllocator,
             ) -> Result<Self, Box<DeserializeError>> {
                 const LEN: usize = [$(stringify!($ident)),*].len();
                 match_val!(
@@ -298,10 +298,10 @@ impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
 impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
 impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
 
-impl<T: FromBauble, const N: usize> FromBauble for [T; N] {
+impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
     fn from_bauble(
         val: Val,
-        allocator: &DefaultAllocator,
+        allocator: &'a DefaultAllocator,
     ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
@@ -327,12 +327,12 @@ impl<T: FromBauble, const N: usize> FromBauble for [T; N] {
     }
 }
 
-impl<K: FromBauble + Eq + std::hash::Hash, V: FromBauble> FromBauble
+impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble<'a>
     for std::collections::HashMap<K, V>
 {
     fn from_bauble(
         val: Val,
-        allocator: &DefaultAllocator,
+        allocator: &'a DefaultAllocator,
     ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,

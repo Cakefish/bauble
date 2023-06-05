@@ -4,7 +4,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{
     parse2, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index,
-    Token, Type, WhereClause,
+    Token, Type, WhereClause, spanned::Spanned,
 };
 
 // Related fields used by `derive_struct` and `derive_fields` containing type info
@@ -535,7 +535,15 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
 
     let allocator = allocator.unwrap_or_else(|| quote! { ::bauble::DefaultAllocator });
 
-    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let (_, ty_generics, where_clause) = ast.generics.split_for_impl();
+
+    let mut generics = ast.generics.clone();
+
+    let lifetime = syn::Lifetime::new("'alloc_lifetime", generics.span());
+    generics.params.push(syn::GenericParam::Lifetime(syn::LifetimeParam::new(lifetime.clone())));
+
+    let (impl_generics, _, _) = generics.split_for_impl();
+
     let ident = &ast.ident;
 
     // Generate code to deserialize this type
@@ -777,9 +785,11 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
         }
     };
 
+    
+
     // Assemble the implementation
     quote! {
-        impl #impl_generics ::bauble::FromBauble<#allocator> for #ident #ty_generics
+        impl #impl_generics ::bauble::FromBauble<#lifetime, #allocator> for #ident #ty_generics
             #where_clause
         {
             fn from_bauble(
@@ -790,7 +800,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                     },
                     value: ::bauble::Spanned { span, value },
                 }: ::bauble::Val,
-                allocator: &#allocator,
+                allocator: &#lifetime #allocator,
             ) -> ::std::result::Result<
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>

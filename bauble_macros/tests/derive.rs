@@ -1,14 +1,14 @@
 use bauble::FromBauble;
 
-fn simple_convert<T: FromBauble>(
+fn simple_convert<'a, T: FromBauble<'a>>(
     src: &str,
     object_name: &str,
+    alloc: &'a bauble::DefaultAllocator,
 ) -> Result<T, Box<bauble::DeserializeError>> {
     let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Convertion)?;
-    let allocator = bauble::DefaultAllocator;
     for object in objects {
         if object.object_path.ends_with(object_name) {
-            return Ok(T::from_bauble(object.value, &allocator)?);
+            return Ok(T::from_bauble(object.value, alloc)?);
         }
     }
     panic!("`object` not found");
@@ -23,7 +23,7 @@ fn test_struct() {
     }
     assert_eq!(
         Ok(Test { x: -5, y: 5 }),
-        simple_convert("test = derive::Test { x: -5, y: 5 }", "test")
+        simple_convert("test = derive::Test { x: -5, y: 5 }", "test", &bauble::DefaultAllocator)
     );
 }
 
@@ -33,7 +33,7 @@ fn test_tuple() {
     struct Test(i32, u32);
     assert_eq!(
         Ok(Test(-5, 5)),
-        simple_convert("test = derive::Test(-5, 5)", "test")
+        simple_convert("test = derive::Test(-5, 5)", "test", &bauble::DefaultAllocator)
     );
 }
 
@@ -48,11 +48,11 @@ fn test_flattened() {
     }
     assert_eq!(
         Ok(Test::Foo(-10, 2)),
-        simple_convert("test = derive::Test(-10, 2)", "test")
+        simple_convert("test = derive::Test(-10, 2)", "test", &bauble::DefaultAllocator)
     );
     assert_eq!(
         Ok(Test::Bar { x: -5, y: 5 }),
-        simple_convert("test = derive::Test { x: -5, y: 5 }", "test")
+        simple_convert("test = derive::Test { x: -5, y: 5 }", "test", &bauble::DefaultAllocator)
     );
-    assert_eq!(Ok(Test::Baz), simple_convert("test = derive::Test", "test"));
+    assert_eq!(Ok(Test::Baz), simple_convert("test = derive::Test", "test", &bauble::DefaultAllocator));
 }
