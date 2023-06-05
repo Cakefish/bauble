@@ -467,12 +467,10 @@ fn parse_attributes(attributes: &Vec<Attribute>) -> Result<Vec<Ident>, proc_macr
     .collect())
 }
 
-pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
+pub fn derive_bauble_derive_input(ast: &DeriveInput, mut allocator: Option<TokenStream>) -> TokenStream {
     // Type-level attributes
     // For an enum, whether the variant's field is directly deserialized in this type's place
     let mut flatten = false;
-    // An allocator type override
-    let mut allocator = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
 
@@ -830,5 +828,5 @@ pub fn derive_bauble(input: TokenStream) -> TokenStream {
         }
     };
 
-    derive_bauble_derive_input(&ast)
+    derive_bauble_derive_input(&ast, None)
 }
