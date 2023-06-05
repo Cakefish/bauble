@@ -142,8 +142,15 @@ impl Reference {
             (this, other @ Reference::Any(_)) => {
                 *this = other;
                 overrode = true;
-            },
-            (Reference::Specific { ty, asset, module }, Reference::Specific { ty: other_ty, asset: other_asset, module: other_module }) => {
+            }
+            (
+                Reference::Specific { ty, asset, module },
+                Reference::Specific {
+                    ty: other_ty,
+                    asset: other_asset,
+                    module: other_module,
+                },
+            ) => {
                 if other_ty.is_some() {
                     overrode |= ty.is_some();
                     *ty = other_ty;
@@ -156,7 +163,7 @@ impl Reference {
                     overrode |= module.is_some() && *module == other_module;
                     *module = other_module;
                 }
-            },
+            }
             _ => {}
         }
         overrode

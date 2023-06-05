@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{
-    parse2, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index,
-    Token, Type, WhereClause, spanned::Spanned,
+    parse2, spanned::Spanned, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields,
+    ImplGenerics, Index, Token, Type, WhereClause,
 };
 
 // Related fields used by `derive_struct` and `derive_fields` containing type info
@@ -467,7 +467,10 @@ fn parse_attributes(attributes: &Vec<Attribute>) -> Result<Vec<Ident>, proc_macr
     .collect())
 }
 
-pub fn derive_bauble_derive_input(ast: &DeriveInput, mut allocator: Option<TokenStream>) -> TokenStream {
+pub fn derive_bauble_derive_input(
+    ast: &DeriveInput,
+    mut allocator: Option<TokenStream>,
+) -> TokenStream {
     // Type-level attributes
     // For an enum, whether the variant's field is directly deserialized in this type's place
     let mut flatten = false;
@@ -538,7 +541,11 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput, mut allocator: Option<Token
     let mut generics = ast.generics.clone();
 
     let lifetime = syn::Lifetime::new("'alloc_lifetime", generics.span());
-    generics.params.push(syn::GenericParam::Lifetime(syn::LifetimeParam::new(lifetime.clone())));
+    generics
+        .params
+        .push(syn::GenericParam::Lifetime(syn::LifetimeParam::new(
+            lifetime.clone(),
+        )));
 
     let (impl_generics, _, _) = generics.split_for_impl();
 
@@ -782,8 +789,6 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput, mut allocator: Option<Token
             }
         }
     };
-
-    
 
     // Assemble the implementation
     quote! {

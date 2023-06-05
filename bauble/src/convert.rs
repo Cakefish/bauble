@@ -86,7 +86,9 @@ pub enum DeserializeError {
 
 // TODO Maybe `unsafe trait`?
 pub trait BaubleAllocator<'a> {
-    type Out<T> where Self: 'a;
+    type Out<T>
+    where
+        Self: 'a;
 
     /// # Safety
     /// Allocations in `value` have to be allocated with the allocator from `allocator`
