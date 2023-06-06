@@ -419,10 +419,10 @@ fn derive_struct(
 }
 
 // Convert attributes to a list of identifiers, checking for duplicates and unexpected arguments
-fn parse_attributes(attributes: &Vec<Attribute>) -> Result<Vec<Ident>, proc_macro2::TokenStream> {
+fn parse_attributes(attributes: &[Attribute]) -> Result<Vec<Ident>, proc_macro2::TokenStream> {
     let mut found = HashSet::<_>::default();
     Ok(match attributes
-        .into_iter()
+        .iter()
         .map(|attr| {
             let mut attributes = Vec::default();
 
@@ -485,8 +485,7 @@ pub fn derive_bauble_derive_input(
 
         if let AttrStyle::Inner(_) = attr.style {
             return Error::new_spanned(attr, "inner attributes are not supported")
-                .to_compile_error()
-                .into();
+                .to_compile_error();
         }
 
         match attr.parse_nested_meta(|meta| {
@@ -530,7 +529,7 @@ pub fn derive_bauble_derive_input(
             }
         }) {
             Ok(()) => (),
-            Err(err) => return err.to_compile_error().into(),
+            Err(err) => return err.to_compile_error(),
         }
     }
 
@@ -558,8 +557,7 @@ pub fn derive_bauble_derive_input(
                 &attribute,
                 format!("attribute `{attribute}` is incompatible with `flatten`"),
             )
-            .to_compile_error()
-            .into();
+            .to_compile_error();
         }
 
         let Data::Enum(data) = &ast.data else {
@@ -567,8 +565,7 @@ pub fn derive_bauble_derive_input(
                 Span::call_site(),
                 "`flatten` can only be used on enums",
             )
-            .to_compile_error()
-            .into();
+            .to_compile_error();
         };
 
         let variants = match data
@@ -613,7 +610,7 @@ pub fn derive_bauble_derive_input(
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(variants) => variants,
-            Err(err) => return err.into(),
+            Err(err) => return err,
         };
 
         quote! {
@@ -679,8 +676,7 @@ pub fn derive_bauble_derive_input(
                 // variants instead.
                 if let Some(attribute) = attributes.into_iter().next() {
                     return Error::new_spanned(attribute, "unexpected attribute")
-                        .to_compile_error()
-                        .into();
+                        .to_compile_error();
                 }
 
                 let variant_convert = data.variants.iter().map(|variant| {
@@ -822,7 +818,7 @@ pub fn derive_bauble_derive_input(
                 #match_value
             }
         }
-    }.into()
+    }
 }
 
 pub fn derive_bauble(input: TokenStream) -> TokenStream {
