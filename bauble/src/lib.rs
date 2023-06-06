@@ -6,7 +6,7 @@
     pattern
 )]
 
-mod convert;
+pub mod convert;
 pub mod parse;
 pub mod spanned;
 pub mod value;
