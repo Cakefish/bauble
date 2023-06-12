@@ -1,10 +1,4 @@
-#![feature(
-    iterator_try_reduce,
-    array_try_map,
-    iterator_try_collect,
-    arbitrary_self_types,
-    pattern
-)]
+#![feature(iterator_try_collect)]
 
 pub mod convert;
 pub mod parse;
