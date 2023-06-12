@@ -173,11 +173,11 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .map(|_| Value::Bool(true))
                 .or(just("false").map(|_| Value::Bool(false)));
 
-            let seperator = just(',').padded_by(comments.clone()).padded();
+            let separator = just(',').padded_by(comments.clone()).padded();
 
             let sequence = object
                 .clone()
-                .separated_by(seperator.clone())
+                .separated_by(separator.clone())
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded();
@@ -195,7 +195,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .padded()
                 .then_ignore(just(':'))
                 .then(object.clone())
-                .separated_by(seperator.clone())
+                .separated_by(separator.clone())
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
@@ -238,7 +238,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .padded()
                 .then_ignore(just(':'))
                 .then(object)
-                .separated_by(seperator)
+                .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
