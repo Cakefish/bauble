@@ -138,7 +138,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
         Ok(match value {
             Value::Array(array) => array
                 .into_iter()
-                .map(|data| T::from_bauble(data, allocator).map(|value| value))
+                .map(|data| T::from_bauble(data, allocator))
                 .collect::<Result<_, _>>()?,
             _ => Err(DeserializeError::WrongKind {
                 expected: ValueKind::Array,
@@ -316,7 +316,7 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
                 if seq.len() == N {
                     <[T; N]>::try_from(
                         seq.into_iter()
-                            .map(|s| T::from_bauble(s, allocator).map(|i| i))
+                            .map(|s| T::from_bauble(s, allocator))
                             .try_collect::<Vec<_>>()?,
                     )
                     .map_err(|_| ())
@@ -344,7 +344,7 @@ impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble
         match_val!(
             val,
             (Map(seq), _span) => {
-                let seq = seq
+                seq
                     .into_iter()
                     .map(|(k, v)| {
                         Ok::<(K, V), Box<DeserializeError>>((
@@ -352,8 +352,7 @@ impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble
                             V::from_bauble(v, allocator)?,
                         ))
                     })
-                    .try_collect()?;
-                seq
+                    .try_collect()?
             }
         )
     }
