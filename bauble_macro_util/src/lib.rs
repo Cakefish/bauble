@@ -594,6 +594,11 @@ pub fn derive_bauble_derive_input(
 
     let ident = &ast.ident;
 
+    let path = match path {
+        Some(path) => quote! { stringify!(#path) },
+        None => quote! { module_path!() },
+    };
+
     // Generate code to deserialize this type
     let match_value = if flatten {
         if let Some(attribute) = attributes.into_iter().next() {
@@ -681,7 +686,7 @@ pub fn derive_bauble_derive_input(
         }
     } else {
         // The type is usual
-        match &ast.data {
+        let match_value = match &ast.data {
             Data::Struct(data) => {
                 let case = derive_struct(
                     TypeInfo {
@@ -827,12 +832,24 @@ pub fn derive_bauble_derive_input(
             Data::Union(data) => {
                 Error::new_spanned(data.union_token, "unions are not supported").to_compile_error()
             }
-        }
-    };
+        };
 
-    let path = match path {
-        Some(path) => quote! { stringify!(#path) },
-        None => quote! { module_path!() },
+        quote! {
+            let type_info = ::bauble::Spanned {
+                span,
+                value: value.type_info().cloned().unwrap_or_default(),
+            };
+            if type_info.module != #path || type_info.ident != stringify!(#ident) {
+                return ::std::result::Result::Err(
+                    ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
+                        expected: self_type_info,
+                        found: type_info,
+                    })
+                )
+            }
+
+            #match_value
+        }
     };
 
     // Assemble the implementation
@@ -854,20 +871,9 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
-                let type_info = ::bauble::Spanned {
-                    span,
-                    value: value.type_info().cloned().unwrap_or_default(),
-                };
                 let self_type_info = ::bauble::TypeInfo::new(#path, stringify!(#ident));
                 let value_kind = value.kind();
-                if type_info.module != #path || type_info.ident != stringify!(#ident) {
-                    return ::std::result::Result::Err(
-                        ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
-                            expected: self_type_info,
-                            found: type_info,
-                        })
-                    )
-                }
+
                 #match_value
             }
         }
