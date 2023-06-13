@@ -662,27 +662,57 @@ pub fn derive_bauble_derive_input(
             Err(err) => return err,
         };
 
+        // TODO Inspect variants statically instead of parsing each
         quote! {
-            ::std::result::Result::Err(::bauble::DeserializeError::Custom {
-                message: format!(
-                    "No variant of `{}` matches the given data",
-                    stringify!(#ident)
-                ),
-                span,
-            })
-            #(
-                .or_else(|_| -> std::result::Result<
-                    _,
-                    std::boxed::Box<::bauble::DeserializeError>
-                > {
-                    let attributes = attributes.clone();
-                    ::std::result::Result::Ok(
-                        match value.clone() {
-                            #variants
+            [
+                #(
+                    ::std::boxed::Box::new(|| {
+                        let attributes = attributes.clone();
+                        ::std::result::Result::Ok(
+                            match value.clone() {
+                                #variants
+                            }
+                        )
+                    }) as ::std::boxed::Box<
+                        dyn Fn() -> Result<Self, ::std::boxed::Box<::bauble::DeserializeError>>
+                    >,
+                )*
+            ]
+            .into_iter()
+            .fold(
+                ::std::result::Result::Err(::std::vec![::bauble::DeserializeError::Custom {
+                    message: format!(
+                        "No variant of `{}` matches the given data",
+                        stringify!(#ident)
+                    ),
+                    span,
+                }]),
+                |
+                    result: std::result::Result<_, std::vec::Vec<_>>,
+                    f: ::std::boxed::Box<dyn Fn() -> _>
+                | -> ::std::result::Result<_, ::std::vec::Vec<_>> {
+                    match result {
+                        ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+                        ::std::result::Result::Err(mut errors) => {
+                            match f() {
+                                ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+                                ::std::result::Result::Err(error) => {
+                                    errors.push(*error);
+                                    ::std::result::Result::Err(errors)
+                                }
+                            }
                         }
-                    )
-                })
-            )*
+                    }
+                }
+            )
+            .map_err(|errors| ::std::boxed::Box::new(::bauble::DeserializeError::Custom {
+                message: errors
+                    .into_iter()
+                    .map(|error| format!("{}", error))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                span,
+            }))
         }
     } else {
         // The type is usual

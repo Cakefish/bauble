@@ -234,6 +234,8 @@ impl<'a> BaubleAllocator<'a> for DefaultAllocator {
 }
 
 pub trait FromBauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized {
+    // TODO Add an assoc const for type info, so outer types can peek
+
     fn from_bauble(data: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>>;
 }
 
