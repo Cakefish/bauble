@@ -17,7 +17,7 @@ pub use chumsky::span::SimpleSpan;
 pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
 pub use spanned::{SpanExt, Spanned};
 pub use value::{
-    convert_values, AssetContext, Attributes, ConvertionError, FieldsKind, Object, TypeInfo, Val,
+    convert_values, AssetContext, Attributes, ConversionError, FieldsKind, Object, TypeInfo, Val,
     Value, ValueKind,
 };
 
@@ -47,9 +47,9 @@ fn parse(src: &str) -> Option<Values> {
 }
 
 /// Converts a source with no checks.
-pub fn simple_convert(src: &str) -> Result<Vec<Object>, Spanned<ConvertionError>> {
+pub fn simple_convert(src: &str) -> Result<Vec<Object>, Spanned<ConversionError>> {
     let values =
-        parse(src).ok_or(ConvertionError::ParseError.span(SimpleSpan::new(0, src.len())))?;
+        parse(src).ok_or(ConversionError::ParseError.span(SimpleSpan::new(0, src.len())))?;
 
     let ctx = value::NoChecks;
 
@@ -60,9 +60,9 @@ pub fn convert(
     src: &str,
     file_name: impl Into<String>,
     ctx: &impl AssetContext,
-) -> Result<Vec<Object>, Spanned<ConvertionError>> {
+) -> Result<Vec<Object>, Spanned<ConversionError>> {
     let values =
-        parse(src).ok_or(ConvertionError::ParseError.span(SimpleSpan::new(0, src.len())))?;
+        parse(src).ok_or(ConversionError::ParseError.span(SimpleSpan::new(0, src.len())))?;
 
     convert_values(file_name.into(), values, &value::Symbols::new(&ctx))
 }

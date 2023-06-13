@@ -1,15 +1,30 @@
+use std::{error::Error, fmt::Display};
+
 use crate::{
     parse::{Ident, Path},
-    spanned::{Span, Spanned},
-    value::{ConvertionError, TypeInfo},
+    spanned::{Span, SpanExt, Spanned},
+    value::{ConversionError, TypeInfo},
     Attributes, Val, Value, ValueKind,
 };
 use num_traits::ToPrimitive;
+
 #[derive(Debug, PartialEq)]
 pub enum VariantKind {
     Struct,
     Tuple,
     Path,
+}
+
+impl Display for VariantKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use VariantKind::*;
+
+        match self {
+            Struct => write!(f, "struct"),
+            Tuple => write!(f, "tuple"),
+            Path => write!(f, "path"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -19,8 +34,11 @@ pub enum DeserializeError {
         found: Spanned<TypeInfo>,
     },
     MissingTypePath {
-        ty: TypeInfo,
+        ty: Option<TypeInfo>,
         span: Span,
+    },
+    UnexpectedTypePath {
+        ty: Spanned<TypeInfo>,
     },
     MissingField {
         field: String,
@@ -52,6 +70,7 @@ pub enum DeserializeError {
         found: VariantKind,
         expected: VariantKind,
         ty: TypeInfo,
+        span: Span,
     },
     MissingVariantName {
         ty: TypeInfo,
@@ -71,17 +90,119 @@ pub enum DeserializeError {
         ty: TypeInfo,
         span: Span,
     },
-    WrongKindForId {
-        expected: String,
-        found: ValueKind,
-        ty: String,
-        span: Span,
-    },
     Custom {
         message: String,
         span: Span,
     },
-    Convertion(Spanned<ConvertionError>),
+    Convertion(Spanned<ConversionError>),
+}
+
+impl Display for DeserializeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use DeserializeError::*;
+
+        match self {
+            WrongTypePath {
+                expected,
+                found: Spanned { span, value },
+            } => write!(f, "{span}: expected path `{expected}`, found `{value}`"),
+            MissingTypePath { ty: Some(ty), span } => write!(f, "{span}: missing type path `{ty}`"),
+            MissingTypePath { ty: None, span } => write!(f, "{span}: missing type path"),
+            UnexpectedTypePath {
+                ty: Spanned { span, value },
+            } => write!(f, "{span}: unexpected type path `{value}`"),
+            MissingField { field, ty, span } => {
+                write!(f, "{span}: missing field `{field}` in `{ty}`")
+            }
+            UnexpectedField {
+                field: Spanned { span, value },
+                ty,
+            } => write!(f, "{span}: unexpected field `{value}` in `{ty}`"),
+            WrongTupleLength {
+                expected,
+                found,
+                ty,
+                span,
+            } => write!(
+                f,
+                "{span}: wrong tuple length, expected `{expected}`, found `{found}` in `{ty}`"
+            ),
+            WrongArrayLength {
+                expected,
+                found,
+                ty,
+                span,
+            } => write!(
+                f,
+                "{span}: wrong array length, expected `{expected}`, found `{found}` in `{ty}`"
+            ),
+            UnknownVariant {
+                variant: Spanned { span, value },
+                kind,
+                ty,
+            } => write!(
+                f,
+                "{span}: unknown variant `{value}` of kind {kind} in `{ty}`"
+            ),
+            WrongFields {
+                found,
+                expected,
+                ty,
+                span,
+            } => write!(
+                f,
+                "{span}: wrong fields, expected {expected}, found {found} in `{ty}`"
+            ),
+            MissingVariantName { ty, span } => {
+                write!(f, "{span}: missing variant name in `{ty}`")
+            }
+            NotAVariant {
+                ty,
+                path: Spanned { span, value },
+            } => write!(f, "{span}: `{value}` is not a variant of `{ty}`"),
+            UnexpectedAttribute {
+                attribute: Spanned { span, value },
+                ty,
+            } => write!(f, "{span}: unexpected attribute `{value}` in `{ty}`"),
+            WrongKind {
+                expected,
+                found,
+                ty,
+                span,
+            } => write!(
+                f,
+                "{span}: wrong kind, expected {expected}, found {found} in `{ty}`"
+            ),
+            Custom { message, span } => write!(f, "{span}: {message}"),
+            Convertion(Spanned { span, value }) => write!(f, "{span}: {value}"),
+        }
+    }
+}
+
+impl Error for DeserializeError {}
+
+impl DeserializeError {
+    pub fn err_span(&self) -> Span {
+        use DeserializeError::*;
+
+        match self {
+            WrongTypePath { found, .. } => found.span,
+            MissingTypePath { span, .. } => *span,
+            UnexpectedTypePath { ty } => ty.span,
+            MissingField { span, .. } => *span,
+            UnexpectedField { field, .. } => field.span,
+            WrongTupleLength { span, .. } => *span,
+            WrongArrayLength { span, .. } => *span,
+            UnknownVariant { variant, .. } => variant.span,
+            WrongFields { span, .. } => *span,
+            MissingVariantName { span, .. } => *span,
+            NotAVariant { path, .. } => path.span,
+            UnexpectedAttribute { attribute, .. } => attribute.span,
+            WrongKind { span, .. } => *span,
+            Custom { span, .. } => *span,
+            Convertion(Spanned { span, .. }) => *span,
+        }
+    }
 }
 
 // TODO Maybe `unsafe trait`?
@@ -153,7 +274,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
 /// Match on a simple value, assumes no attributes, and only one valid Value to convert from.
 #[macro_export]
 macro_rules! match_val {
-    ($value:expr, ($ident:ident$(($field:ident))?, $span:ident) => $block:expr $(,)?) => {
+    ($value:expr, ($ident:ident$(($($field:ident),+))?, $span:ident) => $block:expr $(,)?) => {
         {
             let value = $value;
             if let Some((attribute, _)) = value.attributes.value.0.iter().next() {
@@ -165,7 +286,7 @@ macro_rules! match_val {
 
             let $crate::Spanned { value, span } = value.value;
             Ok(match (value, span) {
-                ($crate::Value::$ident $(($field))?, $span) => $block,
+                ($crate::Value::$ident $(($($field),+))?, $span) => $block,
                 (value, span) => Err($crate::DeserializeError::WrongKind {
                     expected: $crate::ValueKind::$ident,
                     found: value.kind(),
@@ -269,7 +390,13 @@ macro_rules! impl_tuple {
                 const LEN: usize = [$(stringify!($ident)),*].len();
                 match_val!(
                     val,
-                    (Tuple(seq), span) => {
+                    (Tuple(name, seq), span) => {
+                        if let Some(name) = name {
+                            Err(DeserializeError::UnexpectedTypePath {
+                                ty: name.span(span),
+                            })?
+                        }
+
                         if seq.len() == LEN {
                             let mut seq = seq.into_iter();
                             ($($ident::from_bauble(seq.next().expect("We checked tuple length"), allocator)?),*,)
@@ -356,5 +483,14 @@ impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble
                 seq
             }
         )
+    }
+}
+
+impl<'a, T: FromBauble<'a>> FromBauble<'a> for Box<T> {
+    fn from_bauble(
+        val: Val,
+        allocator: &'a DefaultAllocator,
+    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
+        Ok(Box::new(T::from_bauble(val, allocator)?))
     }
 }

@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{
-    parse2, spanned::Spanned, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields,
-    ImplGenerics, Index, Token, Type, WhereClause,
+    parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
+    AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment,
+    Token, Type, WhereClause, WherePredicate,
 };
 
 // Related fields used by `derive_struct` and `derive_fields` containing type info
@@ -13,7 +14,7 @@ struct TypeInfo<'a> {
     ty: proc_macro2::TokenStream,
     // The type's generics
     impl_generics: &'a ImplGenerics<'a>,
-    where_clause: Option<&'a WhereClause>,
+    where_clause: &'a WhereClause,
 }
 
 // Generate code to deserialize a struct or variant with fields
@@ -329,7 +330,7 @@ fn derive_fields(
                         allocator,
                         ::bauble::FromBauble::from_bauble(value, allocator)?,
                     )?,
-                    None => #default(),
+                    None => #default::#impl_generics(),
                 }
             },
             FieldTy::Val {
@@ -342,7 +343,7 @@ fn derive_fields(
                     ::bauble::FromBauble::from_bauble(values.#index, allocator)?
                 )?
             },
-            FieldTy::AsDefault { .. } => quote! { #ident: #default() },
+            FieldTy::AsDefault { .. } => quote! { #ident: #default::#impl_generics() },
         }
     });
 
@@ -474,6 +475,10 @@ pub fn derive_bauble_derive_input(
     // Type-level attributes
     // For an enum, whether the variant's field is directly deserialized in this type's place
     let mut flatten = false;
+    // Additional bounds on the `impl`
+    let mut bounds = None;
+    // Override for the module's path
+    let mut path = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
 
@@ -507,6 +512,38 @@ pub fn derive_bauble_derive_input(
 
                     Ok(())
                 }
+                "bounds" => {
+                    if bounds.is_some() {
+                        Err(meta.error("duplicate `bounds` attribute"))?
+                    }
+
+                    meta.input.parse::<Token![=]>()?;
+                    let bounds_parse;
+                    parenthesized!(bounds_parse in meta.input);
+                    bounds = Some(bounds_parse.parse_terminated(WherePredicate::parse, Token![,])?);
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after bounds"))?
+                    }
+
+                    Ok(())
+                }
+                "path" => {
+                    if path.is_some() {
+                        Err(meta.error("duplicate `path` attribute"))?
+                    }
+
+                    meta.input.parse::<Token![=]>()?;
+                    path = Some(
+                        Punctuated::<PathSegment, PathSep>::parse_separated_nonempty(meta.input)?,
+                    );
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after path"))?
+                    }
+
+                    Ok(())
+                }
                 "allocator" => {
                     if allocator.is_some() {
                         Err(meta.error("duplicate `allocator` attribute"))?
@@ -535,7 +572,14 @@ pub fn derive_bauble_derive_input(
 
     let allocator = allocator.unwrap_or_else(|| quote! { ::bauble::DefaultAllocator });
 
-    let (_, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let mut where_clause = where_clause.cloned().unwrap_or_else(|| WhereClause {
+        where_token: Default::default(),
+        predicates: Default::default(),
+    });
+    if let Some(bounds) = bounds {
+        where_clause.predicates.extend(bounds);
+    }
 
     let mut generics = ast.generics.clone();
 
@@ -546,7 +590,7 @@ pub fn derive_bauble_derive_input(
             lifetime.clone(),
         )));
 
-    let (impl_generics, _, _) = generics.split_for_impl();
+    let (modified_impl_generics, _, _) = generics.split_for_impl();
 
     let ident = &ast.ident;
 
@@ -578,7 +622,7 @@ pub fn derive_bauble_derive_input(
                     TypeInfo {
                         ty: quote! { Self::#ident },
                         impl_generics: &impl_generics,
-                        where_clause,
+                        where_clause: &where_clause,
                     },
                     parse_attributes(&variant.attrs)?,
                     &variant.fields,
@@ -643,7 +687,7 @@ pub fn derive_bauble_derive_input(
                     TypeInfo {
                         ty: quote! { Self },
                         impl_generics: &impl_generics,
-                        where_clause,
+                        where_clause: &where_clause,
                     },
                     attributes,
                     &data.fields,
@@ -734,7 +778,7 @@ pub fn derive_bauble_derive_input(
                         TypeInfo {
                             ty: quote! { Self::#ident },
                             impl_generics: &impl_generics,
-                            where_clause,
+                            where_clause: &where_clause,
                         },
                         attributes,
                         &variant.fields,
@@ -786,9 +830,15 @@ pub fn derive_bauble_derive_input(
         }
     };
 
+    let path = match path {
+        Some(path) => quote! { stringify!(#path) },
+        None => quote! { module_path!() },
+    };
+
     // Assemble the implementation
     quote! {
-        impl #impl_generics ::bauble::FromBauble<#lifetime, #allocator> for #ident #ty_generics
+        impl #modified_impl_generics ::bauble::FromBauble<#lifetime, #allocator>
+            for #ident #ty_generics
             #where_clause
         {
             fn from_bauble(
@@ -804,10 +854,13 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
-                let type_info = ::bauble::Spanned { span, value: value.type_info().cloned().unwrap_or_default() };
-                let self_type_info = ::bauble::TypeInfo::new(module_path!(), stringify!(#ident));
+                let type_info = ::bauble::Spanned {
+                    span,
+                    value: value.type_info().cloned().unwrap_or_default(),
+                };
+                let self_type_info = ::bauble::TypeInfo::new(#path, stringify!(#ident));
                 let value_kind = value.kind();
-                if type_info.module != module_path!() || type_info.ident != stringify!(#ident) {
+                if type_info.module != #path || type_info.ident != stringify!(#ident) {
                     return ::std::result::Result::Err(
                         ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
                             expected: self_type_info,
