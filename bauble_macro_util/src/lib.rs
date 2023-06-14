@@ -595,7 +595,16 @@ pub fn derive_bauble_derive_input(
     let ident = &ast.ident;
 
     let path = match path {
-        Some(path) => quote! { stringify!(#path) },
+        Some(path) => {
+            // Unfortunately, `Punctuated<PathSegment, PathSep>` likes to insert spaces in `quote!`
+            let path = path
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+
+            quote! { #path }
+        }
         None => quote! { module_path!() },
     };
 
