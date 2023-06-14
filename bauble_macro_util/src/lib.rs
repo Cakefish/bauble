@@ -621,38 +621,34 @@ pub fn derive_bauble_derive_input(
             .variants
             .iter()
             .map(|variant| -> Result<_, proc_macro2::TokenStream> {
-                let ident = &variant.ident;
+                if variant.fields.len() != 1 {
+                    return Err(Error::new_spanned(
+                        &variant.fields,
+                        "variant must have exactly one field",
+                    )
+                    .to_compile_error());
+                }
 
-                let fields = derive_struct(
-                    TypeInfo {
-                        ty: quote! { Self::#ident },
-                        impl_generics: &impl_generics,
-                        where_clause: &where_clause,
-                    },
-                    parse_attributes(&variant.attrs)?,
-                    &variant.fields,
-                );
+                let field = variant.fields.iter().next().unwrap();
+                let ty = &field.ty;
+                let field = match &field.ident {
+                    Some(ident) => quote! { #ident },
+                    None => quote! { 0 },
+                };
+                let variant = &variant.ident;
 
                 Ok(quote! {
-                    ::bauble::Value::Struct(type_info, fields) => {
-                        match fields {
-                            #fields
-                            _ => Err(::bauble::DeserializeError::Custom {
-                                message: format!(
-                                    "No variant of `{}` matches the given data",
-                                    stringify!(#ident),
-                                ),
-                                span,
-                            })?,
-                        }
-                    },
-                    _ => {
-                        ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
-                            ty: self_type_info.clone(),
-                            expected: ::bauble::ValueKind::Enum,
-                            found: value_kind,
-                            span,
-                        })?
+                    Self::#variant {
+                        #field: <#ty as ::bauble::FromBauble<#lifetime, #allocator>>::from_bauble(
+                            ::bauble::Val {
+                                attributes: ::bauble::Spanned {
+                                    value: ::bauble::Attributes(attributes),
+                                    span: attributes_span,
+                                },
+                                value: ::bauble::Spanned { value, span },
+                            },
+                            allocator,
+                        )?,
                     }
                 })
             })
@@ -668,10 +664,9 @@ pub fn derive_bauble_derive_input(
                 #(
                     ::std::boxed::Box::new(|| {
                         let attributes = attributes.clone();
+                        let value = value.clone();
                         ::std::result::Result::Ok(
-                            match value.clone() {
-                                #variants
-                            }
+                            #variants
                         )
                     }) as ::std::boxed::Box<
                         dyn Fn() -> Result<Self, ::std::boxed::Box<::bauble::DeserializeError>>
@@ -892,7 +887,7 @@ pub fn derive_bauble_derive_input(
                 ::bauble::Val {
                     attributes: ::bauble::Spanned {
                         value: ::bauble::Attributes(mut attributes),
-                        ..
+                        span: attributes_span,
                     },
                     value: ::bauble::Spanned { span, value },
                 }: ::bauble::Val,
