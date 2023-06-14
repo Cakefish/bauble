@@ -712,11 +712,16 @@ pub fn derive_bauble_derive_input(
             .map_err(|errors| ::std::boxed::Box::new(
                 match errors.iter().skip(1).fold(None, |state, error| {
                     match (state, error) {
-                        (None, ::bauble::DeserializeError::WrongTypePath { .. }) => None,
+                        (
+                            None,
+                            ::bauble::DeserializeError::WrongTypePath { .. }
+                                | ::bauble::DeserializeError::WrongKind { .. },
+                        ) => None,
                         (None, error) => Some(Some(error)),
                         (
                             Some(state),
-                            ::bauble::DeserializeError::WrongTypePath { .. },
+                            ::bauble::DeserializeError::WrongTypePath { .. }
+                                | ::bauble::DeserializeError::WrongKind { .. },
                         ) => Some(state),
                         (Some(state), _) => Some(None),
                     }
@@ -920,6 +925,7 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
+                println!("{:?}", value);
                 let self_type_info = ::bauble::TypeInfo::new(#path, stringify!(#ident));
                 let value_kind = value.kind();
 
