@@ -925,7 +925,6 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
-                println!("{:?}", value);
                 let self_type_info = ::bauble::TypeInfo::new(#path, stringify!(#ident));
                 let value_kind = value.kind();
 

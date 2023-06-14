@@ -13,10 +13,10 @@ mod asset_context;
 
 pub use asset_context::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Attributes(pub IndexMap<Spanned<String>, Val>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// A value with attributes
 pub struct Val {
     pub value: Spanned<Value>,
@@ -36,7 +36,7 @@ type TypePath = TypeInfo;
 
 type AssetPath = String;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum FieldsKind {
     Unit,
     Tuple(Sequence),
@@ -92,7 +92,7 @@ impl Display for ValueKind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Value {
     Unit,
     Num(Decimal),
