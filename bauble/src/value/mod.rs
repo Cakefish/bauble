@@ -149,7 +149,7 @@ pub struct Object {
     pub value: Val,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversionError {
     ModuleNotFound,
     TypeNotFound,

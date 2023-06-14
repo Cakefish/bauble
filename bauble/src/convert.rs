@@ -8,7 +8,7 @@ use crate::{
 };
 use num_traits::ToPrimitive;
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum VariantKind {
     Struct,
     Tuple,
@@ -27,7 +27,7 @@ impl Display for VariantKind {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DeserializeError {
     WrongTypePath {
         expected: TypeInfo,

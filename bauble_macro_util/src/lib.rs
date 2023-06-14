@@ -709,14 +709,29 @@ pub fn derive_bauble_derive_input(
                     }
                 }
             )
-            .map_err(|errors| ::std::boxed::Box::new(::bauble::DeserializeError::Custom {
-                message: errors
-                    .into_iter()
-                    .map(|error| format!("{}", error))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-                span,
-            }))
+            .map_err(|errors| ::std::boxed::Box::new(
+                match errors.iter().skip(1).fold(None, |state, error| {
+                    match (state, error) {
+                        (None, ::bauble::DeserializeError::WrongTypePath { .. }) => None,
+                        (None, error) => Some(Some(error)),
+                        (
+                            Some(state),
+                            ::bauble::DeserializeError::WrongTypePath { .. },
+                        ) => Some(state),
+                        (Some(state), _) => Some(None),
+                    }
+                }) {
+                    Some(Some(error)) => error.clone(),
+                    _ => ::bauble::DeserializeError::Custom {
+                        message: errors
+                            .into_iter()
+                            .map(|error| format!("{}", error))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        span,
+                    },
+                }
+            ))
         }
     } else {
         // The type is usual
