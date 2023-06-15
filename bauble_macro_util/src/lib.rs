@@ -727,14 +727,7 @@ pub fn derive_bauble_derive_input(
                     }
                 }) {
                     Some(Some(error)) => error.clone(),
-                    _ => ::bauble::DeserializeError::Custom {
-                        message: errors
-                            .into_iter()
-                            .map(|error| format!("{}", error))
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        span,
-                    },
+                    _ => ::bauble::DeserializeError::Multiple(errors),
                 }
             ))
         }

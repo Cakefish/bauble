@@ -90,6 +90,7 @@ pub enum DeserializeError {
         ty: TypeInfo,
         span: Span,
     },
+    Multiple(Vec<DeserializeError>),
     Custom {
         message: String,
         span: Span,
@@ -173,6 +174,12 @@ impl Display for DeserializeError {
                 f,
                 "{span}: wrong kind, expected {expected}, found {found} in `{ty}`"
             ),
+            Multiple(errors) => {
+                for error in errors {
+                    writeln!(f, "{}", error)?;
+                }
+                Ok(())
+            }
             Custom { message, span } => write!(f, "{span}: {message}"),
             Convertion(Spanned { span, value }) => write!(f, "{span}: {value}"),
         }
@@ -199,6 +206,7 @@ impl DeserializeError {
             NotAVariant { path, .. } => path.span,
             UnexpectedAttribute { attribute, .. } => attribute.span,
             WrongKind { span, .. } => *span,
+            Multiple(errors) => errors[0].err_span(),
             Custom { span, .. } => *span,
             Convertion(Spanned { span, .. }) => *span,
         }
