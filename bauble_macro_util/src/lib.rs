@@ -4,8 +4,8 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use syn::{
     parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
-    AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment,
-    Token, Type, WhereClause, WherePredicate,
+    AttrStyle, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment, Token,
+    Type, WhereClause, WherePredicate,
 };
 
 // Related fields used by `derive_struct` and `derive_fields` containing type info
@@ -417,55 +417,6 @@ fn derive_struct(
             #fields
         },
     }
-}
-
-// Convert attributes to a list of identifiers, checking for duplicates and unexpected arguments
-fn parse_attributes(attributes: &[Attribute]) -> Result<Vec<Ident>, proc_macro2::TokenStream> {
-    let mut found = HashSet::<_>::default();
-    Ok(match attributes
-        .iter()
-        .map(|attr| {
-            let mut attributes = Vec::default();
-
-            if !attr.path().is_ident("bauble") {
-                return Ok(attributes);
-            }
-
-            if let AttrStyle::Inner(_) = attr.style {
-                return Err(Error::new_spanned(
-                    attr,
-                    "inner attributes are not supported",
-                ));
-            }
-
-            attr.parse_nested_meta(|meta| {
-                let Some(ident) = meta.path.get_ident() else {
-                    Err(meta.error("path must be an identifier"))?
-                };
-
-                if found.insert(ident.to_string()) {
-                    Err(meta.error("duplicate attribute"))?
-                }
-
-                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                    Err(meta.error("expected no arguments for attribute"))?
-                }
-
-                attributes.push(ident.clone());
-
-                Ok(())
-            })?;
-
-            Ok(attributes)
-        })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(attributes) => attributes,
-        Err(err) => return Err(err.to_compile_error()),
-    }
-    .into_iter()
-    .flatten()
-    .collect())
 }
 
 pub fn derive_bauble_derive_input(
