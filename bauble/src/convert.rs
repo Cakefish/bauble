@@ -1,7 +1,7 @@
 use crate::{
     parse::{Ident, Path},
     spanned::{Span, Spanned},
-    value::{ConvertionError, TypeInfo},
+    value::{ConversionError, TypeInfo},
     Attributes, Val, Value, ValueKind,
 };
 use num_traits::ToPrimitive;
@@ -81,7 +81,7 @@ pub enum DeserializeError {
         message: String,
         span: Span,
     },
-    Convertion(Spanned<ConvertionError>),
+    Conversion(Spanned<ConversionError>),
 }
 
 // TODO Maybe `unsafe trait`?

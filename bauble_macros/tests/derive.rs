@@ -5,7 +5,7 @@ fn simple_convert<'a, T: FromBauble<'a>>(
     object_name: &str,
     alloc: &'a bauble::DefaultAllocator,
 ) -> Result<T, Box<bauble::DeserializeError>> {
-    let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Convertion)?;
+    let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Conversion)?;
     for object in objects {
         if object.object_path.ends_with(object_name) {
             return Ok(T::from_bauble(object.value, alloc)?);
