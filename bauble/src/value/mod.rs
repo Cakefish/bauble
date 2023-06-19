@@ -247,7 +247,7 @@ impl<C: AssetContext> Symbols<C> {
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::Ident(ident)) => {
-                    let path = format!("{leading}::{ident}");
+                    let path = format!("{leading}{ident}");
                     if let Some(reference) = this.ctx.get_ref(&path) {
                         this.add_ref(ident.value.clone(), reference)
                             .map_err(|e| e.span(ident.span))?;
@@ -256,7 +256,7 @@ impl<C: AssetContext> Symbols<C> {
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
-                    if let Some(reference) = this.ctx.with_ident(&leading, ident.as_str()) {
+                    if let Some(reference) = this.ctx.with_ident(&leading.trim_end_matches(':'), ident.as_str()) {
                         this.add_ref(ident.value.clone(), reference)
                             .map_err(|e| e.span(ident.span))?;
                     } else {
