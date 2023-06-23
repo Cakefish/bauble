@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::ValueKind;
+
 #[derive(Debug, Clone)]
 pub enum DataFields {
     Unit,
@@ -21,50 +23,99 @@ impl DataFields {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TypeInfo {
-    pub module: String,
-    pub ident: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedTypeInfo {
+    Path { module: String, ident: String },
+    Kind(ValueKind),
+    Flatten(Vec<OwnedTypeInfo>),
 }
 
-impl Display for TypeInfo {
+impl Display for OwnedTypeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}::{}", self.module, self.ident)
-    }
-}
-
-impl TypeInfo {
-    pub fn simple(s: impl Into<String>) -> Self {
-        TypeInfo {
-            module: String::new(),
-            ident: s.into(),
+        match self {
+            OwnedTypeInfo::Kind(kind) => write!(f, "{kind}"),
+            OwnedTypeInfo::Path { module, ident } => write!(f, "{module}::{ident}"),
+            OwnedTypeInfo::Flatten(types) => {
+                write!(
+                    f,
+                    "({})",
+                    types
+                        .iter()
+                        .map(|ty| ty.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
         }
     }
+}
 
+impl OwnedTypeInfo {
     pub fn new(module: impl Into<String>, ident: impl Into<String>) -> Self {
-        TypeInfo {
+        OwnedTypeInfo::Path {
             module: module.into(),
             ident: ident.into(),
         }
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum TypeInfo<'a> {
+    Path { module: &'a str, ident: &'a str },
+    Kind(ValueKind),
+    Flatten(&'a [&'a TypeInfo<'a>]),
+}
+
+impl<'a> TypeInfo<'a> {
+    pub const fn new(module: &'a str, ident: &'a str) -> Self {
+        TypeInfo::Path { module, ident }
+    }
+
+    pub fn to_owned(&self) -> OwnedTypeInfo {
+        match self {
+            TypeInfo::Path { module, ident } => OwnedTypeInfo::Path {
+                module: module.to_string(),
+                ident: ident.to_string(),
+            },
+            TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind.clone()),
+            TypeInfo::Flatten(types) => {
+                OwnedTypeInfo::Flatten(types.iter().map(|&ty| ty.to_owned()).collect())
+            }
+        }
+    }
+
+    pub fn contains(&self, other: &OwnedTypeInfo) -> bool {
+        match (self, other) {
+            (
+                TypeInfo::Path { module, ident },
+                OwnedTypeInfo::Path {
+                    module: m,
+                    ident: i,
+                },
+            ) => module == m && ident == i,
+            (TypeInfo::Kind(kind), OwnedTypeInfo::Kind(other_kind)) => kind == other_kind,
+            (TypeInfo::Flatten(types), other) => types.iter().any(|ty| ty.contains(other)),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Struct {
-    pub type_info: TypeInfo,
+    pub type_info: OwnedTypeInfo,
     pub kind: DataFields,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
-    pub enum_type_info: TypeInfo,
+    pub enum_type_info: OwnedTypeInfo,
     pub variant: String,
     pub kind: DataFields,
 }
 
 #[derive(Debug, Clone)]
 pub struct BitField {
-    pub type_info: TypeInfo,
+    pub type_info: OwnedTypeInfo,
     pub variant: String,
 }
 
@@ -73,12 +124,12 @@ pub enum TypeKind {
     Struct(Struct),
     EnumVariant(EnumVariant),
     BitField(BitField),
-    Any(TypeInfo),
+    Any(OwnedTypeInfo),
 }
 
 #[derive(Debug, Clone)]
 pub enum Reference {
-    Any(TypeInfo),
+    Any(OwnedTypeInfo),
     Specific {
         ty: Option<TypeKind>,
         asset: Option<String>,
@@ -106,7 +157,7 @@ impl Reference {
 
     pub fn to_asset(self) -> Option<String> {
         match self {
-            Reference::Any(info) => Some(format!("{}::{}", info.module, info.ident)),
+            Reference::Any(info) => Some(format!("{info}")),
             Reference::Specific { asset, .. } => asset,
         }
     }
@@ -229,7 +280,7 @@ impl AssetContext for NoChecks {
     fn get_ref(&self, path: &str) -> Option<Reference> {
         let x = path.split("::").last().unwrap();
         let path = path.trim_end_matches(x).trim_end_matches("::");
-        Some(Reference::Any(TypeInfo::new(path, x)))
+        Some(Reference::Any(OwnedTypeInfo::new(path, x)))
     }
 
     fn all_in(&self, _path: &str) -> Option<Vec<(String, Reference)>> {
