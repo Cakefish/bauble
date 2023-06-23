@@ -507,32 +507,41 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
     }
 }
 
-impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble<'a>
-    for std::collections::HashMap<K, V>
-{
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Map);
+macro_rules! impl_hash_map {
+    ($($part:ident)::+) => {
+        impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble<'a>
+            for $($part)::+<K, V>
+        {
+            const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Map);
 
-    fn from_bauble(
-        val: Val,
-        allocator: &'a DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
-        match_val!(
-            val,
-            (Map(seq), _span) => {
-                let seq = seq
-                    .into_iter()
-                    .map(|(k, v)| {
-                        Ok::<(K, V), Box<DeserializeError>>((
-                            K::from_bauble(k, allocator)?,
-                            V::from_bauble(v, allocator)?,
-                        ))
-                    })
-                    .try_collect()?;
-                seq
+            fn from_bauble(
+                val: Val,
+                allocator: &'a DefaultAllocator,
+            ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
+                match_val!(
+                    val,
+                    (Map(seq), _span) => {
+                        let seq = seq
+                            .into_iter()
+                            .map(|(k, v)| {
+                                Ok::<(K, V), Box<DeserializeError>>((
+                                    K::from_bauble(k, allocator)?,
+                                    V::from_bauble(v, allocator)?,
+                                ))
+                            })
+                            .try_collect()?;
+                        seq
+                    }
+                )
             }
-        )
-    }
+        }
+    };
 }
+
+impl_hash_map!(std::collections::HashMap);
+
+#[cfg(feature = "hashbrown")]
+impl_hash_map!(hashbrown::HashMap);
 
 impl<'a, T: FromBauble<'a>> FromBauble<'a> for Box<T> {
     const INFO: TypeInfo<'static> = T::INFO;

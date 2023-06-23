@@ -9,14 +9,18 @@ license = "MIT OR Apache-2.0"
 keywords = ["serialization", "language", "assets"]
 categories = ["parser-implementations"]
 
+[features]
+hashbrown = ["dep:hashbrown"]
+
 [dependencies]
 ariadne = "0.1.5"
 bauble_macros = { path = "../bauble_macros" }
 chumsky = "1.0.0-alpha.3"
+hashbrown = { version = "0.14", optional = true }
 impl-trait-for-tuples = "0.2.2"
 indexmap = "1.9.1"
+lazy_static = "1.4.0"
 num-traits = "0.2.15"
 paste = "1.0.11"
-rust_decimal = "1.27.0"
-lazy_static = "1.4.0"
 petgraph = "0.6.3"
+rust_decimal = "1.27.0"

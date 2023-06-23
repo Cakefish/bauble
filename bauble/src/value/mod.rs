@@ -138,7 +138,7 @@ impl Value {
             Self::Struct(Some(type_info), _)
             | Self::BitFlags(Some(type_info), _)
             | Self::Enum(type_info, _, _) => type_info.clone(),
-            value => OwnedTypeInfo::Kind(self.kind()),
+            value => OwnedTypeInfo::Kind(value.kind()),
         }
     }
 }
