@@ -272,7 +272,8 @@ macro_rules! impl_tuple {
                     (Tuple(seq), span) => {
                         if seq.len() == LEN {
                             let mut seq = seq.into_iter();
-                            ($($ident::from_bauble(seq.next().expect("We checked tuple length"), allocator)?),*,)
+                            // SAFETY: We checked that the length of the sequence is the same as the length of this tuple type.
+                            ($($ident::from_bauble(unsafe { seq.next().unwrap_unchecked() }, allocator)?),*,)
                         } else {
                             Err(Box::new(DeserializeError::WrongTupleLength {
                                 expected: LEN,

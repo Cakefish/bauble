@@ -130,20 +130,11 @@ pub struct Object {
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConversionError {
     ModuleNotFound,
-    TypeNotFound,
-    ObjectNotFound,
-    AmbigousUse,
-    UnknownAttribute,
-    ExpectedIdent,
-    MissingNameAttribute,
-    ExpectedExpliciteType,
-    ExpectedEnum,
+    AmbiguousUse,
     ExpectedUnit,
     ExpectedTupleFields,
     ExpectedFields,
     ExpectedBitfield,
-    UnknownVariant,
-    NotAnEnum,
     UnexpectedIdent,
     TooManyArguments,
     ExpectedAsset,
@@ -180,11 +171,11 @@ impl RefCopy {
 
     fn add(self, other: Reference) -> std::result::Result<Self, ConversionError> {
         match self {
-            RefCopy::Unresolved | RefCopy::Resolved(_) => Err(ConversionError::AmbigousUse),
+            RefCopy::Unresolved | RefCopy::Resolved(_) => Err(ConversionError::AmbiguousUse),
             RefCopy::Ref(reference) => Ok(RefCopy::Ref(
                 reference
                     .combined(other)
-                    .ok_or(ConversionError::AmbigousUse)?,
+                    .ok_or(ConversionError::AmbiguousUse)?,
             )),
         }
     }
@@ -256,7 +247,10 @@ impl<C: AssetContext> Symbols<C> {
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
-                    if let Some(reference) = this.ctx.with_ident(&leading.trim_end_matches(':'), ident.as_str()) {
+                    if let Some(reference) = this
+                        .ctx
+                        .with_ident(&leading.trim_end_matches(':'), ident.as_str())
+                    {
                         this.add_ref(ident.value.clone(), reference)
                             .map_err(|e| e.span(ident.span))?;
                     } else {
@@ -275,7 +269,7 @@ impl<C: AssetContext> Symbols<C> {
         add_use_inner(self, leading, &use_.end)
     }
 
-    fn try_resolve_macro<'a>(&'a self, ident: &str) -> Option<(&'a str, Option<Val>)> {
+    fn try_resolve_copy<'a>(&'a self, ident: &str) -> Option<(&'a str, Option<Val>)> {
         let (key, value) = self.uses.get_key_value(ident)?;
         match value {
             RefCopy::Unresolved => Some((key, None)),
@@ -291,25 +285,24 @@ impl<C: AssetContext> Symbols<C> {
     }
 
     fn resolve_item(&self, path: &Path) -> Result<Cow<Reference>> {
-        if let (true, Some(asset)) = (
-            path.leading.is_empty(),
+        if path.leading.is_empty() {
             match &path.last.value {
-                PathEnd::Ident(ident) => self.uses.get(ident.as_str()),
-                PathEnd::WithIdent(_) => None,
-            },
-        ) {
-            Ok(Cow::Borrowed(asset.unwrap_ref()))
-        } else if path.leading.is_empty() {
-            Ok(Cow::Owned(match &path.last.value {
+                PathEnd::Ident(ident) => {
+                    if let Some(asset) = self.uses.get(ident.as_str()) {
+                        Ok(Cow::Borrowed(asset.unwrap_ref()))
+                    } else {
+                        self.ctx
+                            .with_ident("", ident.as_str())
+                            .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))
+                            .map(Cow::Owned)
+                    }
+                }
                 PathEnd::WithIdent(ident) => self
                     .ctx
                     .with_ident("", ident.as_str())
-                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))?,
-                PathEnd::Ident(ident) => self
-                    .ctx
-                    .get_ref(ident.as_str())
-                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))?,
-            }))
+                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))
+                    .map(Cow::Owned),
+            }
         } else {
             let first = path.leading.first().expect("We know the Vec isn't empty.");
             let mut p = self
@@ -322,19 +315,20 @@ impl<C: AssetContext> Symbols<C> {
                 p.push_str(ident.as_str());
             }
 
-            Ok(Cow::Owned(match &path.last.value {
+            match &path.last.value {
                 PathEnd::WithIdent(ident) => self
                     .ctx
                     .with_ident(&p, ident.as_str())
-                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))?,
+                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span)),
                 PathEnd::Ident(ident) => {
                     p.push_str("::");
                     p.push_str(ident.as_str());
                     self.ctx
                         .get_ref(&p)
-                        .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))?
+                        .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))
                 }
-            }))
+            }
+            .map(Cow::Owned)
         }
     }
 
@@ -440,7 +434,7 @@ fn find_copy_refs<'a, C: AssetContext>(
     match &object.value.value {
         parse::Value::Ref(reference) => {
             if let Some(ident) = reference.as_ident() {
-                if let Some((ident, _)) = symbols.try_resolve_macro(ident) {
+                if let Some((ident, _)) = symbols.try_resolve_copy(ident) {
                     found(ident)
                 }
             }
@@ -482,7 +476,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
         parse::Value::Ref(path) => {
             if let Some((_, val)) = path
                 .as_ident()
-                .and_then(|ident| symbols.try_resolve_macro(ident))
+                .and_then(|ident| symbols.try_resolve_copy(ident))
             {
                 if let Some(mut val) = val {
                     val.attributes.0.extend(attributes.0);
@@ -498,11 +492,11 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
             Ok(val) => match val {
                 TypeKind::Any(ty) => Value::Struct(Some(ty), FieldsKind::Unit),
                 TypeKind::Struct(Struct {
-                    kind: DataFields::Unit,
+                    kind: DataFieldsKind::Unit,
                     type_info,
                 }) => Value::Struct(Some(type_info), FieldsKind::Unit),
                 TypeKind::EnumVariant(EnumVariant {
-                    kind: DataFields::Unit,
+                    kind: DataFieldsKind::Unit,
                     enum_type_info,
                     variant,
                 }) => Value::Enum(
@@ -511,21 +505,21 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                     FieldsKind::Unit,
                 ),
                 TypeKind::Struct(Struct {
-                    kind: DataFields::Struct(_),
+                    kind: DataFieldsKind::Struct(_),
                     ..
                 })
                 | TypeKind::EnumVariant(EnumVariant {
-                    kind: DataFields::Struct(_),
+                    kind: DataFieldsKind::Struct(_),
                     ..
                 }) => {
                     return Err(ConversionError::ExpectedFields.span(path.span));
                 }
                 TypeKind::Struct(Struct {
-                    kind: DataFields::Tuple(_),
+                    kind: DataFieldsKind::Tuple(_),
                     ..
                 })
                 | TypeKind::EnumVariant(EnumVariant {
-                    kind: DataFields::Tuple(_),
+                    kind: DataFieldsKind::Tuple(_),
                     ..
                 }) => {
                     return Err(ConversionError::ExpectedTupleFields.span(path.span));
@@ -563,30 +557,30 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                         TypeKind::Any(ty) => Value::Struct(Some(ty), fields),
                         // TODO: Check the fields here
                         TypeKind::Struct(Struct {
-                            kind: DataFields::Struct(_),
+                            kind: DataFieldsKind::Struct(_),
                             type_info,
                         }) => Value::Struct(Some(type_info), fields),
                         TypeKind::EnumVariant(EnumVariant {
-                            kind: DataFields::Struct(_),
+                            kind: DataFieldsKind::Struct(_),
                             enum_type_info,
                             variant,
                         }) => Value::Enum(enum_type_info, variant.span(path.last.span), fields),
                         TypeKind::Struct(Struct {
-                            kind: DataFields::Unit,
+                            kind: DataFieldsKind::Unit,
                             ..
                         })
                         | TypeKind::EnumVariant(EnumVariant {
-                            kind: DataFields::Unit,
+                            kind: DataFieldsKind::Unit,
                             ..
                         }) => {
                             return Err(ConversionError::ExpectedUnit.span(path.span));
                         }
                         TypeKind::Struct(Struct {
-                            kind: DataFields::Tuple(_),
+                            kind: DataFieldsKind::Tuple(_),
                             ..
                         })
                         | TypeKind::EnumVariant(EnumVariant {
-                            kind: DataFields::Tuple(_),
+                            kind: DataFieldsKind::Tuple(_),
                             ..
                         }) => {
                             return Err(ConversionError::ExpectedTupleFields.span(path.span));
@@ -611,11 +605,11 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                         TypeKind::Any(ty) => Value::Struct(Some(ty), FieldsKind::Tuple(fields)),
                         // TODO: Check the fields here
                         TypeKind::Struct(Struct {
-                            kind: DataFields::Tuple(_),
+                            kind: DataFieldsKind::Tuple(_),
                             type_info,
                         }) => Value::Struct(Some(type_info), FieldsKind::Tuple(fields)),
                         TypeKind::EnumVariant(EnumVariant {
-                            kind: DataFields::Tuple(_),
+                            kind: DataFieldsKind::Tuple(_),
                             enum_type_info,
                             variant,
                         }) => Value::Enum(
@@ -624,21 +618,21 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             FieldsKind::Tuple(fields),
                         ),
                         TypeKind::Struct(Struct {
-                            kind: DataFields::Unit,
+                            kind: DataFieldsKind::Unit,
                             ..
                         })
                         | TypeKind::EnumVariant(EnumVariant {
-                            kind: DataFields::Unit,
+                            kind: DataFieldsKind::Unit,
                             ..
                         }) => {
                             return Err(ConversionError::ExpectedUnit.span(path.span));
                         }
                         TypeKind::Struct(Struct {
-                            kind: DataFields::Struct(_),
+                            kind: DataFieldsKind::Struct(_),
                             ..
                         })
                         | TypeKind::EnumVariant(EnumVariant {
-                            kind: DataFields::Struct(_),
+                            kind: DataFieldsKind::Struct(_),
                             ..
                         }) => {
                             return Err(ConversionError::ExpectedFields.span(path.span));

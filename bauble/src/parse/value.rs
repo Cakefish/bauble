@@ -109,8 +109,7 @@ pub enum Value {
     Error,
 }
 
-// Is 3 spaces intended?
-const TAB: &str = "   ";
+const TAB: &str = "    ";
 impl Value {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let i = TAB.repeat(indent);
@@ -306,9 +305,7 @@ impl Object {
             value: Value::Error.span(span),
         }
     }
-}
 
-impl Object {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.attributes.indented_display(indent, f)?;
 

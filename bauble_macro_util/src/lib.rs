@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     parse2, spanned::Spanned, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields,
     ImplGenerics, Index, Token, Type, WhereClause,
@@ -10,10 +10,39 @@ use syn::{
 // Related fields used by `derive_struct` and `derive_fields` containing type info
 struct TypeInfo<'a> {
     // The struct or variant, used for construction
-    ty: proc_macro2::TokenStream,
+    ty: TokenStream,
     // The type's generics
     impl_generics: &'a ImplGenerics<'a>,
     where_clause: Option<&'a WhereClause>,
+}
+
+/// General kind of field
+pub enum FieldTy<'a> {
+    /// The field may be deserialized from `bauble`, and must implement `FromBauble`
+    Val {
+        /// An expression to generate this type. If `Some`, the field does not need to be
+        // specified in `bauble`.
+        default: Option<TokenStream>,
+        /// Whether the field is a `bauble` attribute
+        attribute: bool,
+        /// Index for a tuple that holds the values of deserializable fields
+        index: Index,
+        /// Type from which the field is deserialized
+        ty: &'a Type,
+    },
+    /// The field is only generated from a default expression
+    AsDefault {
+        /// An expression to generate this type
+        default: TokenStream,
+        /// Type from which the field is deserialized
+        ty: &'a Type,
+    },
+}
+
+/// Information about a field collected from its attributes
+pub struct FieldAttrs<'a> {
+    name: TokenStream,
+    ty: FieldTy<'a>,
 }
 
 // Generate code to deserialize a struct or variant with fields
@@ -28,43 +57,14 @@ fn derive_fields(
     // Whether the struct or variant should be parsed from a tuple. For structs with named
     // fields, this is the case if it has the `tuple` attribute
     tuple: bool,
-) -> proc_macro2::TokenStream {
-    // General kind of field
-    enum FieldTy<'a> {
-        // The field may be deserialized from `bauble`, and must implement `FromBauble`
-        Val {
-            // An expression to generate this type. If `Some`, the field does not need to be
-            // specified in `bauble`.
-            default: Option<proc_macro2::TokenStream>,
-            // Whether the field is a `bauble` attribute
-            attribute: bool,
-            // Index for a tuple that holds the values of deserializable fields
-            index: Index,
-            // Type from which the field is deserialized
-            ty: &'a Type,
-        },
-        // The field is only generated from a default expression
-        AsDefault {
-            // An expression to generate this type
-            default: proc_macro2::TokenStream,
-            // Type from which the field is deserialized
-            ty: &'a Type,
-        },
-    }
-
-    // Information about a field collected from its attributes
-    struct FieldAttrs<'a> {
-        name: proc_macro2::TokenStream,
-        ty: FieldTy<'a>,
-    }
-
+) -> TokenStream {
     let mut val_count = 0;
 
     // Parse the fields and attributes
     let fields = match fields
         .iter()
         .enumerate()
-        .map(|(index, field)| -> Result<_, proc_macro2::TokenStream> {
+        .map(|(index, field)| {
             let mut default = None;
             let mut as_default = None;
             let mut attribute = false;
@@ -193,7 +193,7 @@ fn derive_fields(
             ..
         }
         | FieldTy::AsDefault { default, ty } => {
-            let name = Ident::new(&format!("default_{}", field.name), Span::call_site());
+            let name = format_ident!("default_{}", field.name.to_string());
             Some(quote! {
                 fn #name #impl_generics() -> #ty #where_clause {
                     #default
@@ -264,7 +264,7 @@ fn derive_fields(
                 attribute: false,
                 ..
             } => {
-                let default = Ident::new(&format!("default_{name}"), Span::call_site());
+                let default = format_ident!("default_{name}");
                 Some(match tuple {
                     true => {
                         curr_value += 1;
@@ -317,7 +317,7 @@ fn derive_fields(
     // Generate code that evaluates each field
     let fields = fields.iter().map(|field| {
         let ident = &field.name;
-        let default = Ident::new(&format!("default_{ident}"), Span::call_site());
+        let default = format_ident!("default_{ident}");
         match &field.ty {
             FieldTy::Val {
                 default: Some(_),
@@ -376,12 +376,18 @@ fn derive_struct(
     // struct / variant level attributes
     attributes: Vec<Ident>,
     fields: &Fields,
-) -> proc_macro2::TokenStream {
+) -> TokenStream {
     let mut tuple = false;
 
     for attribute in attributes {
         match attribute.to_string().as_str() {
-            "tuple" => tuple = true,
+            "tuple" => {
+                if !tuple {
+                    tuple = true;
+                } else {
+                    return Error::new_spanned(attribute, "Multiple tuple tags").to_compile_error();
+                }
+            }
             // The other type attributes are handled earlier and are not included here
             _ => return Error::new_spanned(attribute, "unknown attribute").to_compile_error(),
         }
@@ -419,7 +425,7 @@ fn derive_struct(
 }
 
 // Convert attributes to a list of identifiers, checking for duplicates and unexpected arguments
-fn parse_attributes(attributes: &[Attribute]) -> Result<Vec<Ident>, proc_macro2::TokenStream> {
+fn parse_attributes(attributes: &[Attribute]) -> Result<Vec<Ident>, TokenStream> {
     let mut found = HashSet::<_>::default();
     Ok(match attributes
         .iter()
@@ -571,7 +577,7 @@ pub fn derive_bauble_derive_input(
         let variants = match data
             .variants
             .iter()
-            .map(|variant| -> Result<_, proc_macro2::TokenStream> {
+            .map(|variant| {
                 let ident = &variant.ident;
 
                 let fields = derive_struct(

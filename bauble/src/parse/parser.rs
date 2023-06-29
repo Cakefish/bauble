@@ -390,4 +390,5 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
             },
         )
     })
+    .then_ignore(end())
 }

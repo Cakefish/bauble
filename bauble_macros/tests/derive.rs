@@ -20,11 +20,16 @@ fn test_struct() {
     struct Test {
         x: i32,
         y: u32,
+        z: Option<bool>,
     }
     assert_eq!(
-        Ok(Test { x: -5, y: 5 }),
+        Ok(Test {
+            x: -5,
+            y: 5,
+            z: Some(true)
+        }),
         simple_convert(
-            "test = derive::Test { x: -5, y: 5 }",
+            "test = derive::Test { x: -5, y: 5, z: Some(true) }",
             "test",
             &bauble::DefaultAllocator
         )

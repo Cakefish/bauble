@@ -6,7 +6,7 @@ use bauble::{
     value::{convert_values, NoChecks, Symbols},
     DefaultAllocator, FromBauble,
 };
-use chumsky::{primitive::end, Parser};
+use chumsky::Parser;
 
 fn main() {
     let mut src = String::new();
@@ -16,7 +16,7 @@ fn main() {
         .unwrap();
 
     println!("Creating parser...");
-    let parser = parse::parser().then_ignore(end());
+    let parser = parse::parser();
     println!("Parsing file...");
     let result = parser.parse(src.as_str());
     println!("Done!");
