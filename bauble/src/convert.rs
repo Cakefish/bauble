@@ -91,7 +91,7 @@ pub trait BaubleAllocator<'a> {
         Self: 'a;
 
     /// # Safety
-    /// Allocations in `value` have to be allocated with the allocator from `allocator`
+    /// Allocations in `value` have to be allocated with this allocator
     unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T>;
     /// # Safety
     /// If validated an item must be placed within the same allocator.
