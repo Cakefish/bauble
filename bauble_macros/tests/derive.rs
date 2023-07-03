@@ -5,10 +5,10 @@ fn simple_convert<'a, T: FromBauble<'a>>(
     object_name: &str,
     alloc: &'a bauble::DefaultAllocator,
 ) -> Result<T, Box<bauble::DeserializeError>> {
-    let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Convertion)?;
+    let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Conversion)?;
     for object in objects {
         if object.object_path.ends_with(object_name) {
-            return Ok(T::from_bauble(object.value, alloc)?);
+            return T::from_bauble(object.value, alloc);
         }
     }
     panic!("`object` not found");
@@ -20,11 +20,16 @@ fn test_struct() {
     struct Test {
         x: i32,
         y: u32,
+        z: Option<bool>,
     }
     assert_eq!(
-        Ok(Test { x: -5, y: 5 }),
+        Ok(Test {
+            x: -5,
+            y: 5,
+            z: Some(true)
+        }),
         simple_convert(
-            "test = derive::Test { x: -5, y: 5 }",
+            "test = derive::Test { x: -5, y: 5, z: Some(true) }",
             "test",
             &bauble::DefaultAllocator
         )
@@ -50,28 +55,15 @@ fn test_flattened() {
     #[derive(FromBauble, PartialEq, Debug)]
     #[bauble(flatten)]
     enum Test {
-        Foo(i32, u32),
-        Bar { x: i32, y: u32 },
-        Baz,
+        Foo(i32),
+        Bar { x: bool },
     }
     assert_eq!(
-        Ok(Test::Foo(-10, 2)),
-        simple_convert(
-            "test = derive::Test(-10, 2)",
-            "test",
-            &bauble::DefaultAllocator
-        )
+        Ok(Test::Foo(-10)),
+        simple_convert("test = -10", "test", &bauble::DefaultAllocator)
     );
     assert_eq!(
-        Ok(Test::Bar { x: -5, y: 5 }),
-        simple_convert(
-            "test = derive::Test { x: -5, y: 5 }",
-            "test",
-            &bauble::DefaultAllocator
-        )
-    );
-    assert_eq!(
-        Ok(Test::Baz),
-        simple_convert("test = derive::Test", "test", &bauble::DefaultAllocator)
+        Ok(Test::Bar { x: true }),
+        simple_convert("test = true", "test", &bauble::DefaultAllocator)
     );
 }

@@ -1,23 +1,23 @@
 use std::fmt::Display;
 
 #[derive(Debug, Clone)]
-pub enum DataFields {
+pub enum DataFieldsKind {
     Unit,
     Tuple(Option<usize>),
     Struct(Option<Vec<String>>),
 }
 
-impl DataFields {
+impl DataFieldsKind {
     pub fn is_unit(&self) -> bool {
-        matches!(self, DataFields::Unit)
+        matches!(self, DataFieldsKind::Unit)
     }
 
     pub fn is_tuple(&self) -> bool {
-        matches!(self, DataFields::Tuple(_))
+        matches!(self, DataFieldsKind::Tuple(_))
     }
 
     pub fn is_struct(&self) -> bool {
-        matches!(self, DataFields::Struct(_))
+        matches!(self, DataFieldsKind::Struct(_))
     }
 }
 
@@ -52,14 +52,14 @@ impl TypeInfo {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub type_info: TypeInfo,
-    pub kind: DataFields,
+    pub kind: DataFieldsKind,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
     pub enum_type_info: TypeInfo,
     pub variant: String,
-    pub kind: DataFields,
+    pub kind: DataFieldsKind,
 }
 
 #[derive(Debug, Clone)]

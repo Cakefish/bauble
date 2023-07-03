@@ -13,9 +13,6 @@ categories = ["parser-implementations"]
 proc-macro = true
 
 [dependencies]
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "2", features = [ "extra-traits", "full", "parsing" ] }
 bauble_macro_util = { path = "../bauble_macro_util" }
 
 [dev-dependencies]
