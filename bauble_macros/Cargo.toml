@@ -1,0 +1,19 @@
+[package]
+name = "bauble_macros"
+version = "0.0.0"
+authors = ["Cakefish <cakefish@cakefish.com>"]
+edition = "2021"
+description = "An extensible file format built for asset systems"
+repository = "https://github.com/Cakefish/bauble"
+license = "MIT OR Apache-2.0"
+keywords = ["serialization", "language", "assets"]
+categories = ["parser-implementations"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+bauble_macro_util = { path = "../bauble_macro_util" }
+
+[dev-dependencies]
+bauble = { path = "../bauble" }
