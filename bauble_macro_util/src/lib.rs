@@ -1,47 +1,47 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{quote, ToTokens};
+use quote::{format_ident, quote, ToTokens};
 use syn::{
     parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
     AttrStyle, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment, Token,
     Type, WhereClause, WherePredicate,
 };
 
-// General kind of field
+/// General kind of field
 enum FieldTy<'a> {
-    // The field may be deserialized from `bauble`, and must implement `FromBauble`
+    /// The field may be deserialized from `bauble`, and must implement `FromBauble`
     Val {
-        // An expression to generate this type. If `Some`, the field does not need to be
-        // specified in `bauble`.
+        /// An expression to generate this type. If `Some`, the field does not need to be
+        /// specified in `bauble`.
         default: Option<proc_macro2::TokenStream>,
-        // Whether the field is a `bauble` attribute
+        /// Whether the field is a `bauble` attribute
         attribute: bool,
-        // Index for a tuple that holds the values of deserializable fields
+        /// Index for a tuple that holds the values of deserializable fields
         index: Index,
-        // Type from which the field is deserialized
+        /// Type from which the field is deserialized
         ty: &'a Type,
     },
-    // The field is only generated from a default expression
+    /// The field is only generated from a default expression
     AsDefault {
-        // An expression to generate this type
+        /// An expression to generate this type
         default: proc_macro2::TokenStream,
-        // Type from which the field is deserialized
+        /// Type from which the field is deserialized
         ty: &'a Type,
     },
 }
 
-// Information about a field collected from its attributes
+/// Information about a field collected from its attributes
 struct FieldAttrs<'a> {
     name: proc_macro2::TokenStream,
     ty: FieldTy<'a>,
 }
 
-// Information about a struct or variant's fields
+/// Information about a struct or variant's fields
 struct FieldsInfo<'a> {
     fields: Vec<FieldAttrs<'a>>,
     val_count: usize,
-    // Whether the struct or variant has fields, and if so, whether it is a tuple
+    /// Whether the struct or variant has fields, and if so, whether it is a tuple
     ty: Option<bool>,
 }
 
@@ -56,7 +56,15 @@ fn parse_fields(
 
     for attribute in attributes {
         match attribute.to_string().as_str() {
-            "tuple" => tuple = true,
+            "tuple" => {
+                if !tuple {
+                    tuple = true;
+                } else {
+                    return Err(
+                        Error::new_spanned(attribute, "Multiple tuple tags").to_compile_error()
+                    );
+                }
+            }
             // The other type attributes are handled earlier and are not included here
             _ => return Err(Error::new_spanned(attribute, "unknown attribute").to_compile_error()),
         }
@@ -197,11 +205,11 @@ fn parse_fields(
     })
 }
 
-// Related fields used by `derive_struct` and `derive_fields` containing type info
+/// Related fields used by `derive_struct` and `derive_fields` containing type info
 struct TypeInfo<'a> {
-    // The struct or variant, used for construction
+    /// The struct or variant, used for construction
     ty: proc_macro2::TokenStream,
-    // The type's generics
+    /// The type's generics
     impl_generics: &'a ImplGenerics<'a>,
     where_clause: &'a WhereClause,
 }
@@ -322,7 +330,7 @@ fn derive_fields(
                 },
                 false,
             ) => {
-                let default = Ident::new(&format!("default_{name}"), Span::call_site());
+                let default = format_ident!("default_{name}");
                 Some(match tuple {
                     true => {
                         curr_value += 1;
@@ -389,7 +397,7 @@ fn derive_fields(
     // the type parameters
     let fields = fields.iter().map(|field| {
         let ident = &field.name;
-        let default = Ident::new(&format!("default_{ident}"), Span::call_site());
+        let default = format_ident!("default_{ident}");
         match (&field.ty, flatten) {
             (
                 FieldTy::Val {

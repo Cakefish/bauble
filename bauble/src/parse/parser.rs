@@ -11,17 +11,6 @@ use crate::{
     spanned::{SpanExt, Spanned},
 };
 
-lazy_static::lazy_static! {
-    static ref ACCEPTED_LITERAL_CHARS: Vec<char> = {
-        let mut accepted_literal_chars = vec!['!', '#', '@', '%', '&', '?', '.', '='];
-        accepted_literal_chars.extend('a'..='z');
-        accepted_literal_chars.extend('A'..='Z');
-        accepted_literal_chars.extend('0'..='9');
-
-        accepted_literal_chars
-    };
-}
-
 type Error<'a> = extra::Err<Rich<'a, char>>;
 // TODO Re-add error recovery
 pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
@@ -162,7 +151,8 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .map(Value::Str);
 
             let literal = just('#').ignore_then(
-                one_of(ACCEPTED_LITERAL_CHARS.as_slice())
+                any()
+                    .filter(|c| matches!(c, '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
                     .repeated()
                     .collect::<String>()
                     .map(Value::Raw),
@@ -173,11 +163,11 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .map(|_| Value::Bool(true))
                 .or(just("false").map(|_| Value::Bool(false)));
 
-            let seperator = just(',').padded_by(comments.clone()).padded();
+            let separator = just(',').padded_by(comments.clone()).padded();
 
             let sequence = object
                 .clone()
-                .separated_by(seperator.clone())
+                .separated_by(separator.clone())
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded();
@@ -195,7 +185,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .padded()
                 .then_ignore(just(':'))
                 .then(object.clone())
-                .separated_by(seperator.clone())
+                .separated_by(separator.clone())
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
@@ -238,7 +228,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .padded()
                 .then_ignore(just(':'))
                 .then(object)
-                .separated_by(seperator)
+                .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
@@ -400,4 +390,5 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
             },
         )
     })
+    .then_ignore(end())
 }

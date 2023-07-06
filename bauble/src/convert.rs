@@ -98,7 +98,7 @@ pub enum DeserializeError {
         message: String,
         span: Span,
     },
-    Convertion(Spanned<ConversionError>),
+    Conversion(Spanned<ConversionError>),
 }
 
 impl Display for DeserializeError {
@@ -182,7 +182,7 @@ impl Display for DeserializeError {
                 "{span}: wrong kind, expected {expected}, found {found} in `{ty}`"
             ),
             Custom { message, span } => write!(f, "{span}: {message}"),
-            Convertion(Spanned { span, value }) => write!(f, "{span}: {value}"),
+            Conversion(Spanned { span, value }) => write!(f, "{span}: {value}"),
         }
     }
 }
@@ -228,7 +228,7 @@ impl DeserializeError {
         }
         | &WrongKind { span, .. }
         | &Custom { span, .. }
-        | &Convertion(Spanned { span, .. })) = self;
+        | &Conversion(Spanned { span, .. })) = self;
         span
     }
 }
@@ -240,7 +240,7 @@ pub trait BaubleAllocator<'a> {
         Self: 'a;
 
     /// # Safety
-    /// Allocations in `value` have to be allocated with the allocator from `allocator`
+    /// Allocations in `value` have to be allocated with this allocator
     unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T>;
     /// # Safety
     /// If validated an item must be placed within the same allocator.
@@ -291,7 +291,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
         Ok(match value {
             Value::Array(array) => array
                 .into_iter()
-                .map(|data| T::from_bauble(data, allocator).map(|value| value))
+                .map(|data| T::from_bauble(data, allocator))
                 .collect::<Result<_, _>>()?,
             _ => Err(DeserializeError::WrongKind {
                 expected: ValueKind::Array,
@@ -443,7 +443,8 @@ macro_rules! impl_tuple {
 
                         if seq.len() == LEN {
                             let mut seq = seq.into_iter();
-                            ($($ident::from_bauble(seq.next().expect("We checked tuple length"), allocator)?),*,)
+                            // SAFETY: We checked that the length of the sequence is the same as the length of this tuple type.
+                            ($($ident::from_bauble(unsafe { seq.next().unwrap_unchecked() }, allocator)?),*,)
                         } else {
                             Err(Box::new(DeserializeError::WrongTupleLength {
                                 expected: LEN,
@@ -489,7 +490,7 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
                 if seq.len() == N {
                     <[T; N]>::try_from(
                         seq.into_iter()
-                            .map(|s| T::from_bauble(s, allocator).map(|i| i))
+                            .map(|s| T::from_bauble(s, allocator))
                             .try_collect::<Vec<_>>()?,
                     )
                     .map_err(|_| ())
@@ -521,7 +522,7 @@ macro_rules! impl_hash_map {
                 match_val!(
                     val,
                     (Map(seq), _span) => {
-                        let seq = seq
+                        seq
                             .into_iter()
                             .map(|(k, v)| {
                                 Ok::<(K, V), Box<DeserializeError>>((
@@ -529,8 +530,7 @@ macro_rules! impl_hash_map {
                                     V::from_bauble(v, allocator)?,
                                 ))
                             })
-                            .try_collect()?;
-                        seq
+                            .try_collect()?
                     }
                 )
             }

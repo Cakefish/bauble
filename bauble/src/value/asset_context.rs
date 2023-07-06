@@ -3,23 +3,23 @@ use std::fmt::Display;
 use crate::ValueKind;
 
 #[derive(Debug, Clone)]
-pub enum DataFields {
+pub enum DataFieldsKind {
     Unit,
     Tuple(Option<usize>),
     Struct(Option<Vec<String>>),
 }
 
-impl DataFields {
+impl DataFieldsKind {
     pub fn is_unit(&self) -> bool {
-        matches!(self, DataFields::Unit)
+        matches!(self, DataFieldsKind::Unit)
     }
 
     pub fn is_tuple(&self) -> bool {
-        matches!(self, DataFields::Tuple(_))
+        matches!(self, DataFieldsKind::Tuple(_))
     }
 
     pub fn is_struct(&self) -> bool {
-        matches!(self, DataFields::Struct(_))
+        matches!(self, DataFieldsKind::Struct(_))
     }
 }
 
@@ -77,7 +77,7 @@ impl<'a> TypeInfo<'a> {
                 module: module.to_string(),
                 ident: ident.to_string(),
             },
-            TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind.clone()),
+            &TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind),
             TypeInfo::Flatten(types) => {
                 OwnedTypeInfo::Flatten(types.iter().map(|&ty| ty.to_owned()).collect())
             }
@@ -103,14 +103,14 @@ impl<'a> TypeInfo<'a> {
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub type_info: OwnedTypeInfo,
-    pub kind: DataFields,
+    pub kind: DataFieldsKind,
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumVariant {
     pub enum_type_info: OwnedTypeInfo,
     pub variant: String,
-    pub kind: DataFields,
+    pub kind: DataFieldsKind,
 }
 
 #[derive(Debug, Clone)]
