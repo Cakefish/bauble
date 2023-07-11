@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::{
-    parse2, spanned::Spanned, AttrStyle, Attribute, Data, DeriveInput, Error, Expr, Fields,
-    ImplGenerics, Index, Token, Type, WhereClause,
+    parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
+    AttrStyle, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment, Token,
+    Type, WhereClause, WherePredicate,
 };
 
 // Related fields used by `derive_struct` and `derive_fields` containing type info
@@ -13,7 +14,7 @@ struct TypeInfo<'a> {
     ty: TokenStream,
     // The type's generics
     impl_generics: &'a ImplGenerics<'a>,
-    where_clause: Option<&'a WhereClause>,
+    where_clause: &'a WhereClause,
 }
 
 /// General kind of field
@@ -329,7 +330,7 @@ fn derive_fields(
                         allocator,
                         ::bauble::FromBauble::from_bauble(value, allocator)?,
                     )?,
-                    None => #default(),
+                    None => #default::#impl_generics(),
                 }
             },
             FieldTy::Val {
@@ -342,7 +343,7 @@ fn derive_fields(
                     ::bauble::FromBauble::from_bauble(values.#index, allocator)?
                 )?
             },
-            FieldTy::AsDefault { .. } => quote! { #ident: #default() },
+            FieldTy::AsDefault { .. } => quote! { #ident: #default::#impl_generics() },
         }
     });
 
@@ -424,55 +425,6 @@ fn derive_struct(
     }
 }
 
-// Convert attributes to a list of identifiers, checking for duplicates and unexpected arguments
-fn parse_attributes(attributes: &[Attribute]) -> Result<Vec<Ident>, TokenStream> {
-    let mut found = HashSet::<_>::default();
-    Ok(match attributes
-        .iter()
-        .map(|attr| {
-            let mut attributes = Vec::default();
-
-            if !attr.path().is_ident("bauble") {
-                return Ok(attributes);
-            }
-
-            if let AttrStyle::Inner(_) = attr.style {
-                return Err(Error::new_spanned(
-                    attr,
-                    "inner attributes are not supported",
-                ));
-            }
-
-            attr.parse_nested_meta(|meta| {
-                let Some(ident) = meta.path.get_ident() else {
-                    Err(meta.error("path must be an identifier"))?
-                };
-
-                if found.insert(ident.to_string()) {
-                    Err(meta.error("duplicate attribute"))?
-                }
-
-                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                    Err(meta.error("expected no arguments for attribute"))?
-                }
-
-                attributes.push(ident.clone());
-
-                Ok(())
-            })?;
-
-            Ok(attributes)
-        })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(attributes) => attributes,
-        Err(err) => return Err(err.to_compile_error()),
-    }
-    .into_iter()
-    .flatten()
-    .collect())
-}
-
 pub fn derive_bauble_derive_input(
     ast: &DeriveInput,
     mut allocator: Option<TokenStream>,
@@ -480,6 +432,10 @@ pub fn derive_bauble_derive_input(
     // Type-level attributes
     // For an enum, whether the variant's field is directly deserialized in this type's place
     let mut flatten = false;
+    // Additional bounds on the `impl`
+    let mut bounds = None;
+    // Override for the module's path
+    let mut path = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
 
@@ -513,6 +469,38 @@ pub fn derive_bauble_derive_input(
 
                     Ok(())
                 }
+                "bounds" => {
+                    if bounds.is_some() {
+                        Err(meta.error("duplicate `bounds` attribute"))?
+                    }
+
+                    meta.input.parse::<Token![=]>()?;
+                    let bounds_parse;
+                    parenthesized!(bounds_parse in meta.input);
+                    bounds = Some(bounds_parse.parse_terminated(WherePredicate::parse, Token![,])?);
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after bounds"))?
+                    }
+
+                    Ok(())
+                }
+                "path" => {
+                    if path.is_some() {
+                        Err(meta.error("duplicate `path` attribute"))?
+                    }
+
+                    meta.input.parse::<Token![=]>()?;
+                    path = Some(
+                        Punctuated::<PathSegment, PathSep>::parse_separated_nonempty(meta.input)?,
+                    );
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after path"))?
+                    }
+
+                    Ok(())
+                }
                 "allocator" => {
                     if allocator.is_some() {
                         Err(meta.error("duplicate `allocator` attribute"))?
@@ -541,7 +529,14 @@ pub fn derive_bauble_derive_input(
 
     let allocator = allocator.unwrap_or_else(|| quote! { ::bauble::DefaultAllocator });
 
-    let (_, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let mut where_clause = where_clause.cloned().unwrap_or_else(|| WhereClause {
+        where_token: Default::default(),
+        predicates: Default::default(),
+    });
+    if let Some(bounds) = bounds {
+        where_clause.predicates.extend(bounds);
+    }
 
     let mut generics = ast.generics.clone();
 
@@ -552,9 +547,23 @@ pub fn derive_bauble_derive_input(
             lifetime.clone(),
         )));
 
-    let (impl_generics, _, _) = generics.split_for_impl();
+    let (modified_impl_generics, _, _) = generics.split_for_impl();
 
     let ident = &ast.ident;
+
+    let path = match path {
+        Some(path) => {
+            // Unfortunately, `Punctuated<PathSegment, PathSep>` likes to insert spaces in `quote!`
+            let path = path
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+
+            quote! { #path }
+        }
+        None => quote! { module_path!() },
+    };
 
     // Generate code to deserialize this type
     let match_value = if flatten {
@@ -578,38 +587,34 @@ pub fn derive_bauble_derive_input(
             .variants
             .iter()
             .map(|variant| {
-                let ident = &variant.ident;
+                if variant.fields.len() != 1 {
+                    return Err(Error::new_spanned(
+                        &variant.fields,
+                        "variant must have exactly one field",
+                    )
+                    .to_compile_error());
+                }
 
-                let fields = derive_struct(
-                    TypeInfo {
-                        ty: quote! { Self::#ident },
-                        impl_generics: &impl_generics,
-                        where_clause,
-                    },
-                    parse_attributes(&variant.attrs)?,
-                    &variant.fields,
-                );
+                let field = variant.fields.iter().next().unwrap();
+                let ty = &field.ty;
+                let field = match &field.ident {
+                    Some(ident) => quote! { #ident },
+                    None => quote! { 0 },
+                };
+                let variant = &variant.ident;
 
                 Ok(quote! {
-                    ::bauble::Value::Struct(type_info, fields) => {
-                        match fields {
-                            #fields
-                            _ => Err(::bauble::DeserializeError::Custom {
-                                message: format!(
-                                    "No variant of `{}` matches the given data",
-                                    stringify!(#ident),
-                                ),
-                                span,
-                            })?,
-                        }
-                    },
-                    _ => {
-                        ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
-                            ty: self_type_info.clone(),
-                            expected: ::bauble::ValueKind::Enum,
-                            found: value_kind,
-                            span,
-                        })?
+                    Self::#variant {
+                        #field: <#ty as ::bauble::FromBauble<#lifetime, #allocator>>::from_bauble(
+                            ::bauble::Val {
+                                attributes: ::bauble::Spanned {
+                                    value: ::bauble::Attributes(attributes),
+                                    span: attributes_span,
+                                },
+                                value: ::bauble::Spanned { value, span },
+                            },
+                            allocator,
+                        )?,
                     }
                 })
             })
@@ -619,37 +624,79 @@ pub fn derive_bauble_derive_input(
             Err(err) => return err,
         };
 
+        // TODO Inspect variants statically instead of parsing each
         quote! {
-            ::std::result::Result::Err(::bauble::DeserializeError::Custom {
-                message: format!(
-                    "No variant of `{}` matches the given data",
-                    stringify!(#ident)
-                ),
-                span,
-            })
-            #(
-                .or_else(|_| -> std::result::Result<
-                    _,
-                    std::boxed::Box<::bauble::DeserializeError>
-                > {
-                    let attributes = attributes.clone();
-                    ::std::result::Result::Ok(
-                        match value.clone() {
+            [
+                #(
+                    ::std::boxed::Box::new(|| {
+                        let attributes = attributes.clone();
+                        let value = value.clone();
+                        ::std::result::Result::Ok(
                             #variants
+                        )
+                    }) as ::std::boxed::Box<
+                        dyn Fn() -> Result<Self, ::std::boxed::Box<::bauble::DeserializeError>>
+                    >,
+                )*
+            ]
+            .into_iter()
+            .fold(
+                ::std::result::Result::Err(::std::vec![::bauble::DeserializeError::Custom {
+                    message: format!(
+                        "No variant of `{}` matches the given data",
+                        stringify!(#ident)
+                    ),
+                    span,
+                }]),
+                |
+                    result: std::result::Result<_, std::vec::Vec<_>>,
+                    f: ::std::boxed::Box<dyn Fn() -> _>
+                | -> ::std::result::Result<_, ::std::vec::Vec<_>> {
+                    match result {
+                        ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+                        ::std::result::Result::Err(mut errors) => {
+                            match f() {
+                                ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
+                                ::std::result::Result::Err(error) => {
+                                    errors.push(*error);
+                                    ::std::result::Result::Err(errors)
+                                }
+                            }
                         }
-                    )
-                })
-            )*
+                    }
+                }
+            )
+            .map_err(|errors| ::std::boxed::Box::new(
+                match errors.iter().skip(1).fold(None, |state, error| {
+                    match (state, error) {
+                        (
+                            None,
+                            ::bauble::DeserializeError::WrongTypePath { .. }
+                                | ::bauble::DeserializeError::WrongKind { .. },
+                        ) => None,
+                        (None, error) => Some(Some(error)),
+                        (
+                            Some(state),
+                            ::bauble::DeserializeError::WrongTypePath { .. }
+                                | ::bauble::DeserializeError::WrongKind { .. },
+                        ) => Some(state),
+                        (Some(state), _) => Some(None),
+                    }
+                }) {
+                    Some(Some(error)) => error.clone(),
+                    _ => ::bauble::DeserializeError::Multiple(errors),
+                }
+            ))
         }
     } else {
         // The type is usual
-        match &ast.data {
+        let match_value = match &ast.data {
             Data::Struct(data) => {
                 let case = derive_struct(
                     TypeInfo {
                         ty: quote! { Self },
                         impl_generics: &impl_generics,
-                        where_clause,
+                        where_clause: &where_clause,
                     },
                     attributes,
                     &data.fields,
@@ -740,7 +787,7 @@ pub fn derive_bauble_derive_input(
                         TypeInfo {
                             ty: quote! { Self::#ident },
                             impl_generics: &impl_generics,
-                            where_clause,
+                            where_clause: &where_clause,
                         },
                         attributes,
                         &variant.fields,
@@ -789,19 +836,37 @@ pub fn derive_bauble_derive_input(
             Data::Union(data) => {
                 Error::new_spanned(data.union_token, "unions are not supported").to_compile_error()
             }
+        };
+
+        quote! {
+            let type_info = ::bauble::Spanned {
+                span,
+                value: value.type_info().cloned().unwrap_or_default(),
+            };
+            if type_info.module != #path || type_info.ident != stringify!(#ident) {
+                return ::std::result::Result::Err(
+                    ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
+                        expected: self_type_info,
+                        found: type_info,
+                    })
+                )
+            }
+
+            #match_value
         }
     };
 
     // Assemble the implementation
     quote! {
-        impl #impl_generics ::bauble::FromBauble<#lifetime, #allocator> for #ident #ty_generics
+        impl #modified_impl_generics ::bauble::FromBauble<#lifetime, #allocator>
+            for #ident #ty_generics
             #where_clause
         {
             fn from_bauble(
                 ::bauble::Val {
                     attributes: ::bauble::Spanned {
                         value: ::bauble::Attributes(mut attributes),
-                        ..
+                        span: attributes_span,
                     },
                     value: ::bauble::Spanned { span, value },
                 }: ::bauble::Val,
@@ -810,17 +875,9 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
-                let type_info = ::bauble::Spanned { span, value: value.type_info().cloned().unwrap_or_default() };
-                let self_type_info = ::bauble::TypeInfo::new(module_path!(), stringify!(#ident));
+                let self_type_info = ::bauble::TypeInfo::new(#path, stringify!(#ident));
                 let value_kind = value.kind();
-                if type_info.module != module_path!() || type_info.ident != stringify!(#ident) {
-                    return ::std::result::Result::Err(
-                        ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
-                            expected: self_type_info,
-                            found: type_info,
-                        })
-                    )
-                }
+
                 #match_value
             }
         }

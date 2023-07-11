@@ -150,7 +150,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .then_ignore(just('"'))
                 .map(Value::Str);
 
-            let literal = just('@').ignore_then(
+            let literal = just('#').ignore_then(
                 any()
                     .filter(|c| matches!(c, '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
                     .repeated()
@@ -293,7 +293,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 }
             }
 
-            let raw = just('@').ignore_then(custom(raw).delimited_by(just('{'), just('}')));
+            let raw = just('#').ignore_then(custom(raw).delimited_by(just('{'), just('}')));
 
             let value = choice((
                 bool_,

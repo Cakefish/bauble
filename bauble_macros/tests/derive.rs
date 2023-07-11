@@ -8,7 +8,7 @@ fn simple_convert<'a, T: FromBauble<'a>>(
     let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Conversion)?;
     for object in objects {
         if object.object_path.ends_with(object_name) {
-            return Ok(T::from_bauble(object.value, alloc)?);
+            return T::from_bauble(object.value, alloc);
         }
     }
     panic!("`object` not found");
@@ -51,9 +51,8 @@ fn test_tuple() {
 }
 
 #[test]
-fn test_flattened() {
+fn test_enum() {
     #[derive(FromBauble, PartialEq, Debug)]
-    #[bauble(flatten)]
     enum Test {
         Foo(i32, u32),
         Bar { x: i32, y: u32 },
@@ -78,5 +77,23 @@ fn test_flattened() {
     assert_eq!(
         Ok(Test::Baz),
         simple_convert("test = derive::Test", "test", &bauble::DefaultAllocator)
+    );
+}
+
+#[test]
+fn test_flattened() {
+    #[derive(FromBauble, PartialEq, Debug)]
+    #[bauble(flatten)]
+    enum Test {
+        Foo(i32),
+        Bar { x: bool },
+    }
+    assert_eq!(
+        Ok(Test::Foo(-10)),
+        simple_convert("test = -10", "test", &bauble::DefaultAllocator)
+    );
+    assert_eq!(
+        Ok(Test::Bar { x: true }),
+        simple_convert("test = true", "test", &bauble::DefaultAllocator)
     );
 }

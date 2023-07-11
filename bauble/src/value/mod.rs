@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashMap, error::Error, fmt::Display};
 
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
@@ -13,10 +13,10 @@ mod asset_context;
 
 pub use asset_context::*;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Attributes(pub IndexMap<Spanned<String>, Val>);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 /// A value with attributes
 pub struct Val {
     pub value: Spanned<Value>,
@@ -36,7 +36,7 @@ type TypePath = TypeInfo;
 
 type AssetPath = String;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum FieldsKind {
     Unit,
     Tuple(Sequence),
@@ -70,7 +70,29 @@ pub enum ValueKind {
     Raw,
 }
 
-#[derive(Clone)]
+impl Display for ValueKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ValueKind::*;
+
+        match self {
+            Unit => write!(f, "unit"),
+            Num => write!(f, "number"),
+            Bool => write!(f, "boolean"),
+            Str => write!(f, "string"),
+            Opt => write!(f, "option"),
+            Ref => write!(f, "reference"),
+            Array => write!(f, "array"),
+            Map => write!(f, "map"),
+            Tuple => write!(f, "tuple"),
+            Struct => write!(f, "struct"),
+            Enum => write!(f, "enum"),
+            BitFlags => write!(f, "bitflags"),
+            Raw => write!(f, "raw"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum Value {
     Unit,
     Num(Decimal),
@@ -83,7 +105,7 @@ pub enum Value {
     Array(Sequence),
     Map(Map),
 
-    Tuple(Sequence),
+    Tuple(Option<TypePath>, Sequence),
     Struct(Option<TypePath>, FieldsKind),
     Enum(TypePath, Ident, FieldsKind),
 
@@ -127,7 +149,7 @@ pub struct Object {
     pub value: Val,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversionError {
     ModuleNotFound,
     AmbiguousUse,
@@ -143,6 +165,32 @@ pub enum ConversionError {
     CopyCycle,
     ParseError,
 }
+
+impl Display for ConversionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ConversionError::*;
+
+        match self {
+            ModuleNotFound => write!(f, "module not found"),
+            AmbiguousUse => write!(f, "ambiguous use"),
+            ExpectedUnit => write!(f, "expected unit"),
+            ExpectedTupleFields => write!(f, "expected tuple fields"),
+            ExpectedFields => write!(f, "expected fields"),
+            ExpectedBitfield => write!(f, "expected bitfield"),
+            UnexpectedIdent => write!(f, "unexpected identifier"),
+            TooManyArguments => write!(f, "too many arguments"),
+            ExpectedAsset => write!(f, "expected asset"),
+            ExpectedType => write!(f, "expected type"),
+            ExpectedExactType(type_info) => {
+                write!(f, "expected type {type_info}")
+            }
+            CopyCycle => write!(f, "Copy cycle"),
+            ParseError => write!(f, "Parse error"),
+        }
+    }
+}
+
+impl Error for ConversionError {}
 
 type Result<T> = std::result::Result<T, Spanned<ConversionError>>;
 
@@ -249,7 +297,7 @@ impl<C: AssetContext> Symbols<C> {
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
                     if let Some(reference) = this
                         .ctx
-                        .with_ident(&leading.trim_end_matches(':'), ident.as_str())
+                        .with_ident(leading.trim_end_matches(':'), ident.as_str())
                     {
                         this.add_ref(ident.value.clone(), reference)
                             .map_err(|e| e.span(ident.span))?;
@@ -654,7 +702,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                         }
                     }
                 },
-                None => Value::Tuple(fields),
+                None => Value::Tuple(None, fields),
             }
         }
         parse::Value::Array(arr) => {

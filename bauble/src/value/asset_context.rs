@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 #[derive(Debug, Clone)]
 pub enum DataFieldsKind {
     Unit,
@@ -23,6 +25,12 @@ impl DataFieldsKind {
 pub struct TypeInfo {
     pub module: String,
     pub ident: String,
+}
+
+impl Display for TypeInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}::{}", self.module, self.ident)
+    }
 }
 
 impl TypeInfo {

@@ -1,5 +1,6 @@
 use std::{
     borrow::Borrow,
+    error::Error,
     fmt::{Debug, Display},
     hash::Hash,
     ops::{Deref, DerefMut},
@@ -88,6 +89,12 @@ impl<T: Debug> Debug for Spanned<T> {
 impl<T: Display> Display for Spanned<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.value.fmt(f)
+    }
+}
+
+impl<T: Error> Error for Spanned<T> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.value.source()
     }
 }
 
