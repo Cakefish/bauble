@@ -14,7 +14,7 @@ enum FieldTy<'a> {
     Val {
         /// An expression to generate this type. If `Some`, the field does not need to be
         /// specified in `bauble`.
-        default: Option<proc_macro2::TokenStream>,
+        default: Option<TokenStream>,
         /// Whether the field is a `bauble` attribute
         attribute: bool,
         /// Index for a tuple that holds the values of deserializable fields
@@ -25,7 +25,7 @@ enum FieldTy<'a> {
     /// The field is only generated from a default expression
     AsDefault {
         /// An expression to generate this type
-        default: proc_macro2::TokenStream,
+        default: TokenStream,
         /// Type from which the field is deserialized
         ty: &'a Type,
     },
@@ -33,7 +33,7 @@ enum FieldTy<'a> {
 
 /// Information about a field collected from its attributes
 struct FieldAttrs<'a> {
-    name: proc_macro2::TokenStream,
+    name: TokenStream,
     ty: FieldTy<'a>,
 }
 
@@ -51,7 +51,7 @@ fn parse_fields(
     fields: &Fields,
     // struct / variant level attributes
     attributes: Vec<Ident>,
-) -> Result<FieldsInfo, proc_macro2::TokenStream> {
+) -> Result<FieldsInfo, TokenStream> {
     let mut tuple = false;
 
     for attribute in attributes {
@@ -76,7 +76,7 @@ fn parse_fields(
         fields: fields
             .iter()
             .enumerate()
-            .map(|(index, field)| -> Result<_, proc_macro2::TokenStream> {
+            .map(|(index, field)| -> Result<_, TokenStream> {
                 let mut default = None;
                 let mut as_default = None;
                 let mut attribute = false;
@@ -208,7 +208,7 @@ fn parse_fields(
 /// Related fields used by `derive_struct` and `derive_fields` containing type info
 struct TypeInfo<'a> {
     /// The struct or variant, used for construction
-    ty: proc_macro2::TokenStream,
+    ty: TokenStream,
     /// The type's generics
     impl_generics: &'a ImplGenerics<'a>,
     where_clause: &'a WhereClause,
@@ -230,7 +230,7 @@ fn derive_fields(
     tuple: bool,
     // Whether the type should be flattened, passing its value and attributes directly to its field
     flatten: bool,
-) -> proc_macro2::TokenStream {
+) -> TokenStream {
     let &val_count = val_count;
 
     // Generate functions for default values
@@ -487,11 +487,7 @@ fn derive_fields(
 }
 
 // Generate code to deserialize a struct or variant. See `derive_fields` for more field docs.
-fn derive_struct(
-    ty_info: TypeInfo,
-    fields: &FieldsInfo,
-    flatten: bool,
-) -> proc_macro2::TokenStream {
+fn derive_struct(ty_info: TypeInfo, fields: &FieldsInfo, flatten: bool) -> TokenStream {
     let pattern = match fields.ty {
         Some(false) => quote! { ::bauble::FieldsKind::Struct(mut fields) },
         Some(true) => quote! { ::bauble::FieldsKind::Tuple(mut fields) },
@@ -521,10 +517,7 @@ fn derive_struct(
     }
 }
 
-fn flattened_ty<'a, T: ToTokens>(
-    span: T,
-    fields: &'a FieldsInfo,
-) -> Result<&'a Type, proc_macro2::TokenStream> {
+fn flattened_ty<'a, T: ToTokens>(span: T, fields: &'a FieldsInfo) -> Result<&'a Type, TokenStream> {
     match fields
         .fields
         .iter()
