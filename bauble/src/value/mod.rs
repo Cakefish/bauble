@@ -32,7 +32,7 @@ pub type Fields = IndexMap<Ident, Val>;
 pub type Sequence = Vec<Val>;
 
 // type path.
-type TypePath = TypeInfo;
+type TypePath = OwnedTypeInfo;
 
 type AssetPath = String;
 
@@ -133,18 +133,19 @@ impl Value {
         }
     }
 
-    pub fn type_info(&self) -> Option<&TypeInfo> {
+    pub fn type_info(&self) -> OwnedTypeInfo {
         match self {
-            Self::Struct(type_info, _) | Self::BitFlags(type_info, _) => type_info.as_ref(),
-            Self::Enum(type_info, _, _) => Some(type_info),
-            _ => None,
+            Self::Struct(Some(type_info), _)
+            | Self::BitFlags(Some(type_info), _)
+            | Self::Enum(type_info, _, _) => type_info.clone(),
+            value => OwnedTypeInfo::Kind(value.kind()),
         }
     }
 }
 
 pub struct Object {
     pub object_path: AssetPath,
-    pub type_path: Option<TypePath>,
+    pub type_path: TypePath,
     pub path: String,
     pub value: Val,
 }
@@ -161,7 +162,7 @@ pub enum ConversionError {
     TooManyArguments,
     ExpectedAsset,
     ExpectedType,
-    ExpectedExactType(TypeInfo),
+    ExpectedExactType(OwnedTypeInfo),
     CopyCycle,
     ParseError,
 }
@@ -714,7 +715,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
             )
         }
         parse::Value::Or(values) => {
-            let mut type_info = None::<TypeInfo>;
+            let mut type_info = None::<OwnedTypeInfo>;
             let values = values
                 .iter()
                 .map(|path| {
@@ -758,7 +759,7 @@ fn convert_object<C: AssetContext>(
     Ok(Object {
         // TODO: Create an object path.
         object_path: name.to_string(),
-        type_path: value.value.type_info().cloned(),
+        type_path: value.value.type_info(),
         path: path.to_string(),
         value,
     })

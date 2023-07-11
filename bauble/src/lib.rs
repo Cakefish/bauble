@@ -11,8 +11,8 @@ pub use chumsky::span::SimpleSpan;
 pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
 pub use spanned::{SpanExt, Spanned};
 pub use value::{
-    convert_values, AssetContext, Attributes, ConversionError, FieldsKind, Object, TypeInfo, Val,
-    Value, ValueKind,
+    convert_values, AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo,
+    TypeInfo, Val, Value, ValueKind,
 };
 
 use parse::Values;

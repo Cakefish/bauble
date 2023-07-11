@@ -1,28 +1,19 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, ToTokens};
 use syn::{
     parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
     AttrStyle, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment, Token,
     Type, WhereClause, WherePredicate,
 };
 
-// Related fields used by `derive_struct` and `derive_fields` containing type info
-struct TypeInfo<'a> {
-    // The struct or variant, used for construction
-    ty: TokenStream,
-    // The type's generics
-    impl_generics: &'a ImplGenerics<'a>,
-    where_clause: &'a WhereClause,
-}
-
 /// General kind of field
-pub enum FieldTy<'a> {
+enum FieldTy<'a> {
     /// The field may be deserialized from `bauble`, and must implement `FromBauble`
     Val {
         /// An expression to generate this type. If `Some`, the field does not need to be
-        // specified in `bauble`.
+        /// specified in `bauble`.
         default: Option<TokenStream>,
         /// Whether the field is a `bauble` attribute
         attribute: bool,
@@ -41,9 +32,186 @@ pub enum FieldTy<'a> {
 }
 
 /// Information about a field collected from its attributes
-pub struct FieldAttrs<'a> {
+struct FieldAttrs<'a> {
     name: TokenStream,
     ty: FieldTy<'a>,
+}
+
+/// Information about a struct or variant's fields
+struct FieldsInfo<'a> {
+    fields: Vec<FieldAttrs<'a>>,
+    val_count: usize,
+    /// Whether the struct or variant has fields, and if so, whether it is a tuple
+    ty: Option<bool>,
+}
+
+// Parse the attributes of a struct or variant's fields
+fn parse_fields(
+    // The struct or variant's fields
+    fields: &Fields,
+    // struct / variant level attributes
+    attributes: Vec<Ident>,
+) -> Result<FieldsInfo, TokenStream> {
+    let mut tuple = false;
+
+    for attribute in attributes {
+        match attribute.to_string().as_str() {
+            "tuple" => {
+                if !tuple {
+                    tuple = true;
+                } else {
+                    return Err(
+                        Error::new_spanned(attribute, "Multiple tuple tags").to_compile_error()
+                    );
+                }
+            }
+            // The other type attributes are handled earlier and are not included here
+            _ => return Err(Error::new_spanned(attribute, "unknown attribute").to_compile_error()),
+        }
+    }
+
+    let mut val_count = 0;
+
+    Ok(FieldsInfo {
+        fields: fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| -> Result<_, TokenStream> {
+                let mut default = None;
+                let mut as_default = None;
+                let mut attribute = false;
+
+                for attr in &field.attrs {
+                    if !attr.path().is_ident("bauble") {
+                        continue;
+                    }
+
+                    if let AttrStyle::Inner(_) = attr.style {
+                        Err(
+                            Error::new_spanned(attr, "inner attributes are not supported")
+                                .to_compile_error(),
+                        )?
+                    }
+
+                    attr.parse_nested_meta(|meta| {
+                        let Some(ident) = meta.path.get_ident() else {
+                        Err(meta.error("path must be an identifier"))?
+                    };
+
+                        match ident.to_string().as_str() {
+                            "default" => {
+                                if default.is_some() {
+                                    Err(meta.error("duplicate `default` attribute"))?
+                                }
+
+                                if meta.input.parse::<Token![=]>().is_ok() {
+                                    let expr = meta.input.parse::<Expr>()?;
+                                    default = Some(quote! { #expr });
+                                } else {
+                                    default = Some(quote! { ::std::default::Default::default() });
+                                }
+
+                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                                    Err(meta.error("unexpected token after default value"))?
+                                }
+
+                                Ok(())
+                            }
+                            "as_default" => {
+                                if as_default.is_some() {
+                                    Err(meta.error("duplicate `as_default` attribute"))?
+                                }
+
+                                if meta.input.parse::<Token![=]>().is_ok() {
+                                    let expr = meta.input.parse::<Expr>()?;
+                                    as_default = Some(quote! { #expr });
+                                } else {
+                                    as_default =
+                                        Some(quote! { ::std::default::Default::default() });
+                                }
+
+                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                                    Err(meta.error("unexpected token after default value"))?
+                                }
+
+                                Ok(())
+                            }
+                            "attribute" => {
+                                if attribute {
+                                    Err(meta.error("duplicate `attribute` attribute"))?
+                                }
+
+                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                                    Err(meta
+                                        .error("expected no arguments for `attribute` attribute"))?
+                                }
+
+                                attribute = true;
+
+                                Ok(())
+                            }
+                            ident => Err(meta.error(format!("unknown attribute `{ident}`"))),
+                        }
+                    })
+                    .map_err(|err| err.to_compile_error())?;
+                }
+
+                Ok(FieldAttrs {
+                    name: match &field.ident {
+                        Some(ident) => quote! { #ident },
+                        // Tuple structs are constructed with `MyType { 0: val0, 1: val1, ... }` syntax
+                        None => {
+                            let index = Index::from(index);
+                            quote! { #index }
+                        }
+                    },
+                    ty: match (default, as_default, attribute) {
+                        (Some(_), Some(_), _) => Err(Error::new_spanned(
+                            field,
+                            "field cannot be both `default` and `as_default`",
+                        )
+                        .to_compile_error())?,
+                        (_, Some(_), true) => Err(Error::new_spanned(
+                            field,
+                            "field cannot be both `as_default` and `attribute`",
+                        )
+                        .to_compile_error())?,
+                        (None, Some(as_default), false) => FieldTy::AsDefault {
+                            default: as_default,
+                            ty: &field.ty,
+                        },
+                        (default, None, attribute) => {
+                            let index = Index::from(val_count);
+                            val_count += 1;
+
+                            FieldTy::Val {
+                                default,
+                                attribute,
+                                index,
+                                ty: &field.ty,
+                            }
+                        }
+                    },
+                })
+            })
+            .collect::<Result<_, _>>()?,
+        val_count,
+        ty: match fields {
+            // Named fields in a type with the `tuple` attribute are treated as a tuple
+            Fields::Named(_) => Some(tuple),
+            Fields::Unnamed(_) => Some(true),
+            Fields::Unit => None,
+        },
+    })
+}
+
+/// Related fields used by `derive_struct` and `derive_fields` containing type info
+struct TypeInfo<'a> {
+    /// The struct or variant, used for construction
+    ty: TokenStream,
+    /// The type's generics
+    impl_generics: &'a ImplGenerics<'a>,
+    where_clause: &'a WhereClause,
 }
 
 // Generate code to deserialize a struct or variant with fields
@@ -54,137 +222,16 @@ fn derive_fields(
         where_clause,
     }: TypeInfo,
     // The struct or variant's fields
-    fields: &Fields,
+    FieldsInfo {
+        fields, val_count, ..
+    }: &FieldsInfo,
     // Whether the struct or variant should be parsed from a tuple. For structs with named
     // fields, this is the case if it has the `tuple` attribute
     tuple: bool,
+    // Whether the type should be flattened, passing its value and attributes directly to its field
+    flatten: bool,
 ) -> TokenStream {
-    let mut val_count = 0;
-
-    // Parse the fields and attributes
-    let fields = match fields
-        .iter()
-        .enumerate()
-        .map(|(index, field)| {
-            let mut default = None;
-            let mut as_default = None;
-            let mut attribute = false;
-
-            for attr in &field.attrs {
-                if !attr.path().is_ident("bauble") {
-                    continue;
-                }
-
-                if let AttrStyle::Inner(_) = attr.style {
-                    Err(
-                        Error::new_spanned(attr, "inner attributes are not supported")
-                            .to_compile_error(),
-                    )?
-                }
-
-                attr.parse_nested_meta(|meta| {
-                    let Some(ident) = meta.path.get_ident() else {
-                        Err(meta.error("path must be an identifier"))?
-                    };
-
-                    match ident.to_string().as_str() {
-                        "default" => {
-                            if default.is_some() {
-                                Err(meta.error("duplicate `default` attribute"))?
-                            }
-
-                            if meta.input.parse::<Token![=]>().is_ok() {
-                                let expr = meta.input.parse::<Expr>()?;
-                                default = Some(quote! { #expr });
-                            } else {
-                                default = Some(quote! { ::std::default::Default::default() });
-                            }
-
-                            if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                Err(meta.error("unexpected token after default value"))?
-                            }
-
-                            Ok(())
-                        }
-                        "as_default" => {
-                            if as_default.is_some() {
-                                Err(meta.error("duplicate `as_default` attribute"))?
-                            }
-
-                            if meta.input.parse::<Token![=]>().is_ok() {
-                                let expr = meta.input.parse::<Expr>()?;
-                                as_default = Some(quote! { #expr });
-                            } else {
-                                as_default = Some(quote! { ::std::default::Default::default() });
-                            }
-
-                            if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                Err(meta.error("unexpected token after default value"))?
-                            }
-
-                            Ok(())
-                        }
-                        "attribute" => {
-                            if attribute {
-                                Err(meta.error("duplicate `attribute` attribute"))?
-                            }
-
-                            if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                Err(meta.error("expected no arguments for `attribute` attribute"))?
-                            }
-
-                            attribute = true;
-
-                            Ok(())
-                        }
-                        ident => Err(meta.error(format!("unknown attribute `{ident}`"))),
-                    }
-                })
-                .map_err(|err| err.to_compile_error())?;
-            }
-
-            Ok(FieldAttrs {
-                name: match &field.ident {
-                    Some(ident) => quote! { #ident },
-                    // Tuple structs are constructed with `MyType { 0: val0, 1: val1, ... }` syntax
-                    None => {
-                        let index = Index::from(index);
-                        quote! { #index }
-                    }
-                },
-                ty: match (default, as_default, attribute) {
-                    (Some(_), Some(_), _) => Err(Error::new_spanned(
-                        field,
-                        "field cannot be both `default` and `as_default`",
-                    )
-                    .to_compile_error())?,
-                    (_, Some(_), true) => Err(Error::new_spanned(
-                        field,
-                        "field cannot be both `as_default` and `attribute`",
-                    )
-                    .to_compile_error())?,
-                    (None, Some(as_default), false) => FieldTy::AsDefault {
-                        default: as_default,
-                        ty: &field.ty,
-                    },
-                    (default, None, attribute) => {
-                        let index = Index::from(val_count);
-                        val_count += 1;
-                        FieldTy::Val {
-                            default,
-                            attribute,
-                            index,
-                            ty: &field.ty,
-                        }
-                    }
-                },
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(fields) => fields,
-        Err(err) => return err,
-    };
+    let &val_count = val_count;
 
     // Generate functions for default values
     let defaults = fields.iter().filter_map(|field| match &field.ty {
@@ -194,7 +241,7 @@ fn derive_fields(
             ..
         }
         | FieldTy::AsDefault { default, ty } => {
-            let name = format_ident!("default_{}", field.name.to_string());
+            let name = Ident::new(&format!("default_{}", field.name), Span::call_site());
             Some(quote! {
                 fn #name #impl_generics() -> #ty #where_clause {
                     #default
@@ -210,33 +257,48 @@ fn derive_fields(
     let mut curr_value = 0usize;
     let values = fields.iter().filter_map(|field| {
         let name = &field.name;
-        match &field.ty {
-            FieldTy::Val {
-                default: None,
-                attribute: true,
-                ..
-            } => Some(quote! {
+        match (&field.ty, flatten) {
+            (
+                FieldTy::Val {
+                    default: None,
+                    attribute: true,
+                    ..
+                },
+                _,
+            ) => Some(quote! {
                 attributes
                     .remove(stringify!(#name))
                     .ok_or_else(|| ::bauble::DeserializeError::MissingAttribute {
                         attribute: stringify!(#name).to_owned(),
-                        ty: self_type_info.clone(),
+                        ty: Self::INFO.to_owned(),
                         span,
                     })?
             }),
-            FieldTy::Val {
-                default: Some(_),
-                attribute: true,
-                ..
-            } => Some(quote! {
+            (
+                FieldTy::Val {
+                    default: Some(_),
+                    attribute: true,
+                    ..
+                },
+                _,
+            ) => Some(quote! {
                 attributes
                     .remove(stringify!(#name))
             }),
-            FieldTy::Val {
-                default: None,
-                attribute: false,
-                ..
-            } => Some(match tuple {
+            (
+                FieldTy::Val {
+                    attribute: false, ..
+                },
+                true,
+            ) => Some(quote! { () }),
+            (
+                FieldTy::Val {
+                    default: None,
+                    attribute: false,
+                    ..
+                },
+                false,
+            ) => Some(match tuple {
                 true => {
                     curr_value += 1;
                     quote! {
@@ -245,7 +307,7 @@ fn derive_fields(
                             .ok_or_else(|| ::bauble::DeserializeError::WrongTupleLength {
                                 expected: #val_count,
                                 found: #curr_value,
-                                ty: self_type_info.clone(),
+                                ty: Self::INFO.to_owned(),
                                 span,
                             })?
                     }
@@ -255,16 +317,19 @@ fn derive_fields(
                         .remove(stringify!(#name))
                         .ok_or_else(|| ::bauble::DeserializeError::MissingField {
                             field: stringify!(#name).to_owned(),
-                            ty: self_type_info.clone(),
+                            ty: Self::INFO.to_owned(),
                             span,
                         })?
                 },
             }),
-            FieldTy::Val {
-                default: Some(_),
-                attribute: false,
-                ..
-            } => {
+            (
+                FieldTy::Val {
+                    default: Some(_),
+                    attribute: false,
+                    ..
+                },
+                false,
+            ) => {
                 let default = format_ident!("default_{name}");
                 Some(match tuple {
                     true => {
@@ -281,15 +346,16 @@ fn derive_fields(
                     },
                 })
             }
-            FieldTy::AsDefault { .. } => None,
+            (FieldTy::AsDefault { .. }, _) => None,
         }
     });
 
     // TODO: `var.function()` calls should be replaced with `TypeOrTrait::function(var)`
     // Generate code that checks for unexpected fields (also contains previously generated field
     // deserialization)
-    let values = match tuple {
-        true => quote! {
+    let values = match (tuple, flatten) {
+        (_, true) => quote! { let values = (#( #values, )*); },
+        (true, false) => quote! {
             let mut fields = fields.into_iter();
             let values = (#( #values, )*);
 
@@ -298,33 +364,75 @@ fn derive_fields(
                 ::std::result::Result::Err(::bauble::DeserializeError::WrongTupleLength {
                     expected: #field_count,
                     found: #val_count + length,
-                    ty: self_type_info.clone(),
+                    ty: Self::INFO.to_owned(),
                     span,
                 })?
             }
         },
-        false => quote! {
+        (false, false) => quote! {
             let values = (#( #values, )*);
 
             if let ::std::option::Option::Some((field, _)) = fields.into_iter().next() {
                 ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedField {
                     field,
-                    ty: self_type_info.clone(),
+                    ty: Self::INFO.to_owned(),
                 })?
             }
         },
     };
 
+    let check_attributes = (!flatten).then(|| {
+        quote! {
+            if let ::std::option::Option::Some((attribute, _)) = attributes.into_iter().next() {
+                ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedAttribute {
+                    attribute,
+                    ty: Self::INFO.to_owned(),
+                })?
+            }
+        }
+    });
+
     // Generate code that evaluates each field
+    // TODO The way `impl_generics` is used here prevents the user from adding bounds directly on
+    // the type parameters
     let fields = fields.iter().map(|field| {
         let ident = &field.name;
         let default = format_ident!("default_{ident}");
-        match &field.ty {
-            FieldTy::Val {
-                default: Some(_),
-                index,
-                ..
-            } => quote! {
+        match (&field.ty, flatten) {
+            (
+                FieldTy::Val {
+                    attribute: false, ..
+                },
+                true,
+            ) => quote! {
+                #ident: ::bauble::BaubleAllocator::validate(
+                    allocator,
+                    ::bauble::FromBauble::from_bauble(::bauble::Val {
+                        attributes: ::bauble::Spanned {
+                            value: ::bauble::Attributes(attributes),
+                            span: attributes_span,
+                        },
+                        value: ::bauble::Spanned { value, span },
+                    }, allocator)?,
+                )?
+            },
+            (
+                FieldTy::Val {
+                    default: Some(_),
+                    index,
+                    ..
+                },
+                false,
+            )
+            | (
+                FieldTy::Val {
+                    default: Some(_),
+                    index,
+                    attribute: true,
+                    ..
+                },
+                true,
+            ) => quote! {
                 #ident: match values.#index {
                     Some(value) => ::bauble::BaubleAllocator::validate(
                         allocator,
@@ -333,17 +441,29 @@ fn derive_fields(
                     None => #default::#impl_generics(),
                 }
             },
-            FieldTy::Val {
-                default: None,
-                index,
-                ..
-            } => quote! {
+            (
+                FieldTy::Val {
+                    default: None,
+                    index,
+                    ..
+                },
+                false,
+            )
+            | (
+                FieldTy::Val {
+                    default: None,
+                    index,
+                    attribute: true,
+                    ..
+                },
+                true,
+            ) => quote! {
                 #ident: ::bauble::BaubleAllocator::validate(
                     allocator,
                     ::bauble::FromBauble::from_bauble(values.#index, allocator)?
                 )?
             },
-            FieldTy::AsDefault { .. } => quote! { #ident: #default::#impl_generics() },
+            (FieldTy::AsDefault { .. }, _) => quote! { #ident: #default::#impl_generics() },
         }
     });
 
@@ -353,12 +473,7 @@ fn derive_fields(
 
         #values
 
-        if let ::std::option::Option::Some((attribute, _)) = attributes.into_iter().next() {
-            ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: self_type_info.clone(),
-            })?
-        }
+        #check_attributes
 
         unsafe {
             ::bauble::BaubleAllocator::wrap(
@@ -372,43 +487,15 @@ fn derive_fields(
 }
 
 // Generate code to deserialize a struct or variant. See `derive_fields` for more field docs.
-fn derive_struct(
-    ty_info: TypeInfo,
-    // struct / variant level attributes
-    attributes: Vec<Ident>,
-    fields: &Fields,
-) -> TokenStream {
-    let mut tuple = false;
-
-    for attribute in attributes {
-        match attribute.to_string().as_str() {
-            "tuple" => {
-                if !tuple {
-                    tuple = true;
-                } else {
-                    return Error::new_spanned(attribute, "Multiple tuple tags").to_compile_error();
-                }
-            }
-            // The other type attributes are handled earlier and are not included here
-            _ => return Error::new_spanned(attribute, "unknown attribute").to_compile_error(),
-        }
-    }
-
-    let fields_ty = match fields {
-        // Named fields in a type with the `tuple` attribute are treated as a tuple
-        Fields::Named(_) => Some(tuple),
-        Fields::Unnamed(_) => Some(true),
-        Fields::Unit => None,
-    };
-
-    let pattern = match fields_ty {
+fn derive_struct(ty_info: TypeInfo, fields: &FieldsInfo, flatten: bool) -> TokenStream {
+    let pattern = match fields.ty {
         Some(false) => quote! { ::bauble::FieldsKind::Struct(mut fields) },
         Some(true) => quote! { ::bauble::FieldsKind::Tuple(mut fields) },
         None => quote! { ::bauble::FieldsKind::Unit },
     };
 
-    let fields = match fields_ty {
-        Some(tuple) => derive_fields(ty_info, fields, tuple),
+    let fields = match fields.ty {
+        Some(tuple) => derive_fields(ty_info, fields, tuple, flatten),
         None => {
             // The struct or variant is a unit, so generate very basic deserialization
             let TypeInfo { ty, .. } = ty_info;
@@ -418,10 +505,59 @@ fn derive_struct(
         }
     };
 
-    quote! {
-        #pattern => {
+    match flatten {
+        true => quote! {
             #fields
         },
+        false => quote! {
+            #pattern => {
+                #fields
+            },
+        },
+    }
+}
+
+fn flattened_ty<'a, T: ToTokens>(span: T, fields: &'a FieldsInfo) -> Result<&'a Type, TokenStream> {
+    match fields
+        .fields
+        .iter()
+        .try_fold(None, |acc, field| match (acc, &field.ty) {
+            (
+                Some(_),
+                FieldTy::Val {
+                    attribute: false,
+                    ty,
+                    ..
+                },
+            ) => Err(Error::new_spanned(ty, "only one field may be flattened")),
+            (
+                acc @ Some(_),
+                FieldTy::Val {
+                    attribute: true, ..
+                }
+                | FieldTy::AsDefault { .. },
+            ) => Ok(acc),
+            (
+                None,
+                FieldTy::Val {
+                    attribute: false,
+                    ty,
+                    ..
+                },
+            ) => Ok(Some(ty)),
+            (
+                None,
+                FieldTy::Val {
+                    attribute: true, ..
+                }
+                | FieldTy::AsDefault { .. },
+            ) => Ok(None),
+        }) {
+        Ok(Some(ty)) => Ok(ty),
+        Ok(None) => {
+            Err(Error::new_spanned(span, "at least one field must be flattened").to_compile_error())
+        }
+        Err(err) => Err(err.to_compile_error()),
     }
 }
 
@@ -566,173 +702,78 @@ pub fn derive_bauble_derive_input(
     };
 
     // Generate code to deserialize this type
-    let match_value = if flatten {
-        if let Some(attribute) = attributes.into_iter().next() {
-            return Error::new_spanned(
-                &attribute,
-                format!("attribute `{attribute}` is incompatible with `flatten`"),
-            )
-            .to_compile_error();
-        }
+    let (type_info, match_value) = match &ast.data {
+        Data::Struct(data) => {
+            let fields = match parse_fields(&data.fields, attributes) {
+                Ok(fields) => fields,
+                Err(err) => return err,
+            };
 
-        let Data::Enum(data) = &ast.data else {
-            return Error::new(
-                Span::call_site(),
-                "`flatten` can only be used on enums",
-            )
-            .to_compile_error();
-        };
+            let case = derive_struct(
+                TypeInfo {
+                    ty: quote! { Self },
+                    impl_generics: &impl_generics,
+                    where_clause: &where_clause,
+                },
+                &fields,
+                flatten,
+            );
 
-        let variants = match data
-            .variants
-            .iter()
-            .map(|variant| {
-                if variant.fields.len() != 1 {
-                    return Err(Error::new_spanned(
-                        &variant.fields,
-                        "variant must have exactly one field",
+            match flatten {
+                true => {
+                    let flattened_ty = match flattened_ty(ident, &fields) {
+                        Ok(ty) => ty,
+                        Err(err) => return err,
+                    };
+
+                    (
+                        quote! {
+                            ::bauble::TypeInfo::Flatten(&[
+                                &<#flattened_ty as ::bauble::FromBauble>::INFO,
+                            ])
+                        },
+                        quote! { ::std::result::Result::Ok( { #case } ) },
                     )
-                    .to_compile_error());
                 }
-
-                let field = variant.fields.iter().next().unwrap();
-                let ty = &field.ty;
-                let field = match &field.ident {
-                    Some(ident) => quote! { #ident },
-                    None => quote! { 0 },
-                };
-                let variant = &variant.ident;
-
-                Ok(quote! {
-                    Self::#variant {
-                        #field: <#ty as ::bauble::FromBauble<#lifetime, #allocator>>::from_bauble(
-                            ::bauble::Val {
-                                attributes: ::bauble::Spanned {
-                                    value: ::bauble::Attributes(attributes),
-                                    span: attributes_span,
-                                },
-                                value: ::bauble::Spanned { value, span },
-                            },
-                            allocator,
-                        )?,
-                    }
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()
-        {
-            Ok(variants) => variants,
-            Err(err) => return err,
-        };
-
-        // TODO Inspect variants statically instead of parsing each
-        quote! {
-            [
-                #(
-                    ::std::boxed::Box::new(|| {
-                        let attributes = attributes.clone();
-                        let value = value.clone();
-                        ::std::result::Result::Ok(
-                            #variants
-                        )
-                    }) as ::std::boxed::Box<
-                        dyn Fn() -> Result<Self, ::std::boxed::Box<::bauble::DeserializeError>>
-                    >,
-                )*
-            ]
-            .into_iter()
-            .fold(
-                ::std::result::Result::Err(::std::vec![::bauble::DeserializeError::Custom {
-                    message: format!(
-                        "No variant of `{}` matches the given data",
-                        stringify!(#ident)
-                    ),
-                    span,
-                }]),
-                |
-                    result: std::result::Result<_, std::vec::Vec<_>>,
-                    f: ::std::boxed::Box<dyn Fn() -> _>
-                | -> ::std::result::Result<_, ::std::vec::Vec<_>> {
-                    match result {
-                        ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
-                        ::std::result::Result::Err(mut errors) => {
-                            match f() {
-                                ::std::result::Result::Ok(value) => ::std::result::Result::Ok(value),
-                                ::std::result::Result::Err(error) => {
-                                    errors.push(*error);
-                                    ::std::result::Result::Err(errors)
+                false => (
+                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#ident)) },
+                    quote! {
+                        ::std::result::Result::Ok(match value {
+                            ::bauble::Value::Struct(type_info, fields) => {
+                                match fields {
+                                    #case
+                                    _ => ::std::result::Result::Err(
+                                        ::bauble::DeserializeError::WrongKind {
+                                            expected: ::bauble::ValueKind::Struct,
+                                            found: value_kind,
+                                            ty: Self::INFO.to_owned(),
+                                            span,
+                                        }
+                                    )?,
                                 }
                             }
-                        }
-                    }
-                }
-            )
-            .map_err(|errors| ::std::boxed::Box::new(
-                match errors.iter().skip(1).fold(None, |state, error| {
-                    match (state, error) {
-                        (
-                            None,
-                            ::bauble::DeserializeError::WrongTypePath { .. }
-                                | ::bauble::DeserializeError::WrongKind { .. },
-                        ) => None,
-                        (None, error) => Some(Some(error)),
-                        (
-                            Some(state),
-                            ::bauble::DeserializeError::WrongTypePath { .. }
-                                | ::bauble::DeserializeError::WrongKind { .. },
-                        ) => Some(state),
-                        (Some(state), _) => Some(None),
-                    }
-                }) {
-                    Some(Some(error)) => error.clone(),
-                    _ => ::bauble::DeserializeError::Multiple(errors),
-                }
-            ))
-        }
-    } else {
-        // The type is usual
-        let match_value = match &ast.data {
-            Data::Struct(data) => {
-                let case = derive_struct(
-                    TypeInfo {
-                        ty: quote! { Self },
-                        impl_generics: &impl_generics,
-                        where_clause: &where_clause,
+                            _ => ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
+                                expected: ::bauble::ValueKind::Struct,
+                                found: value_kind,
+                                ty: Self::INFO.to_owned(),
+                                span,
+                            })?,
+                        })
                     },
-                    attributes,
-                    &data.fields,
-                );
-
-                quote! {
-                    ::std::result::Result::Ok(match value {
-                        ::bauble::Value::Struct(type_info, fields) => {
-                            match fields {
-                                #case
-                                _ => ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
-                                    expected: ::bauble::ValueKind::Struct,
-                                    found: value_kind,
-                                    ty: self_type_info.clone(),
-                                    span,
-                                })?,
-                            }
-                        }
-                        _ => ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
-                            expected: ::bauble::ValueKind::Struct,
-                            found: value_kind,
-                            ty: self_type_info.clone(),
-                            span,
-                        })?,
-                    })
-                }
+                ),
             }
-            Data::Enum(data) => {
-                // enums don't accept any extra attributes on the type. Those attributes are on the
-                // variants instead.
-                if let Some(attribute) = attributes.into_iter().next() {
-                    return Error::new_spanned(attribute, "unexpected attribute")
-                        .to_compile_error();
-                }
+        }
+        Data::Enum(data) => {
+            // enums don't accept any extra attributes on the type. Those attributes are on the
+            // variants instead.
+            if let Some(attribute) = attributes.into_iter().next() {
+                return Error::new_spanned(attribute, "unexpected attribute").to_compile_error();
+            }
 
-                let variant_convert = data.variants.iter().map(|variant| {
+            let (flattened_tys, variant_convert): (Vec<_>, Vec<_>) = data
+                .variants
+                .iter()
+                .map(|variant| {
                     let ident = &variant.ident;
 
                     // Parse variant attributes
@@ -777,84 +818,134 @@ pub fn derive_bauble_derive_input(
                         .collect::<Result<Vec<_>, _>>()
                     {
                         Ok(attributes) => attributes,
-                        Err(err) => return err.to_compile_error(),
+                        Err(err) => return (quote! {}, err.to_compile_error()),
                     }
                     .into_iter()
                     .flatten()
                     .collect();
 
+                    let fields = match parse_fields(&variant.fields, attributes) {
+                        Ok(fields) => fields,
+                        Err(err) => return (quote! {}, err),
+                    };
                     let derive = derive_struct(
                         TypeInfo {
                             ty: quote! { Self::#ident },
                             impl_generics: &impl_generics,
                             where_clause: &where_clause,
                         },
-                        attributes,
-                        &variant.fields,
+                        &fields,
+                        flatten,
                     );
 
-                    quote! {
-                        stringify!(#ident) => match fields {
-                            #derive
-                            _ => ::std::result::Result::Err(
-                                ::bauble::DeserializeError::UnknownVariant {
-                                    variant: name,
-                                    kind: fields.variant_kind(),
-                                    ty: self_type_info.clone(),
-                                }
-                            )?,
-                        },
-                    }
-                });
+                    match flatten {
+                        true => {
+                            let flattened_ty = match flattened_ty(variant, &fields) {
+                                Ok(ty) => ty,
+                                Err(err) => return (quote! {}, err),
+                            };
 
-                // Assemble the type's deserialization
-                quote! {
-                    ::std::result::Result::Ok(match value {
-                        ::bauble::Value::Enum(type_info, name, fields) => {
-                            match name.as_str() {
-                                #(#variant_convert)*
-                                _ => ::std::result::Result::Err(
-                                    ::bauble::DeserializeError::UnknownVariant {
-                                        variant: name,
-                                        kind: fields.variant_kind(),
-                                        ty: self_type_info.clone(),
-                                    }
-                                )?,
-                            }
-                        },
-                        v => {
-                            ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
-                                expected: ::bauble::ValueKind::Enum,
-                                found: v.kind(),
-                                span,
-                                ty: self_type_info.clone(),
-                            })?
+                            (
+                                quote! { #flattened_ty },
+                                quote! {
+                                    if <#flattened_ty as ::bauble::FromBauble<
+                                        #lifetime,
+                                        #allocator
+                                    >>::INFO.contains(&type_info) {
+                                        #derive
+                                    } else
+                                },
+                            )
                         }
-                    })
-                }
-            }
-            Data::Union(data) => {
-                Error::new_spanned(data.union_token, "unions are not supported").to_compile_error()
-            }
-        };
+                        false => (
+                            quote! {},
+                            quote! {
+                                stringify!(#ident) => match fields {
+                                    #derive
+                                    _ => ::std::result::Result::Err(
+                                        ::bauble::DeserializeError::UnknownVariant {
+                                            variant: name,
+                                            kind: fields.variant_kind(),
+                                            ty: Self::INFO.to_owned(),
+                                        }
+                                    )?,
+                                },
+                            },
+                        ),
+                    }
+                })
+                .unzip();
 
+            // Assemble the type's deserialization
+            match flatten {
+                true => (
+                    quote! {
+                        ::bauble::TypeInfo::Flatten(&[
+                            #(&<#flattened_tys as ::bauble::FromBauble>::INFO,)*
+                        ])
+                    },
+                    quote! {
+                        ::std::result::Result::Ok(
+                            // `if`-`else` chain because assoc consts can't be used in `match` arms :(
+                            // https://github.com/rust-lang/rust/issues/72602
+                            #(#variant_convert)* {
+                                ::std::result::Result::Err(
+                                    ::bauble::DeserializeError::UnknownFlattenedVariant {
+                                        variant: type_info,
+                                        ty: Self::INFO.to_owned(),
+                                    }
+                                )?
+                            }
+                        )
+                    },
+                ),
+                false => (
+                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#ident)) },
+                    quote! {
+                        ::std::result::Result::Ok(match value {
+                            ::bauble::Value::Enum(type_info, name, fields) => {
+                                match name.as_str() {
+                                    #(#variant_convert)*
+                                    _ => ::std::result::Result::Err(
+                                        ::bauble::DeserializeError::UnknownVariant {
+                                            variant: name,
+                                            kind: fields.variant_kind(),
+                                            ty: Self::INFO.to_owned(),
+                                        }
+                                    )?,
+                                }
+                            },
+                            v => {
+                                ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
+                                    expected: ::bauble::ValueKind::Enum,
+                                    found: v.kind(),
+                                    span,
+                                    ty: Self::INFO.to_owned(),
+                                })?
+                            }
+                        })
+                    },
+                ),
+            }
+        }
+        Data::Union(data) => (
+            quote! {},
+            Error::new_spanned(data.union_token, "unions are not supported").to_compile_error(),
+        ),
+    };
+
+    let validate_type_info = (!flatten).then(|| {
         quote! {
-            let type_info = ::bauble::Spanned {
-                span,
-                value: value.type_info().cloned().unwrap_or_default(),
-            };
-            if type_info.module != #path || type_info.ident != stringify!(#ident) {
+            if !Self::INFO.contains(&type_info) {
                 return ::std::result::Result::Err(
                     ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
-                        expected: self_type_info,
+                        expected: Self::INFO.to_owned(),
                         found: type_info,
                     })
                 )
             }
-
-            #match_value
         }
-    };
+    });
 
     // Assemble the implementation
     quote! {
@@ -862,6 +953,8 @@ pub fn derive_bauble_derive_input(
             for #ident #ty_generics
             #where_clause
         {
+            const INFO: ::bauble::TypeInfo<'static> = #type_info;
+
             fn from_bauble(
                 ::bauble::Val {
                     attributes: ::bauble::Spanned {
@@ -875,9 +968,13 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
-                let self_type_info = ::bauble::TypeInfo::new(#path, stringify!(#ident));
                 let value_kind = value.kind();
+                let type_info = ::bauble::Spanned {
+                    span,
+                    value: value.type_info(),
+                };
 
+                #validate_type_info
                 #match_value
             }
         }
