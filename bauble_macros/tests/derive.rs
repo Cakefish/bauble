@@ -51,6 +51,36 @@ fn test_tuple() {
 }
 
 #[test]
+fn test_enum() {
+    #[derive(FromBauble, PartialEq, Debug)]
+    enum Test {
+        Foo(i32, u32),
+        Bar { x: i32, y: u32 },
+        Baz,
+    }
+    assert_eq!(
+        Ok(Test::Foo(-10, 2)),
+        simple_convert(
+            "test = derive::Test(-10, 2)",
+            "test",
+            &bauble::DefaultAllocator
+        )
+    );
+    assert_eq!(
+        Ok(Test::Bar { x: -5, y: 5 }),
+        simple_convert(
+            "test = derive::Test { x: -5, y: 5 }",
+            "test",
+            &bauble::DefaultAllocator
+        )
+    );
+    assert_eq!(
+        Ok(Test::Baz),
+        simple_convert("test = derive::Test", "test", &bauble::DefaultAllocator)
+    );
+}
+
+#[test]
 fn test_flattened() {
     #[derive(FromBauble, PartialEq, Debug)]
     #[bauble(flatten)]
