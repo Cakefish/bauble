@@ -3,8 +3,8 @@ use std::{error::Error, fmt::Display};
 use crate::{
     parse::{Ident, Path},
     spanned::{Span, SpanExt, Spanned},
-    value::{ConversionError, TypeInfo},
-    Attributes, Val, Value, ValueKind,
+    value::{ConversionError, OwnedTypeInfo},
+    Attributes, TypeInfo, Val, Value, ValueKind,
 };
 use num_traits::ToPrimitive;
 
@@ -30,67 +30,70 @@ impl Display for VariantKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeserializeError {
     WrongTypePath {
-        expected: TypeInfo,
-        found: Spanned<TypeInfo>,
+        expected: OwnedTypeInfo,
+        found: Spanned<OwnedTypeInfo>,
     },
     MissingTypePath {
-        ty: Option<TypeInfo>,
+        ty: Option<OwnedTypeInfo>,
         span: Span,
     },
     UnexpectedTypePath {
-        ty: Spanned<TypeInfo>,
+        ty: Spanned<OwnedTypeInfo>,
     },
     MissingField {
         field: String,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         span: Span,
     },
     UnexpectedField {
         field: Ident,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
     },
     WrongTupleLength {
         expected: usize,
         found: usize,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         span: Span,
     },
     WrongArrayLength {
         expected: usize,
         found: usize,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         span: Span,
     },
     UnknownVariant {
         variant: Spanned<String>,
         kind: VariantKind,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
+    },
+    UnknownFlattenedVariant {
+        variant: Spanned<OwnedTypeInfo>,
+        ty: OwnedTypeInfo,
     },
     WrongFields {
         found: VariantKind,
         expected: VariantKind,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         span: Span,
     },
     MissingVariantName {
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         span: Span,
     },
     NotAVariant {
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         path: Spanned<Path>,
     },
     UnexpectedAttribute {
         attribute: Ident,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
     },
     WrongKind {
         expected: ValueKind,
         found: ValueKind,
-        ty: TypeInfo,
+        ty: OwnedTypeInfo,
         span: Span,
     },
-    Multiple(Vec<DeserializeError>),
     Custom {
         message: String,
         span: Span,
@@ -145,6 +148,10 @@ impl Display for DeserializeError {
                 f,
                 "{span}: unknown variant `{value}` of kind {kind} in `{ty}`"
             ),
+            UnknownFlattenedVariant {
+                variant: Spanned { span, value },
+                ty,
+            } => write!(f, "{span}: unknown flattened variant `{value}` in `{ty}`"),
             WrongFields {
                 found,
                 expected,
@@ -174,12 +181,6 @@ impl Display for DeserializeError {
                 f,
                 "{span}: wrong kind, expected {expected}, found {found} in `{ty}`"
             ),
-            Multiple(errors) => {
-                for error in errors {
-                    writeln!(f, "{}", error)?;
-                }
-                Ok(())
-            }
             Custom { message, span } => write!(f, "{span}: {message}"),
             Conversion(Spanned { span, value }) => write!(f, "{span}: {value}"),
         }
@@ -192,24 +193,43 @@ impl DeserializeError {
     pub fn err_span(&self) -> Span {
         use DeserializeError::*;
 
-        match self {
-            WrongTypePath { found, .. } => found.span,
-            MissingTypePath { span, .. } => *span,
-            UnexpectedTypePath { ty } => ty.span,
-            MissingField { span, .. } => *span,
-            UnexpectedField { field, .. } => field.span,
-            WrongTupleLength { span, .. } => *span,
-            WrongArrayLength { span, .. } => *span,
-            UnknownVariant { variant, .. } => variant.span,
-            WrongFields { span, .. } => *span,
-            MissingVariantName { span, .. } => *span,
-            NotAVariant { path, .. } => path.span,
-            UnexpectedAttribute { attribute, .. } => attribute.span,
-            WrongKind { span, .. } => *span,
-            Multiple(errors) => errors[0].err_span(),
-            Custom { span, .. } => *span,
-            Conversion(Spanned { span, .. }) => *span,
+        let (&WrongTypePath {
+            found: Spanned { span, .. },
+            ..
         }
+        | &MissingTypePath { span, .. }
+        | &UnexpectedTypePath {
+            ty: Spanned { span, .. },
+        }
+        | &MissingField { span, .. }
+        | &UnexpectedField {
+            field: Spanned { span, .. },
+            ..
+        }
+        | &WrongTupleLength { span, .. }
+        | &WrongArrayLength { span, .. }
+        | &UnknownVariant {
+            variant: Spanned { span, .. },
+            ..
+        }
+        | &UnknownFlattenedVariant {
+            variant: Spanned { span, .. },
+            ..
+        }
+        | &WrongFields { span, .. }
+        | &MissingVariantName { span, .. }
+        | &NotAVariant {
+            path: Spanned { span, .. },
+            ..
+        }
+        | &UnexpectedAttribute {
+            attribute: Spanned { span, .. },
+            ..
+        }
+        | &WrongKind { span, .. }
+        | &Custom { span, .. }
+        | &Conversion(Spanned { span, .. })) = self;
+        span
     }
 }
 
@@ -242,12 +262,14 @@ impl<'a> BaubleAllocator<'a> for DefaultAllocator {
 }
 
 pub trait FromBauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized {
-    // TODO Add an assoc const for type info, so outer types can peek
+    const INFO: TypeInfo<'static>;
 
     fn from_bauble(data: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>>;
 }
 
 impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
+
     fn from_bauble(
         Val {
             attributes:
@@ -262,7 +284,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
         if let Some((attribute, _)) = attributes.into_iter().next() {
             Err(DeserializeError::UnexpectedAttribute {
                 attribute,
-                ty: TypeInfo::simple("Vec"),
+                ty: Self::INFO.to_owned(),
             })?
         }
 
@@ -274,7 +296,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
             _ => Err(DeserializeError::WrongKind {
                 expected: ValueKind::Array,
                 found: value.kind(),
-                ty: TypeInfo::simple("Vec"),
+                ty: Self::INFO.to_owned(),
                 span,
             })?,
         })
@@ -290,7 +312,7 @@ macro_rules! match_val {
             if let Some((attribute, _)) = value.attributes.value.0.iter().next() {
                 Err($crate::DeserializeError::UnexpectedAttribute {
                     attribute: attribute.clone(),
-                    ty: $crate::TypeInfo::simple(stringify!($ident)),
+                    ty: $crate::OwnedTypeInfo::Kind($crate::ValueKind::$ident),
                 })?
             }
 
@@ -300,7 +322,7 @@ macro_rules! match_val {
                 (value, span) => Err($crate::DeserializeError::WrongKind {
                     expected: $crate::ValueKind::$ident,
                     found: value.kind(),
-                    ty: $crate::TypeInfo::simple(stringify!($ident)),
+                    ty: $crate::OwnedTypeInfo::Kind($crate::ValueKind::$ident),
                     span,
                 })?,
             })
@@ -312,6 +334,8 @@ macro_rules! impl_nums {
     ($($ty:ty,)*) => {
         $(
             impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for $ty {
+                const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Num);
+
                 fn from_bauble(
                     val: Val,
                     allocator: &'a A,
@@ -341,6 +365,8 @@ impl_nums! {
 }
 
 impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Bool);
+
     fn from_bauble(val: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
@@ -353,6 +379,8 @@ impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
 }
 
 impl<'a> FromBauble<'a> for String {
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Str);
+
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
         match_val!(
             val,
@@ -362,6 +390,8 @@ impl<'a> FromBauble<'a> for String {
 }
 
 impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Option<T> {
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Opt);
+
     fn from_bauble(val: Val, allocator: &'a A) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
         match_val!(
             val,
@@ -382,6 +412,8 @@ impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Opt
 }
 
 impl<'a> FromBauble<'a> for () {
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Unit);
+
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
         match_val!(
             val,
@@ -393,6 +425,8 @@ impl<'a> FromBauble<'a> for () {
 macro_rules! impl_tuple {
     ($($ident:ident),+) => {
         impl<'a, $($ident: FromBauble<'a>),*> FromBauble<'a> for ($($ident),*,) {
+            const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Tuple);
+
             fn from_bauble(
                 val: Val,
                 allocator: &'a DefaultAllocator,
@@ -415,7 +449,7 @@ macro_rules! impl_tuple {
                             Err(Box::new(DeserializeError::WrongTupleLength {
                                 expected: LEN,
                                 found: seq.len(),
-                                ty: TypeInfo::simple("Tuple"),
+                                ty: Self::INFO.to_owned(),
                                 span,
                             }))?
                         }
@@ -444,6 +478,8 @@ impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
 impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
 
 impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
+
     fn from_bauble(
         val: Val,
         allocator: &'a DefaultAllocator,
@@ -463,7 +499,7 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
                     Err(Box::new(DeserializeError::WrongArrayLength {
                         expected: N,
                         found: seq.len(),
-                        ty: TypeInfo::simple("Array"),
+                        ty: Self::INFO.to_owned(),
                         span,
                     }))?
                 }
@@ -472,31 +508,44 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
     }
 }
 
-impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble<'a>
-    for std::collections::HashMap<K, V>
-{
-    fn from_bauble(
-        val: Val,
-        allocator: &'a DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
-        match_val!(
-            val,
-            (Map(seq), _span) => {
-                seq
-                    .into_iter()
-                    .map(|(k, v)| {
-                        Ok::<(K, V), Box<DeserializeError>>((
-                            K::from_bauble(k, allocator)?,
-                            V::from_bauble(v, allocator)?,
-                        ))
-                    })
-                    .try_collect()?
+macro_rules! impl_hash_map {
+    ($($part:ident)::+) => {
+        impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble<'a>
+            for $($part)::+<K, V>
+        {
+            const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Map);
+
+            fn from_bauble(
+                val: Val,
+                allocator: &'a DefaultAllocator,
+            ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
+                match_val!(
+                    val,
+                    (Map(seq), _span) => {
+                        seq
+                            .into_iter()
+                            .map(|(k, v)| {
+                                Ok::<(K, V), Box<DeserializeError>>((
+                                    K::from_bauble(k, allocator)?,
+                                    V::from_bauble(v, allocator)?,
+                                ))
+                            })
+                            .try_collect()?
+                    }
+                )
             }
-        )
-    }
+        }
+    };
 }
 
+impl_hash_map!(std::collections::HashMap);
+
+#[cfg(feature = "hashbrown")]
+impl_hash_map!(hashbrown::HashMap);
+
 impl<'a, T: FromBauble<'a>> FromBauble<'a> for Box<T> {
+    const INFO: TypeInfo<'static> = T::INFO;
+
     fn from_bauble(
         val: Val,
         allocator: &'a DefaultAllocator,
