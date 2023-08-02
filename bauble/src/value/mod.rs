@@ -143,6 +143,7 @@ impl Value {
     }
 }
 
+#[derive(Debug)]
 pub struct Object {
     pub object_path: AssetPath,
     pub type_path: TypePath,
