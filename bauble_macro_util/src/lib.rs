@@ -95,8 +95,8 @@ fn parse_fields(
 
                     attr.parse_nested_meta(|meta| {
                         let Some(ident) = meta.path.get_ident() else {
-                        Err(meta.error("path must be an identifier"))?
-                    };
+                            Err(meta.error("path must be an identifier"))?
+                        };
 
                         match ident.to_string().as_str() {
                             "default" => {
@@ -797,8 +797,8 @@ pub fn derive_bauble_derive_input(
 
                             attr.parse_nested_meta(|meta| {
                                 let Some(ident) = meta.path.get_ident() else {
-                                Err(meta.error("path must be an identifier"))?
-                            };
+                                    Err(meta.error("path must be an identifier"))?
+                                };
 
                                 if found.insert(ident.to_string()) {
                                     Err(meta.error("duplicate attribute"))?
@@ -949,6 +949,7 @@ pub fn derive_bauble_derive_input(
 
     // Assemble the implementation
     quote! {
+        #[automatically_derived]
         impl #modified_impl_generics ::bauble::FromBauble<#lifetime, #allocator>
             for #ident #ty_generics
             #where_clause
