@@ -16,7 +16,7 @@ pub use value::{
 };
 
 use parse::Values;
-fn parse(src: &str) -> Option<Values> {
+pub fn parse(src: &str) -> Option<Values> {
     use ariadne::{Color, Label, Report, ReportKind, Source};
     use chumsky::Parser;
 
