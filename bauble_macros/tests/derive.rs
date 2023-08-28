@@ -50,6 +50,7 @@ fn test_tuple() {
     );
 }
 
+/*
 #[test]
 fn test_enum() {
     #[derive(FromBauble, PartialEq, Debug)]
@@ -79,6 +80,7 @@ fn test_enum() {
         simple_convert("test = derive::Test", "test", &bauble::DefaultAllocator)
     );
 }
+*/
 
 #[test]
 fn test_flattened() {

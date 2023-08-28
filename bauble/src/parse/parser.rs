@@ -269,12 +269,12 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 loop {
                     let marker = input.save();
                     let Some(c) = input.next() else {
-                    Err(<Rich<char> as error::Error<&'a str>>::expected_found(
-                        [Some('}'.into())],
-                        None,
-                        input.span_since(input.offset())
-                    ))?
-                };
+                        Err(<Rich<char> as error::Error<&'a str>>::expected_found(
+                            [Some('}'.into())],
+                            None,
+                            input.span_since(input.offset()),
+                        ))?
+                    };
 
                     match c {
                         '}' => {

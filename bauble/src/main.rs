@@ -35,7 +35,9 @@ fn main() {
             .unwrap();
     });
 
-    let Some(values) = result.into_output() else { return };
+    let Some(values) = result.into_output() else {
+        return;
+    };
 
     let ctx = NoChecks;
 
