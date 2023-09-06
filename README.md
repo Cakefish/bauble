@@ -19,22 +19,24 @@ slime = Enemy {
   hp: 200,
   speed: 2.5,
   damage_type: DamageType::Slimy,
+  // You can link to assets by prefixing a path with `$`.
+  audio: $assets::sounds::slime_audio,
   // Arrays, which could be deserialized as other containers, are deliminated by `[]`
   attacks: [$slam_attack],
 }
 
-// Putting `copy` infront of a definition essentially makes it a macro.
+// Putting `copy` infront of a definition essentially makes it a macro i.e the value is 
+// copied in place instead of being a reference to it, which can be refered to using the
+// `$ident` syntax.
+//
 // As in rust, tuples are delimeted by `()`.
 copy slam_attack = (2.5, "Slam")
 ```
-
-Bauble also supports a raw piece of data, that could potentially be used for code. Raw values need to be defined how to be handled when they are converted to rust types.
+Bauble also supports raw pieces of data. This can be used for things like custom short-hand syntax (#2d6 dice) or even scripts. The user of the library defines how such raw values are parsed.
 ```rust
 use rpg::{Ability, Projectile, OnUse};
 fireball = Ability {
   name: "Fireball",
-  // You can link to assets by prefixing a path with `$`.
-  audio: $assets::sounds::fireball_audio,
   // You can link to other assets within the document.
   on_use: OnUse::SpawnProjectile($fireball_projectile),
 }
@@ -44,7 +46,9 @@ fireball_projectile = Projectile {
   color: #42f56f,
   // Or a dice roll.
   hit_damage: #2d6,
-  // Everything within #{ ... } is considered raw data. Other instances of `{` must be delimited by `}`.
+  // Everything within `#{ ... }` is considered raw data. Other instances of the character `{` within this raw data must be delimited by `}`.
+  //
+  // This can be used to have code within the format. 
   on_hit: #{
     ctx.spawn_effect("FireballEffect");
     ctx.play_sound("FireballSound");
@@ -59,7 +63,7 @@ For just a raw value after `#`, the following characters are accepted:
  - Special char acters: `!`, `#`, `@`, `%`, `&`, `?`, `.`, `=`, `<`, `>`, `_`, `-`, `+`, `*`
  - Alphabetical numerical characters, see (is_alphanumeric)[https://doc.rust-lang.org/std/primitive.char.html#method.is_alphanumeric].
 
-There is no specific reason this list can't be expanded.
+This list is hardcoded in the library, but the list of special characters could be expanded.
 
 Various other types:
 
@@ -77,7 +81,7 @@ human = Creature {
 }
 ```
 
-Using attributes can be useful to add extra information to objects. Although the parsing for this needs to be manually defined.
+Using attributes can be useful to add extra information to objects. Although the derive macros currently don't support parsing attributes, so usage of them have to be by manually implementing `FromBauble`.
 ```rust
 use ui::{Button, Node}
 canvas = #[width = Fill, height: Fill] Node {
@@ -91,7 +95,7 @@ canvas = #[width = Fill, height: Fill] Node {
   ]
 }
 ```
-Attributes support a binding equals an expression, i.e `ident = anything_goes_here`. And supports both comma separation and multiple attributes on the same item.
+Attributes support a binding equals an expression, i.e `ident = anything_goes_here`. It supports both comma separation and multiple attributes on the same item.
 
 ## Using a custom allocator
 
