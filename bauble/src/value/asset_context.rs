@@ -230,10 +230,14 @@ impl Reference {
 }
 
 pub trait AssetContext: Clone {
+    /// Get a reference from `path`.
     fn get_ref(&self, path: &str) -> Option<Reference>;
 
+    /// Get all the direct child references of `path`.
     fn all_in(&self, path: &str) -> Option<Vec<(String, Reference)>>;
 
+    /// If there is only one valid `Reference` with the identifier `ident`
+    /// somewhere in a child path of `path`, return that.
     fn with_ident(&self, path: &str, ident: &str) -> Option<Reference>;
 }
 
