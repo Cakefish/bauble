@@ -49,18 +49,18 @@ fireball_projectile = Projectile {
   // Everything within `#{ ... }` is considered raw data. Other instances of the character `{` within this raw data must be delimited by `}`.
   //
   // This can be used to have code within the format. 
-  on_hit: #{
+  on_hit: #{{
     ctx.spawn_effect("FireballEffect");
     ctx.play_sound("FireballSound");
     for enemy in ctx.nearby_enemies(1.0) {
       enemy.damage(ctx.data.hit_damage);
     }
-  }
+  }}
 }
 ```
 
 For just a raw value after `#`, the following characters are accepted:
- - Special char acters: `!`, `#`, `@`, `%`, `&`, `?`, `.`, `=`, `<`, `>`, `_`, `-`, `+`, `*`
+ - Special characters: `!`, `#`, `@`, `%`, `&`, `?`, `.`, `=`, `<`, `>`, `_`, `-`, `+`, `*`
  - Alphabetical numerical characters, see (is_alphanumeric)[https://doc.rust-lang.org/std/primitive.char.html#method.is_alphanumeric].
 
 This list is hardcoded in the library, but the list of special characters could be expanded.
@@ -84,7 +84,7 @@ human = Creature {
 Using attributes can be useful to add extra information to objects. Although the derive macros currently don't support parsing attributes, so usage of them have to be by manually implementing `FromBauble`.
 ```rust
 use ui::{Button, Node}
-canvas = #[width = Fill, height: Fill] Node {
+canvas = #[width = Fill, height = Fill] Node {
   children: [
     #[width = 100, height = 100] Button {
       on_press: #{ println!("Hello") },
