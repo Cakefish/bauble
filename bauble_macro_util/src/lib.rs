@@ -572,6 +572,8 @@ pub fn derive_bauble_derive_input(
     let mut bounds = None;
     // Override for the module's path
     let mut path = None;
+    // Override for the type's name
+    let mut rename = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
 
@@ -637,6 +639,20 @@ pub fn derive_bauble_derive_input(
 
                     Ok(())
                 }
+                "rename" => {
+                    if rename.is_some() {
+                        Err(meta.error("duplicate `rename` attribute"))?
+                    }
+
+                    meta.input.parse::<Token![=]>()?;
+                    rename = Some(meta.input.parse::<Ident>()?);
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after rename"))?
+                    }
+
+                    Ok(())
+                }
                 "allocator" => {
                     if allocator.is_some() {
                         Err(meta.error("duplicate `allocator` attribute"))?
@@ -686,6 +702,7 @@ pub fn derive_bauble_derive_input(
     let (modified_impl_generics, _, _) = generics.split_for_impl();
 
     let ident = &ast.ident;
+    let name = rename.as_ref().unwrap_or(ident);
 
     let path = match path {
         Some(path) => {
@@ -900,7 +917,7 @@ pub fn derive_bauble_derive_input(
                     },
                 ),
                 false => (
-                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#ident)) },
+                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#name)) },
                     quote! {
                         ::std::result::Result::Ok(match value {
                             ::bauble::Value::Enum(type_info, name, fields) => {
