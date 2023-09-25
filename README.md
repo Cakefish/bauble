@@ -59,7 +59,7 @@ fireball_projectile = Projectile {
 }
 ```
 
-For just a raw value after `#`, the following characters are accepted:
+For just a raw value after `#`, without using braces `{}`, the following characters are accepted:
  - Special characters: `!`, `#`, `@`, `%`, `&`, `?`, `.`, `=`, `<`, `>`, `_`, `-`, `+`, `*`
  - Alphabetical numerical characters, see (is_alphanumeric)[https://doc.rust-lang.org/std/primitive.char.html#method.is_alphanumeric].
 
@@ -81,7 +81,7 @@ human = Creature {
 }
 ```
 
-Using attributes can be useful to add extra information to objects. Although the derive macros currently don't support parsing attributes, so usage of them have to be by manually implementing `FromBauble`.
+Using attributes can be useful to add extra information to objects. Which can be accessed by the `FromBauble` macro. And can be fields in the struct, or define some meta data used while parsing.
 ```rust
 use ui::{Button, Node}
 canvas = #[width = Fill, height = Fill] Node {
@@ -96,6 +96,18 @@ canvas = #[width = Fill, height = Fill] Node {
 }
 ```
 Attributes support a binding equals an expression, i.e `ident = anything_goes_here`. It supports both comma separation and multiple attributes on the same item.
+
+These can be used in the `FromBauble` macro, and can be automatically implemented with the derive macro.
+```rust
+#[derive(FromBauble)]
+struct Button {
+  #[bauble(attribute)]
+  width: u32,
+  #[bauble(attribute)]
+  height: u32,
+  on_press: Action,
+}
+```
 
 ## Using a custom allocator
 
