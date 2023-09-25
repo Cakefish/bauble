@@ -152,7 +152,25 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
 
             let literal = just('#').ignore_then(
                 any()
-                    .filter(|c| matches!(c, '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | 'a'..='z' | 'A'..='Z' | '0'..='9'))
+                    .filter(|c: &char| {
+                        c.is_alphanumeric()
+                            || matches!(
+                                c,
+                                '!' | '#'
+                                    | '@'
+                                    | '%'
+                                    | '&'
+                                    | '?'
+                                    | '.'
+                                    | '='
+                                    | '<'
+                                    | '>'
+                                    | '_'
+                                    | '-'
+                                    | '+'
+                                    | '*'
+                            )
+                    })
                     .repeated()
                     .collect::<String>()
                     .map(Value::Raw),
