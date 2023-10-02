@@ -99,6 +99,11 @@ pub enum DeserializeError {
         span: Span,
     },
     Conversion(Spanned<ConversionError>),
+    MissingAttribute {
+        attribute: String,
+        ty: OwnedTypeInfo,
+        span: Span,
+    },
 }
 
 impl Display for DeserializeError {
@@ -183,6 +188,14 @@ impl Display for DeserializeError {
             ),
             Custom { message, span } => write!(f, "{span}: {message}"),
             Conversion(Spanned { span, value }) => write!(f, "{span}: {value}"),
+            MissingAttribute {
+                attribute,
+                ty,
+                span,
+            } => write!(
+                f,
+                "{span}: expected attribute {attribute} to be present in `{ty}`"
+            ),
         }
     }
 }
@@ -228,7 +241,8 @@ impl DeserializeError {
         }
         | &WrongKind { span, .. }
         | &Custom { span, .. }
-        | &Conversion(Spanned { span, .. })) = self;
+        | &Conversion(Spanned { span, .. })
+        | &MissingAttribute { span, .. }) = self;
         span
     }
 }
