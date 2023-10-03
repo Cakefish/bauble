@@ -964,9 +964,9 @@ pub fn derive_bauble_derive_input(
                     },
                     value: ::bauble::Spanned { span, value },
                 }: ::bauble::Val,
-                allocator: &#lifetime #allocator,
+                allocator: &#allocator,
             ) -> ::std::result::Result<
-                <#allocator as ::bauble::BaubleAllocator>::Out<Self>,
+                <#allocator as ::bauble::BaubleAllocator<#lifetime>>::Out<Self>,
                 ::std::boxed::Box<::bauble::DeserializeError>
             > {
                 let value_kind = value.kind();
