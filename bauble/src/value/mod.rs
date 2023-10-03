@@ -328,7 +328,7 @@ impl<C: AssetContext> Symbols<C> {
         }
     }
 
-    fn get_module(&self, ident: &str) -> Option<&str> {
+    fn get_module(&self, ident: &str) -> Option<Cow<str>> {
         self.uses
             .get(ident)
             .and_then(|reference| reference.unwrap_ref().get_module())
@@ -357,8 +357,8 @@ impl<C: AssetContext> Symbols<C> {
             let first = path.leading.first().expect("We know the Vec isn't empty.");
             let mut p = self
                 .get_module(first.as_str())
-                .unwrap_or(first.as_str())
-                .to_string();
+                .unwrap_or(Cow::Borrowed(first.as_str()))
+                .into_owned();
 
             for ident in &path.leading[1..] {
                 p.push_str("::");
