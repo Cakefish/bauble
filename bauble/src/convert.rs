@@ -255,10 +255,10 @@ pub trait BaubleAllocator<'a> {
 
     /// # Safety
     /// Allocations in `value` have to be allocated with this allocator
-    unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T>;
+    unsafe fn wrap<T>(&self, value: T) -> Self::Out<T>;
     /// # Safety
     /// If validated an item must be placed within the same allocator.
-    unsafe fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>>;
+    unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>>;
 }
 
 pub struct DefaultAllocator;
@@ -266,11 +266,11 @@ pub struct DefaultAllocator;
 impl<'a> BaubleAllocator<'a> for DefaultAllocator {
     type Out<T> = T;
 
-    unsafe fn wrap<T>(&'a self, value: T) -> Self::Out<T> {
+    unsafe fn wrap<T>(&self, value: T) -> Self::Out<T> {
         value
     }
 
-    unsafe fn validate<T>(&'a self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>> {
+    unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, Box<DeserializeError>> {
         Ok(value)
     }
 }
@@ -278,7 +278,7 @@ impl<'a> BaubleAllocator<'a> for DefaultAllocator {
 pub trait FromBauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized {
     const INFO: TypeInfo<'static>;
 
-    fn from_bauble(data: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>>;
+    fn from_bauble(data: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>>;
 }
 
 impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
@@ -293,7 +293,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
                 },
             value: Spanned { value, span },
         }: Val,
-        allocator: &'a DefaultAllocator,
+        allocator: &DefaultAllocator,
     ) -> Result<Self, Box<DeserializeError>> {
         if let Some((attribute, _)) = attributes.into_iter().next() {
             Err(DeserializeError::UnexpectedAttribute {
@@ -352,7 +352,7 @@ macro_rules! impl_nums {
 
                 fn from_bauble(
                     val: Val,
-                    allocator: &'a A,
+                    allocator: &A,
                 ) -> Result<A::Out<Self>, Box<DeserializeError>> {
                     match_val!(
                         val,
@@ -381,7 +381,7 @@ impl_nums! {
 impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
     const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Bool);
 
-    fn from_bauble(val: Val, allocator: &'a A) -> Result<A::Out<Self>, Box<DeserializeError>> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
             (Bool(v), _span) => {
@@ -406,7 +406,7 @@ impl<'a> FromBauble<'a> for String {
 impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Option<T> {
     const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Opt);
 
-    fn from_bauble(val: Val, allocator: &'a A) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Option<T>>, Box<DeserializeError>> {
         match_val!(
             val,
             (Opt(opt), _span) => {
@@ -443,7 +443,7 @@ macro_rules! impl_tuple {
 
             fn from_bauble(
                 val: Val,
-                allocator: &'a DefaultAllocator,
+                allocator: &DefaultAllocator,
             ) -> Result<Self, Box<DeserializeError>> {
                 const LEN: usize = [$(stringify!($ident)),*].len();
                 match_val!(
@@ -496,7 +496,7 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
 
     fn from_bauble(
         val: Val,
-        allocator: &'a DefaultAllocator,
+        allocator: &DefaultAllocator,
     ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
@@ -531,7 +531,7 @@ macro_rules! impl_hash_map {
 
             fn from_bauble(
                 val: Val,
-                allocator: &'a DefaultAllocator,
+                allocator: &DefaultAllocator,
             ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
                 match_val!(
                     val,
@@ -562,7 +562,7 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Box<T> {
 
     fn from_bauble(
         val: Val,
-        allocator: &'a DefaultAllocator,
+        allocator: &DefaultAllocator,
     ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
         Ok(Box::new(T::from_bauble(val, allocator)?))
     }
