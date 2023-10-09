@@ -817,7 +817,7 @@ pub fn derive_bauble_derive_input(
                                     Err(meta.error("path must be an identifier"))?
                                 };
 
-                                if found.insert(ident.to_string()) {
+                                if !found.insert(ident.to_string()) {
                                     Err(meta.error("duplicate attribute"))?
                                 }
 
