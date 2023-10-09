@@ -790,7 +790,7 @@ pub fn derive_bauble_derive_input(
             let (flattened_tys, variant_convert): (Vec<_>, Vec<_>) = data
                 .variants
                 .iter()
-                .map(|variant| {
+                .filter_map(|variant| {
                     let ident = &variant.ident;
 
                     // Parse variant attributes
@@ -835,15 +835,19 @@ pub fn derive_bauble_derive_input(
                         .collect::<Result<Vec<_>, _>>()
                     {
                         Ok(attributes) => attributes,
-                        Err(err) => return (quote! {}, err.to_compile_error()),
+                        Err(err) => return Some((quote! {}, err.to_compile_error())),
                     }
                     .into_iter()
                     .flatten()
-                    .collect();
+                    .collect::<Vec<Ident>>();
+
+                    if attributes.iter().any(|attr| attr == "ignore") {
+                        return None;
+                    }
 
                     let fields = match parse_fields(&variant.fields, attributes) {
                         Ok(fields) => fields,
-                        Err(err) => return (quote! {}, err),
+                        Err(err) => return Some((quote! {}, err)),
                     };
                     let derive = derive_struct(
                         TypeInfo {
@@ -859,10 +863,10 @@ pub fn derive_bauble_derive_input(
                         true => {
                             let flattened_ty = match flattened_ty(variant, &fields) {
                                 Ok(ty) => ty,
-                                Err(err) => return (quote! {}, err),
+                                Err(err) => return Some((quote! {}, err)),
                             };
 
-                            (
+                            Some((
                                 quote! { #flattened_ty },
                                 quote! {
                                     if <#flattened_ty as ::bauble::FromBauble<
@@ -872,9 +876,9 @@ pub fn derive_bauble_derive_input(
                                         #derive
                                     } else
                                 },
-                            )
+                            ))
                         }
-                        false => (
+                        false => Some((
                             quote! {},
                             quote! {
                                 stringify!(#ident) => match fields {
@@ -888,7 +892,7 @@ pub fn derive_bauble_derive_input(
                                     )?,
                                 },
                             },
-                        ),
+                        )),
                     }
                 })
                 .unzip();
@@ -905,6 +909,7 @@ pub fn derive_bauble_derive_input(
                         ::std::result::Result::Ok(
                             // `if`-`else` chain because assoc consts can't be used in `match` arms :(
                             // https://github.com/rust-lang/rust/issues/72602
+                            // TODO Perhaps this can be fixed by setting local `const`s
                             #(#variant_convert)* {
                                 ::std::result::Result::Err(
                                     ::bauble::DeserializeError::UnknownFlattenedVariant {
