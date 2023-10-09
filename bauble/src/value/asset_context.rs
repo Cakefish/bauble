@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{borrow::Cow, fmt::Display};
 
 use crate::ValueKind;
 
@@ -162,10 +162,15 @@ impl Reference {
         }
     }
 
-    pub fn get_module(&self) -> Option<&str> {
+    pub fn get_module(&self) -> Option<Cow<str>> {
         match self {
-            Reference::Any(_) => None,
-            Reference::Specific { module, .. } => module.as_deref(),
+            Reference::Any(type_info) => match type_info {
+                OwnedTypeInfo::Path { module, ident } => {
+                    Some(Cow::Owned(format!("{module}::{ident}")))
+                }
+                OwnedTypeInfo::Kind(_) | OwnedTypeInfo::Flatten(_) => None,
+            },
+            Reference::Specific { module, .. } => module.as_deref().map(Cow::Borrowed),
         }
     }
 
@@ -230,10 +235,14 @@ impl Reference {
 }
 
 pub trait AssetContext: Clone {
+    /// Get a reference from `path`.
     fn get_ref(&self, path: &str) -> Option<Reference>;
 
+    /// Get all the direct child references of `path`.
     fn all_in(&self, path: &str) -> Option<Vec<(String, Reference)>>;
 
+    /// If there is only one valid `Reference` with the identifier `ident`
+    /// somewhere in a child path of `path`, return that.
     fn with_ident(&self, path: &str, ident: &str) -> Option<Reference>;
 }
 
