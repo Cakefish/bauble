@@ -746,7 +746,8 @@ pub fn derive_bauble_derive_input(
                     (
                         quote! {
                             ::bauble::TypeInfo::Flatten(&[
-                                &<#flattened_ty as ::bauble::FromBauble>::INFO,
+                                &<#flattened_ty as ::bauble::FromBauble<#lifetime, #allocator>>
+                                    ::INFO,
                             ])
                         },
                         quote! { ::std::result::Result::Ok( { #case } ) },
