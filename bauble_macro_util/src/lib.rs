@@ -754,7 +754,7 @@ pub fn derive_bauble_derive_input(
                     )
                 }
                 false => (
-                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#ident)) },
+                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#name)) },
                     quote! {
                         ::std::result::Result::Ok(match value {
                             ::bauble::Value::Struct(type_info, fields) => {
