@@ -104,6 +104,10 @@ pub enum DeserializeError {
         ty: OwnedTypeInfo,
         span: Span,
     },
+    UnknownType {
+        expected: OwnedTypeInfo,
+        span: Span,
+    },
 }
 
 impl Display for DeserializeError {
@@ -196,6 +200,9 @@ impl Display for DeserializeError {
                 f,
                 "{span}: expected attribute {attribute} to be present in `{ty}`"
             ),
+            UnknownType { expected, span } => {
+                write!(f, "{span}: Unknown type, expected type `{expected}`")
+            }
         }
     }
 }
@@ -242,7 +249,8 @@ impl DeserializeError {
         | &WrongKind { span, .. }
         | &Custom { span, .. }
         | &Conversion(Spanned { span, .. })
-        | &MissingAttribute { span, .. }) = self;
+        | &MissingAttribute { span, .. }
+        | &UnknownType { span, .. }) = self;
         span
     }
 }
@@ -438,13 +446,13 @@ impl<'a> FromBauble<'a> for () {
 
 macro_rules! impl_tuple {
     ($($ident:ident),+) => {
-        impl<'a, $($ident: FromBauble<'a>),*> FromBauble<'a> for ($($ident),*,) {
+        impl<'a, A: BaubleAllocator<'a>, $($ident: FromBauble<'a, A>),*> FromBauble<'a, A> for ($($ident),*,) {
             const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Tuple);
 
             fn from_bauble(
                 val: Val,
-                allocator: &DefaultAllocator,
-            ) -> Result<Self, Box<DeserializeError>> {
+                allocator: &A,
+            ) -> Result<A::Out<Self>, Box<DeserializeError>> {
                 const LEN: usize = [$(stringify!($ident)),*].len();
                 match_val!(
                     val,
@@ -457,8 +465,20 @@ macro_rules! impl_tuple {
 
                         if seq.len() == LEN {
                             let mut seq = seq.into_iter();
-                            // SAFETY: We checked that the length of the sequence is the same as the length of this tuple type.
-                            ($($ident::from_bauble(unsafe { seq.next().unwrap_unchecked() }, allocator)?),*,)
+                            let res = ($({
+                                // SAFETY: We checked that the length of the sequence is the same as the
+                                // length of this tuple type and this is only called once per element.
+                                let elem = unsafe { seq.next().unwrap_unchecked() };
+                                let elem = $ident::from_bauble(elem, allocator)?;
+
+                                // SAFETY: We wrap the whole tuple containing this value.
+                                unsafe { allocator.validate(elem)? }
+                            }),*,);
+
+                            // SAFETY: The contained vlaues have been validated.
+                            unsafe { allocator.wrap(res) }
+
+
                         } else {
                             Err(Box::new(DeserializeError::WrongTupleLength {
                                 expected: LEN,
@@ -491,24 +511,32 @@ impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13);
 impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14);
 impl_tuple!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15);
 
-impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
+impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>, const N: usize> FromBauble<'a, A>
+    for [T; N]
+{
     const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
 
-    fn from_bauble(
-        val: Val,
-        allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, Box<DeserializeError>> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
             (Array(seq), span) => {
                 if seq.len() == N {
-                    <[T; N]>::try_from(
+                    let res = <[T; N]>::try_from(
                         seq.into_iter()
-                            .map(|s| T::from_bauble(s, allocator))
+                            .map(|s|
+                                T::from_bauble(s, allocator).and_then(|elem| {
+                                    // SAFETY: The elements are wrapped in the array.
+                                    unsafe {
+                                        allocator.validate(elem)
+                                    }
+                                })
+                            )
                             .try_collect::<Vec<_>>()?,
                     )
                     .map_err(|_| ())
-                    .expect("We checked the length")
+                    .expect("We checked the length");
+                    // SAFETY: The elements have been validated.
+                    unsafe { allocator.wrap(res) }
                 } else {
                     Err(Box::new(DeserializeError::WrongArrayLength {
                         expected: N,
@@ -516,6 +544,39 @@ impl<'a, T: FromBauble<'a>, const N: usize> FromBauble<'a> for [T; N] {
                         ty: Self::INFO.to_owned(),
                         span,
                     }))?
+                }
+            }
+        )
+    }
+}
+
+#[cfg(feature = "enumset")]
+impl<'a, A, T> FromBauble<'a, A> for enumset::EnumSet<T>
+where
+    A: BaubleAllocator<'a>,
+    T: FromBauble<'a, A> + enumset::EnumSetType,
+{
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::BitFlags);
+
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
+        match_val!(
+            val,
+            (BitFlags(ty, flags), span) => {
+                if let Some(ty) = ty {
+                    let values = flags.into_iter().map(|flag| {
+                        let enum_value = Val { value: Spanned { span: flag.span, value: Value::Enum(ty.clone(), flag, crate::FieldsKind::Unit) }, attributes: Spanned::empty() };
+
+                        let value = T::from_bauble(enum_value, allocator)?;
+
+                        // SAFETY: These are wrapped in the enumset. Which doesn't contain allocations.
+                        unsafe { allocator.validate(value) }
+                    }).try_collect::<Vec<_>>()?;
+                    let res = Self::from_iter(values);
+
+                    // SAFETY: The elements were wrapped with the same allocator.
+                    unsafe { allocator.wrap(res) }
+                } else {
+                    Err(DeserializeError::UnknownType { expected: <T as FromBauble<'a, A>>::INFO.to_owned(), span })?
                 }
             }
         )

@@ -13,7 +13,7 @@ mod asset_context;
 
 pub use asset_context::*;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Attributes(pub IndexMap<Spanned<String>, Val>);
 
 #[derive(Clone, Debug)]
