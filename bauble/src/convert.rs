@@ -556,7 +556,7 @@ where
     A: BaubleAllocator<'a>,
     T: FromBauble<'a, A> + enumset::EnumSetType,
 {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::BitFlags);
+    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
 
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
         match_val!(
