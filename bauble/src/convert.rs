@@ -561,23 +561,36 @@ where
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, Box<DeserializeError>> {
         match_val!(
             val,
+            /*
+            // TODO: Parse bitflags.
             (BitFlags(ty, flags), span) => {
                 if let Some(ty) = ty {
-                    let values = flags.into_iter().map(|flag| {
+                    let res = flags.into_iter().map(|flag| {
                         let enum_value = Val { value: Spanned { span: flag.span, value: Value::Enum(ty.clone(), flag, crate::FieldsKind::Unit) }, attributes: Spanned::empty() };
 
                         let value = T::from_bauble(enum_value, allocator)?;
 
                         // SAFETY: These are wrapped in the enumset. Which doesn't contain allocations.
                         unsafe { allocator.validate(value) }
-                    }).try_collect::<Vec<_>>()?;
-                    let res = Self::from_iter(values);
+                    }).try_collect()?;
 
                     // SAFETY: The elements were wrapped with the same allocator.
                     unsafe { allocator.wrap(res) }
                 } else {
                     Err(DeserializeError::UnknownType { expected: <T as FromBauble<'a, A>>::INFO.to_owned(), span })?
                 }
+            }
+            */
+            (Array(array)) => {
+                let res = array.into_iter().map(|value| {
+                    let value = T::from_bauble(value, allocator)?;
+
+                    // SAFETY: These are wrapped in the enumset. Which doesn't contain allocations.
+                    unsafe { allocator.validate(value) }
+                }).try_collect()?;
+
+                // SAFETY: The elements were wrapped with the same allocator.
+                unsafe { allocator.wrap(res) }
             }
         )
     }
