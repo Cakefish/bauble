@@ -581,7 +581,7 @@ where
                 }
             }
             */
-            (Array(array)) => {
+            (Array(array), _span) => {
                 let res = array.into_iter().map(|value| {
                     let value = T::from_bauble(value, allocator)?;
 
