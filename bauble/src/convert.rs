@@ -459,7 +459,7 @@ macro_rules! impl_tuple {
                     (Tuple(name, seq), span) => {
                         if let Some(name) = name {
                             Err(DeserializeError::UnexpectedTypePath {
-                                ty: name.span(span),
+                                ty: name.spanned(span),
                             })?
                         }
 

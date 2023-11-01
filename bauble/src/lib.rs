@@ -42,7 +42,7 @@ pub fn parse(src: &str) -> Option<Values> {
 /// Converts a source with no checks.
 pub fn simple_convert(src: &str) -> Result<Vec<Object>, Spanned<ConversionError>> {
     let values =
-        parse(src).ok_or(ConversionError::ParseError.span(SimpleSpan::new(0, src.len())))?;
+        parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
 
     let ctx = value::NoChecks;
 
@@ -55,7 +55,7 @@ pub fn convert(
     ctx: &impl AssetContext,
 ) -> Result<Vec<Object>, Spanned<ConversionError>> {
     let values =
-        parse(src).ok_or(ConversionError::ParseError.span(SimpleSpan::new(0, src.len())))?;
+        parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
 
     convert_values(file_name.into(), values, &value::Symbols::new(&ctx))
 }

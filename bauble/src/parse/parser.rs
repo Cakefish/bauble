@@ -26,7 +26,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
 
     // A rust identifier, use snake case.
     let ident = text::ident()
-        .map_with_span(|ident: &str, span| ident.to_owned().span(span))
+        .map_with(|ident: &str, e| ident.to_owned().spanned(e.span()))
         .padded();
 
     let path_start = ident.then_ignore(just("::")).repeated().collect::<Vec<_>>();
@@ -34,8 +34,8 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
         .map(PathEnd::Ident)
         .or(just("*::").ignore_then(ident).map(PathEnd::WithIdent));
     let path = path_start
-        .map_with_span(|v, span| v.span(span))
-        .then(path_end.map_with_span(|v, span| v.span(span)))
+        .map_with(|v, e| v.spanned(e.span()))
+        .then(path_end.map_with(|v, e| v.spanned(e.span())))
         .map(|(leading, last)| Path { leading, last });
 
     let uses = just("use")
@@ -53,19 +53,19 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                     .delimited_by(just('{'), just('}'))
                     .map(PathTreeEnd::Group);
                 path_start
-                    .map_with_span(|v, span| v.span(span))
+                    .map_with(|v, e| v.spanned(e.span()))
                     .then(
                         path_end
                             .or(everything)
                             .or(group)
-                            .map_with_span(|end, span| end.span(span)),
+                            .map_with(|end, e| end.spanned(e.span())),
                     )
-                    .map_with_span(|(start, end), span| {
+                    .map_with(|(start, end), e| {
                         PathTreeNode {
                             leading: start,
                             end,
                         }
-                        .span(span)
+                        .spanned(e.span())
                     })
             },
         ))
@@ -90,21 +90,21 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .padded_by(comments.clone())
                 .repeated()
                 .collect()
-                .map_with_span(|value: Vec<Vec<(Ident, Object)>>, span| {
+                .map_with(|value: Vec<Vec<(Ident, Object)>>, e| {
                     value
                         .into_iter()
                         .flatten()
                         .collect::<IndexMap<_, _>>()
-                        .span(span)
+                        .spanned(e.span())
                 })
-                .map(|attributes| Attributes(attributes.value).span(attributes.span))
+                .map(|attributes| Attributes(attributes.value).spanned(attributes.span))
                 .boxed();
 
             // A number with or without decimals.
             let num = just('-')
                 .or_not()
                 .then(text::int(10))
-                .then(just('.').ignore_then(text::digits(10).slice()).or_not())
+                .then(just('.').ignore_then(text::digits(10).to_slice()).or_not())
                 .try_map(|((sign, int), dec), span| {
                     Ok(Value::Num(
                         format!(
@@ -136,10 +136,13 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                             .repeated()
                             .exactly(4)
                             .collect::<String>()
-                            .validate(|digits, span, emit| {
+                            .validate(|digits, e, emit| {
                                 char::from_u32(u32::from_str_radix(&digits, 16).unwrap())
                                     .unwrap_or_else(|| {
-                                        emit.emit(Rich::custom(span, "Invalid unicode character"));
+                                        emit.emit(Rich::custom(
+                                            e.span(),
+                                            "Invalid unicode character",
+                                        ));
                                         '\u{FFFD}' // unicode replacement character
                                     })
                             }),
@@ -210,13 +213,13 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .delimited_by(just('{'), just('}'))
                 .map(|fields| fields.into_iter().collect());
 
-            let reference = just('$').ignore_then(path).map_with_span(|path, span| {
+            let reference = just('$').ignore_then(path).map_with(|path, e| {
                 // We have at least 1 element in the path.
-                Value::Ref(path.span(span))
+                Value::Ref(path.spanned(e.span()))
             });
 
             let path_p = path
-                .map_with_span(|path, span| path.span(span))
+                .map_with(|path, e| path.spanned(e.span()))
                 .padded_by(comments.clone())
                 .padded();
 
@@ -262,7 +265,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .collect()
                 .map(Value::Or);
 
-            let path = path.map_with_span(|path, span| Value::Path(path.span(span)));
+            let path = path.map_with(|path, e| Value::Path(path.spanned(e.span())));
 
             fn raw<'a, 'parse>(
                 input: &mut InputRef<'a, 'parse, &'a str, extra::Err<Rich<'a, char>>>,
@@ -356,7 +359,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
             attributes
                 .then(
                     value
-                        .map_with_span(|value, span| value.span(span))
+                        .map_with(|value, e| value.spanned(e.span()))
                         .padded_by(comments.clone())
                         .padded()
                         .boxed(),

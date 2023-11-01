@@ -99,7 +99,7 @@ impl<T: Error> Error for Spanned<T> {
 }
 
 pub trait SpanExt: Sized {
-    fn span(self, span: Span) -> Spanned<Self>;
+    fn spanned(self, span: Span) -> Spanned<Self>;
 
     fn empty(self) -> Spanned<Self> {
         Spanned::new((0..0).into(), self)
@@ -107,7 +107,7 @@ pub trait SpanExt: Sized {
 }
 
 impl<T: Sized> SpanExt for T {
-    fn span(self, span: Span) -> Spanned<Self> {
+    fn spanned(self, span: Span) -> Spanned<Self> {
         Spanned::new(span, self)
     }
 }

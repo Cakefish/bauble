@@ -302,7 +302,7 @@ impl Object {
     pub fn error(span: Span) -> Self {
         Self {
             attributes: Attributes::default().empty(),
-            value: Value::Error.span(span),
+            value: Value::Error.spanned(span),
         }
     }
 

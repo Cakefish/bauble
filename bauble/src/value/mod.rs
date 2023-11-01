@@ -281,19 +281,19 @@ impl<C: AssetContext> Symbols<C> {
                     if let Some(uses) = this.ctx.all_in(&leading) {
                         for (ident, reference) in uses {
                             this.add_ref(ident, reference)
-                                .map_err(|e| e.span(end.span))?;
+                                .map_err(|e| e.spanned(end.span))?;
                         }
                     } else {
-                        return Err(ConversionError::ModuleNotFound.span(end.span));
+                        return Err(ConversionError::ModuleNotFound.spanned(end.span));
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::Ident(ident)) => {
                     let path = format!("{leading}{ident}");
                     if let Some(reference) = this.ctx.get_ref(&path) {
                         this.add_ref(ident.value.clone(), reference)
-                            .map_err(|e| e.span(ident.span))?;
+                            .map_err(|e| e.spanned(ident.span))?;
                     } else {
-                        return Err(ConversionError::ModuleNotFound.span(end.span));
+                        return Err(ConversionError::ModuleNotFound.spanned(end.span));
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
@@ -302,9 +302,9 @@ impl<C: AssetContext> Symbols<C> {
                         .with_ident(leading.trim_end_matches(':'), ident.as_str())
                     {
                         this.add_ref(ident.value.clone(), reference)
-                            .map_err(|e| e.span(ident.span))?;
+                            .map_err(|e| e.spanned(ident.span))?;
                     } else {
-                        return Err(ConversionError::ModuleNotFound.span(end.span));
+                        return Err(ConversionError::ModuleNotFound.spanned(end.span));
                     }
                 }
             }
@@ -343,14 +343,14 @@ impl<C: AssetContext> Symbols<C> {
                     } else {
                         self.ctx
                             .with_ident("", ident.as_str())
-                            .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))
+                            .ok_or(ConversionError::UnexpectedIdent.spanned(path.last.span))
                             .map(Cow::Owned)
                     }
                 }
                 PathEnd::WithIdent(ident) => self
                     .ctx
                     .with_ident("", ident.as_str())
-                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))
+                    .ok_or(ConversionError::UnexpectedIdent.spanned(path.last.span))
                     .map(Cow::Owned),
             }
         } else {
@@ -369,13 +369,13 @@ impl<C: AssetContext> Symbols<C> {
                 PathEnd::WithIdent(ident) => self
                     .ctx
                     .with_ident(&p, ident.as_str())
-                    .ok_or(ConversionError::UnexpectedIdent.span(path.last.span)),
+                    .ok_or(ConversionError::UnexpectedIdent.spanned(path.last.span)),
                 PathEnd::Ident(ident) => {
                     p.push_str("::");
                     p.push_str(ident.as_str());
                     self.ctx
                         .get_ref(&p)
-                        .ok_or(ConversionError::UnexpectedIdent.span(path.last.span))
+                        .ok_or(ConversionError::UnexpectedIdent.spanned(path.last.span))
                 }
             }
             .map(Cow::Owned)
@@ -388,7 +388,7 @@ impl<C: AssetContext> Symbols<C> {
         item.into_owned()
             .to_asset()
             .map(|_| path.to_string())
-            .ok_or(ConversionError::ExpectedAsset.span(path.span))
+            .ok_or(ConversionError::ExpectedAsset.spanned(path.span))
     }
 
     fn resolve_type(&self, path: &Spanned<Path>) -> Result<TypeKind> {
@@ -396,7 +396,7 @@ impl<C: AssetContext> Symbols<C> {
 
         item.into_owned()
             .to_type()
-            .ok_or(ConversionError::ExpectedType.span(path.span))
+            .ok_or(ConversionError::ExpectedType.spanned(path.span))
     }
 
     fn resolve_bitfield(&self, path: &Spanned<Path>) -> Result<BitField> {
@@ -405,7 +405,7 @@ impl<C: AssetContext> Symbols<C> {
         if let TypeKind::BitField(bitfield) = item {
             Ok(bitfield)
         } else {
-            Err(ConversionError::ExpectedBitfield.span(path.span))
+            Err(ConversionError::ExpectedBitfield.spanned(path.span))
         }
     }
 }
@@ -433,7 +433,7 @@ pub fn convert_values<C: AssetContext>(
                     module: None,
                 },
             )
-            .map_err(|e| e.span(symbol.span))?;
+            .map_err(|e| e.spanned(symbol.span))?;
     }
     symbols.add(use_symbols);
 
@@ -455,7 +455,7 @@ pub fn convert_values<C: AssetContext>(
     }
 
     let order = petgraph::algo::toposort(&copy_graph, None)
-        .map_err(|err| ConversionError::CopyCycle.span(spans[err.node_id()]))?
+        .map_err(|err| ConversionError::CopyCycle.spanned(spans[err.node_id()]))?
         .into_iter()
         .map(|s| s.to_string())
         .collect::<Vec<_>>();
@@ -533,7 +533,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                     val.attributes.0.extend(attributes.0);
                     return Ok(val);
                 } else {
-                    return Err(ConversionError::CopyCycle.span(path.span));
+                    return Err(ConversionError::CopyCycle.spanned(path.span));
                 }
             } else {
                 Value::Ref(symbols.resolve_asset(path)?)
@@ -552,7 +552,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                     variant,
                 }) => Value::Enum(
                     enum_type_info,
-                    variant.span(path.last.span),
+                    variant.spanned(path.last.span),
                     FieldsKind::Unit,
                 ),
                 TypeKind::Struct(Struct {
@@ -563,7 +563,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                     kind: DataFieldsKind::Struct(_),
                     ..
                 }) => {
-                    return Err(ConversionError::ExpectedFields.span(path.span));
+                    return Err(ConversionError::ExpectedFields.spanned(path.span));
                 }
                 TypeKind::Struct(Struct {
                     kind: DataFieldsKind::Tuple(_),
@@ -573,11 +573,11 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                     kind: DataFieldsKind::Tuple(_),
                     ..
                 }) => {
-                    return Err(ConversionError::ExpectedTupleFields.span(path.span));
+                    return Err(ConversionError::ExpectedTupleFields.spanned(path.span));
                 }
                 TypeKind::BitField(bitfield) => Value::BitFlags(
                     Some(bitfield.type_info),
-                    vec![bitfield.variant.span(path.span)],
+                    vec![bitfield.variant.spanned(path.span)],
                 ),
             },
             Err(conversion_error) => {
@@ -615,7 +615,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             kind: DataFieldsKind::Struct(_),
                             enum_type_info,
                             variant,
-                        }) => Value::Enum(enum_type_info, variant.span(path.last.span), fields),
+                        }) => Value::Enum(enum_type_info, variant.spanned(path.last.span), fields),
                         TypeKind::Struct(Struct {
                             kind: DataFieldsKind::Unit,
                             ..
@@ -624,7 +624,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             kind: DataFieldsKind::Unit,
                             ..
                         }) => {
-                            return Err(ConversionError::ExpectedUnit.span(path.span));
+                            return Err(ConversionError::ExpectedUnit.spanned(path.span));
                         }
                         TypeKind::Struct(Struct {
                             kind: DataFieldsKind::Tuple(_),
@@ -634,10 +634,10 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             kind: DataFieldsKind::Tuple(_),
                             ..
                         }) => {
-                            return Err(ConversionError::ExpectedTupleFields.span(path.span));
+                            return Err(ConversionError::ExpectedTupleFields.spanned(path.span));
                         }
                         TypeKind::BitField(_) => {
-                            return Err(ConversionError::ExpectedType.span(path.span))
+                            return Err(ConversionError::ExpectedType.spanned(path.span))
                         }
                     },
                     Err(err) => return Err(err),
@@ -665,7 +665,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             variant,
                         }) => Value::Enum(
                             enum_type_info,
-                            variant.span(path.last.span),
+                            variant.spanned(path.last.span),
                             FieldsKind::Tuple(fields),
                         ),
                         TypeKind::Struct(Struct {
@@ -676,7 +676,7 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             kind: DataFieldsKind::Unit,
                             ..
                         }) => {
-                            return Err(ConversionError::ExpectedUnit.span(path.span));
+                            return Err(ConversionError::ExpectedUnit.spanned(path.span));
                         }
                         TypeKind::Struct(Struct {
                             kind: DataFieldsKind::Struct(_),
@@ -686,10 +686,10 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             kind: DataFieldsKind::Struct(_),
                             ..
                         }) => {
-                            return Err(ConversionError::ExpectedFields.span(path.span));
+                            return Err(ConversionError::ExpectedFields.spanned(path.span));
                         }
                         TypeKind::BitField(_) => {
-                            return Err(ConversionError::ExpectedType.span(path.span))
+                            return Err(ConversionError::ExpectedType.spanned(path.span))
                         }
                     },
                     Err(conversion_error) => {
@@ -698,7 +698,9 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                             if fields.len() == 1 {
                                 Value::Opt(fields.next().map(Box::new))
                             } else {
-                                return Err(ConversionError::TooManyArguments.span(path.last.span));
+                                return Err(
+                                    ConversionError::TooManyArguments.spanned(path.last.span)
+                                );
                             }
                         } else {
                             return Err(conversion_error);
@@ -724,28 +726,28 @@ fn convert_value<C: AssetContext>(value: &ParseObject, symbols: &Symbols<C>) -> 
                     let bitfield = symbols.resolve_bitfield(path)?;
                     if let Some(type_info) = &type_info {
                         if *type_info == bitfield.type_info {
-                            Ok(bitfield.variant.span(path.span))
+                            Ok(bitfield.variant.spanned(path.span))
                         } else {
                             Err(ConversionError::ExpectedExactType(type_info.clone())
-                                .span(path.span))
+                                .spanned(path.span))
                         }
                     } else {
                         type_info = Some(bitfield.type_info);
-                        Ok(bitfield.variant.span(path.span))
+                        Ok(bitfield.variant.spanned(path.span))
                     }
                 })
                 .try_collect::<Vec<_>>()?;
 
             Value::BitFlags(type_info, values)
         }
-        parse::Value::Error => return Err(ConversionError::ParseError.span(value.value.span)),
+        parse::Value::Error => return Err(ConversionError::ParseError.spanned(value.value.span)),
         parse::Value::Unit => Value::Unit,
         parse::Value::Raw(data) => Value::Raw(data.clone()),
     };
 
     Ok(Val {
-        value: val.span(value.value.span),
-        attributes: attributes.span(value.attributes.span),
+        value: val.spanned(value.value.span),
+        attributes: attributes.spanned(value.attributes.span),
     })
 }
 
