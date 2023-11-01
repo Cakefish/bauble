@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use chumsky::{error, input::InputRef, prelude::*};
+use chumsky::prelude::*;
 use indexmap::IndexMap;
 
 use crate::{
@@ -105,19 +105,11 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .or_not()
                 .then(text::int(10))
                 .then(just('.').ignore_then(text::digits(10).to_slice()).or_not())
-                .try_map(|((sign, int), dec), span| {
-                    Ok(Value::Num(
-                        format!(
-                            "{}{int}{}",
-                            sign.as_ref()
-                                .map(ToString::to_string)
-                                .unwrap_or(String::default()),
-                            dec.map(|dec| format!(".{dec}"))
-                                .unwrap_or(String::default())
-                        )
-                        .parse()
-                        .map_err(|_| Rich::custom(span, "Failed to parse number"))?,
-                    ))
+                .to_slice()
+                .try_map(|s: &str, span| {
+                    Ok(Value::Num(s.parse().map_err(|_| {
+                        Rich::custom(span, "Failed to parse number")
+                    })?))
                 });
 
             // A parser for strings, with escape characters
@@ -154,28 +146,13 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .map(Value::Str);
 
             let literal = just('#').ignore_then(
-                any()
-                    .filter(|c: &char| {
-                        c.is_alphanumeric()
-                            || matches!(
-                                c,
-                                '!' | '#'
-                                    | '@'
-                                    | '%'
-                                    | '&'
-                                    | '?'
-                                    | '.'
-                                    | '='
-                                    | '<'
-                                    | '>'
-                                    | '_'
-                                    | '-'
-                                    | '+'
-                                    | '*'
-                            )
-                    })
+                select! {
+                    c if c.is_alphanumeric() => (),
+                    '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' => (),
+                }
                     .repeated()
-                    .collect::<String>()
+                    .to_slice()
+                    .map(str::to_string)
                     .map(Value::Raw),
             );
 
@@ -267,54 +244,25 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
 
             let path = path.map_with(|path, e| Value::Path(path.spanned(e.span())));
 
-            fn raw<'a, 'parse>(
-                input: &mut InputRef<'a, 'parse, &'a str, extra::Err<Rich<'a, char>>>,
-            ) -> Result<Value, Rich<'a, char>> {
-                let start_brackets = {
-                    let mut brackets = 0u32;
-                    while let Some(c) = input.peek() {
-                        if c != '{' {
-                            break;
-                        }
-
-                        brackets += 1;
-                        input.skip();
-                    }
-
-                    brackets
-                };
-
-                let mut brackets = 0;
-                let mut body = Vec::default();
-
-                loop {
-                    let marker = input.save();
-                    let Some(c) = input.next() else {
-                        Err(<Rich<char> as error::Error<&'a str>>::expected_found(
-                            [Some('}'.into())],
-                            None,
-                            input.span_since(input.offset()),
-                        ))?
-                    };
-
-                    match c {
-                        '}' => {
-                            brackets += 1;
-                            if brackets > start_brackets {
-                                input.rewind(marker);
-                                return Ok(Value::Raw(body.into_iter().collect::<String>()));
-                            }
-                        }
-                        c => {
-                            body.resize(body.len() + brackets as usize, '}');
-                            body.push(c);
-                            brackets = 0;
-                        }
-                    }
-                }
-            }
-
-            let raw = just('#').ignore_then(custom(raw).delimited_by(just('{'), just('}')));
+            // The start of a raw string: count the number of open braces
+            let start_raw = just('{').repeated().at_least(1).count();
+            // The end of a raw string: accept only *exactly* as many close braces as that which opened it
+            let end_raw = just('}')
+                .repeated()
+                .configure(|repeat, ctx| repeat.exactly(*ctx));
+            // A raw string is then just any character that's *not* the start of the end
+            let raw = just('#')
+                .ignore_then(
+                    start_raw.ignore_with_ctx(
+                        any()
+                            .and_is(end_raw.not())
+                            .repeated()
+                            .to_slice()
+                            .then_ignore(end_raw),
+                    ),
+                )
+                .map(str::to_string)
+                .map(Value::Raw);
 
             let value = choice((
                 bool_,
