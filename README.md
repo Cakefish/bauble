@@ -101,13 +101,187 @@ These can be used in the `FromBauble` macro, and can be automatically implemente
 ```rust
 #[derive(FromBauble)]
 struct Button {
-  #[bauble(attribute)]
-  width: u32,
-  #[bauble(attribute)]
-  height: u32,
-  on_press: Action,
+    #[bauble(attribute)]
+    width: u32,
+    #[bauble(attribute)]
+    height: u32,
+    on_press: Action,
 }
 ```
+
+## `FromBauble` derive macro attributes
+
+### `attribute`
+
+See above.
+
+### `default`
+
+```rust
+// Rust
+#[derive(FromBauble)]
+struct Background {
+    content: Box<Widget>,
+    #[bauble(default = Color::Black)]
+    color: Color,
+    #[bauble(default)]
+    margin: Margin,
+}
+
+// bauble
+background = Background {
+    content: Widget::Text(Text("Hello World")),
+}
+```
+
+On a field, allows it to be omitted and replaced with a default expression. If no expression is
+provided, that field's `Default` implementation will be used.
+
+### `as_default`
+
+```rust
+#[derive(FromBauble)]
+struct Enemy {
+    name: String,
+    hp: u32,
+    damage: u32,
+    #[bauble(as_default = Uuid::new())]
+    id: Uuid,
+}
+```
+
+On a field, it will not be parsed, but instead it will evaluate from the provided expression. If no
+expression is provided, the field's `Default` implementation will be used. The field's type does
+not need to implement `FromBauble`.
+
+### `rename`
+
+```rust
+// Rust
+#[derive(FromBauble)]
+#[bauble(rename = Option, bounds = (T: for<'a> FromBauble<'a>))]
+enum CustomOption<T> {
+    Some(T),
+    None,
+}
+
+// bauble
+my_option = Option::Some(5)
+```
+
+On an item, sets the name that will be used for the bauble type.
+
+### `path`
+
+```rust
+// Rust
+pub mod widget {
+    pub use text::Text;
+
+    mod text {
+        #[derive(FromBauble)]
+        #[bauble(path = widget)]
+        pub struct Text {
+            content: String,
+        }
+    }
+}
+
+// bauble
+use widget::Text;
+
+text = Text {
+    content: "Hello World",
+}
+```
+
+On an item, sets the module path containing the bauble type. By default, the path is the path of the
+Rust module containing the item.
+
+### `tuple`
+
+```rust
+// Rust
+#[derive(FromBauble)]
+#[bauble(tuple)]
+struct Border {
+    content: Box<Widget>,
+    #[bauble(attribute)]
+    thickness: f32,
+    #[bauble(attribute)]
+    color: Color,
+}
+
+// bauble
+border = #[thickness = 5.0, color = #ff0000] Border(Widget::Text(Text("Hello World")))
+```
+
+On a struct or enum variant with named fields, parses the item as a tuple struct or tuple variant.
+
+### `ignore`
+
+```rust
+#[derive(FromBauble)]
+enum Expression {
+    Sum {
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Literal(i32),
+    #[bauble(ignore)]
+    Cached(CacheId),
+}
+```
+
+On an enum variant, prevents the variant from being parsed. That variant's fields do not need to
+implement `FromBauble`.
+
+### `bounds`
+
+```rust
+#[derive(FromBauble)]
+#[bauble(bounds = (T: Clone + for<'a> FromBauble<'a>))]
+struct Wrapper<T: Clone>(T)
+```
+
+On an item, adds bounds to the generated `FromBauble` impl.
+
+### `flatten`
+
+```rust
+// Rust
+#[derive(FromBauble)]
+#[bauble(flatten)]
+struct Slot {
+    item: Item,
+    #[bauble(attribute)]
+    modifier: Modifier,
+    #[bauble(as_default = Uuid::new())]
+    id: Uuid,
+}
+
+#[derive(FromBauble)]
+#[bauble(flatten, bounds = (T: for<'a> FromBauble<'a>))]
+enum CustomOption<T> {
+    Some(T),
+    None(()),
+}
+
+// bauble
+slot = #[modifier = Modifier::Burning] Item::Sword
+
+some = 5
+none = ()
+
+// If parsing this as a `CustomOption<()>`, it will resolve to `CustomOption::Some(())`
+some_unit = ()
+```
+
+On a struct with only one field that would be contained within the body of the bauble struct (i.e.
+does not have `attribute` or `as_default` attributes) or an enum whose variants have only one
+field with the same property, that field will be parsed in place of the containing item. Additional
+`attribute` fields will be parsed as attributes of the containing item. On an enum, if there is
+ambiguity between variants, the earliest variant will be parsed.
 
 ## Using a custom allocator
 
