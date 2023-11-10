@@ -137,7 +137,7 @@ background = Background {
 On a field, allows it to be omitted and replaced with a default expression. If no expression is
 provided, that field's `Default` implementation will be used.
 
-### `from_default`
+### `as_default`
 
 ```rust
 #[derive(FromBauble)]
@@ -145,14 +145,14 @@ struct Enemy {
     name: String,
     hp: u32,
     damage: u32,
-    #[bauble(from_default = Uuid::new())]
+    #[bauble(as_default = Uuid::new())]
     id: Uuid,
 }
 ```
 
-On a field, it will not be parsed and instead it will use the provided expression as the default
-value. If no expression is provided, that field's `Default` implementation will be used. The field's
-type does not need to implement `FromBauble`.
+On a field, it will not be parsed, but instead it will evaluate from the provided expression. If no
+expression is provided, the field's `Default` implementation will be used. The field's type does
+not need to implement `FromBauble`.
 
 ### `rename`
 
@@ -256,7 +256,7 @@ struct Slot {
     item: Item,
     #[bauble(attribute)]
     modifier: Modifier,
-    #[bauble(from_default = Uuid::new())]
+    #[bauble(as_default = Uuid::new())]
     id: Uuid,
 }
 
@@ -278,7 +278,7 @@ some_unit = ()
 ```
 
 On a struct with only one field that would be contained within the body of the bauble struct (i.e.
-does not have `attribute` or `from_default` attributes) or an enum whose variants have only one
+does not have `attribute` or `as_default` attributes) or an enum whose variants have only one
 field with the same property, that field will be parsed in place of the containing item. Additional
 `attribute` fields will be parsed as attributes of the containing item. On an enum, if there is
 ambiguity between variants, the earliest variant will be parsed.
