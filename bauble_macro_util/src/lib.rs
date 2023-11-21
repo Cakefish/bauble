@@ -211,6 +211,7 @@ struct TypeInfo<'a> {
     ty: TokenStream,
     /// The type's generics
     impl_generics: &'a ImplGenerics<'a>,
+    has_generics: bool,
     where_clause: &'a WhereClause,
 }
 
@@ -219,6 +220,7 @@ fn derive_fields(
     TypeInfo {
         ty,
         impl_generics,
+        has_generics,
         where_clause,
     }: TypeInfo,
     // The struct or variant's fields
@@ -395,9 +397,15 @@ fn derive_fields(
     // Generate code that evaluates each field
     // TODO The way `impl_generics` is used here prevents the user from adding bounds directly on
     // the type parameters
+
     let fields = fields.iter().map(|field| {
         let ident = &field.name;
         let default = format_ident!("default_{ident}");
+        let default_call = if has_generics {
+            quote! { #default::#impl_generics() }
+        } else {
+            quote! { #default() }
+        };
         match (&field.ty, flatten) {
             (
                 FieldTy::Val {
@@ -438,7 +446,7 @@ fn derive_fields(
                         allocator,
                         ::bauble::FromBauble::from_bauble(value, allocator)?,
                     )?,
-                    None => #default(),
+                    None => #default_call,
                 }
             },
             (
@@ -463,7 +471,7 @@ fn derive_fields(
                     ::bauble::FromBauble::from_bauble(values.#index, allocator)?
                 )?
             },
-            (FieldTy::AsDefault { .. }, _) => quote! { #ident: #default() },
+            (FieldTy::AsDefault { .. }, _) => quote! { #ident: #default_call },
         }
     });
 
@@ -730,6 +738,7 @@ pub fn derive_bauble_derive_input(
                 TypeInfo {
                     ty: quote! { Self },
                     impl_generics: &impl_generics,
+                    has_generics: generics.params.len() > 1,
                     where_clause: &where_clause,
                 },
                 &fields,
@@ -854,6 +863,7 @@ pub fn derive_bauble_derive_input(
                         TypeInfo {
                             ty: quote! { Self::#ident },
                             impl_generics: &impl_generics,
+                            has_generics: generics.params.len() > 1,
                             where_clause: &where_clause,
                         },
                         &fields,
