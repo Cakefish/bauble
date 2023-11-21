@@ -438,7 +438,7 @@ fn derive_fields(
                         allocator,
                         ::bauble::FromBauble::from_bauble(value, allocator)?,
                     )?,
-                    None => #default::#impl_generics(),
+                    None => #default(),
                 }
             },
             (
@@ -463,7 +463,7 @@ fn derive_fields(
                     ::bauble::FromBauble::from_bauble(values.#index, allocator)?
                 )?
             },
-            (FieldTy::AsDefault { .. }, _) => quote! { #ident: #default::#impl_generics() },
+            (FieldTy::AsDefault { .. }, _) => quote! { #ident: #default() },
         }
     });
 
