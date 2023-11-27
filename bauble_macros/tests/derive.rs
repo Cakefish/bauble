@@ -98,4 +98,30 @@ fn test_flattened() {
         Ok(Test::Bar { x: true }),
         simple_convert("test = true", "test", &bauble::DefaultAllocator)
     );
+
+    #[derive(FromBauble, PartialEq, Debug)]
+    #[bauble(flatten)]
+    struct Test2 {
+        #[bauble(attribute, default)]
+        count: u32,
+        name: String,
+    }
+    assert_eq!(
+        Ok(Test2 {
+            count: 10,
+            name: "foo".to_string()
+        }),
+        simple_convert(
+            "test = #[count = 10] \"foo\"",
+            "test",
+            &bauble::DefaultAllocator
+        )
+    );
+    assert_eq!(
+        Ok(Test2 {
+            count: 0,
+            name: "bar".to_string()
+        }),
+        simple_convert("test = \"bar\"", "test", &bauble::DefaultAllocator)
+    );
 }
