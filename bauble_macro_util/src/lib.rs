@@ -569,10 +569,7 @@ fn flattened_ty<'a, T: ToTokens>(span: T, fields: &'a FieldsInfo) -> Result<&'a 
     }
 }
 
-pub fn derive_bauble_derive_input(
-    ast: &DeriveInput,
-    mut allocator: Option<TokenStream>,
-) -> TokenStream {
+pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
     // Type-level attributes
     // For an enum, whether the variant's field is directly deserialized in this type's place
     let mut flatten = false;
@@ -661,21 +658,6 @@ pub fn derive_bauble_derive_input(
 
                     Ok(())
                 }
-                "allocator" => {
-                    if allocator.is_some() {
-                        Err(meta.error("duplicate `allocator` attribute"))?
-                    }
-
-                    meta.input.parse::<Token![=]>()?;
-                    let expr = meta.input.parse::<Expr>()?;
-                    allocator = Some(quote! { #expr });
-
-                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                        Err(meta.error("unexpected token after allocator"))?
-                    }
-
-                    Ok(())
-                }
                 _ => {
                     attributes.push(ident.clone());
                     Ok(())
@@ -686,8 +668,6 @@ pub fn derive_bauble_derive_input(
             Err(err) => return err.to_compile_error(),
         }
     }
-
-    let allocator = allocator.unwrap_or_else(|| quote! { ::bauble::DefaultAllocator });
 
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let mut where_clause = where_clause.cloned().unwrap_or_else(|| WhereClause {
@@ -706,6 +686,49 @@ pub fn derive_bauble_derive_input(
         .push(syn::GenericParam::Lifetime(syn::LifetimeParam::new(
             lifetime.clone(),
         )));
+
+    let make_trait_bound = |t: PathSegment| {
+        syn::TypeParamBound::Trait(syn::TraitBound {
+            paren_token: None,
+            modifier: syn::TraitBoundModifier::None,
+            lifetimes: None,
+            path: syn::Path {
+                leading_colon: Some(syn::Token![::](t.span())),
+                segments: Punctuated::from_iter(vec![
+                    syn::PathSegment::from(Ident::new("bauble", t.span())),
+                    t,
+                ]),
+            },
+        })
+    };
+
+    let allocator = Ident::new("__Alloc", generics.span());
+    generics
+        .params
+        .push(syn::GenericParam::Type(syn::TypeParam {
+            attrs: vec![],
+            colon_token: Some(syn::Token![:](allocator.span())),
+            ident: allocator.clone(),
+            bounds: {
+                Punctuated::from_iter(std::iter::once(make_trait_bound(PathSegment {
+                    ident: Ident::new("BaubleAllocator", allocator.span()),
+                    arguments: syn::PathArguments::AngleBracketed(
+                        syn::AngleBracketedGenericArguments {
+                            colon2_token: None,
+                            args: {
+                                Punctuated::from_iter(std::iter::once(
+                                    syn::GenericArgument::Lifetime(lifetime.clone()),
+                                ))
+                            },
+                            lt_token: syn::Token![<](allocator.span()),
+                            gt_token: syn::Token![>](allocator.span()),
+                        },
+                    ),
+                })))
+            },
+            eq_token: None,
+            default: None,
+        }));
 
     let (modified_impl_generics, _, _) = generics.split_for_impl();
 
@@ -738,7 +761,7 @@ pub fn derive_bauble_derive_input(
                 TypeInfo {
                     ty: quote! { Self },
                     impl_generics: &impl_generics,
-                    has_generics: generics.params.len() > 1,
+                    has_generics: generics.params.len() > 2,
                     where_clause: &where_clause,
                 },
                 &fields,
@@ -980,6 +1003,52 @@ pub fn derive_bauble_derive_input(
         }
     });
 
+    // Add bounds for all the fields.
+    let mut add_bounds = |ty: &syn::Type| {
+        where_clause
+            .predicates
+            .push(syn::WherePredicate::Type(syn::PredicateType {
+                lifetimes: None,
+                bounded_ty: ty.clone(),
+                colon_token: syn::Token![:](ty.span()),
+                bounds: Punctuated::from_iter(std::iter::once(make_trait_bound(PathSegment {
+                    ident: Ident::new("FromBauble", ty.span()),
+                    arguments: syn::PathArguments::AngleBracketed(
+                        syn::AngleBracketedGenericArguments {
+                            colon2_token: None,
+                            args: Punctuated::from_iter(vec![
+                                syn::GenericArgument::Lifetime(lifetime.clone()),
+                                syn::GenericArgument::Type(
+                                    syn::TypePath {
+                                        qself: None,
+                                        path: syn::Path::from(allocator.clone()),
+                                    }
+                                    .into(),
+                                ),
+                            ]),
+                            lt_token: syn::Token![<](allocator.span()),
+                            gt_token: syn::Token![>](allocator.span()),
+                        },
+                    ),
+                }))),
+            }))
+    };
+    match &ast.data {
+        Data::Struct(s) => {
+            for field in s.fields.iter() {
+                add_bounds(&field.ty);
+            }
+        }
+        Data::Enum(e) => {
+            for variant in e.variants.iter() {
+                for field in variant.fields.iter() {
+                    add_bounds(&field.ty);
+                }
+            }
+        }
+        Data::Union(_) => {}
+    }
+
     // Assemble the implementation
     quote! {
         #[automatically_derived]
@@ -1023,5 +1092,5 @@ pub fn derive_bauble(input: TokenStream) -> TokenStream {
         }
     };
 
-    derive_bauble_derive_input(&ast, None)
+    derive_bauble_derive_input(&ast)
 }
