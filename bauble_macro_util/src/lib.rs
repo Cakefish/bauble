@@ -232,6 +232,7 @@ fn derive_fields(
     tuple: bool,
     // Whether the type should be flattened, passing its value and attributes directly to its field
     flatten: bool,
+    info: &TokenStream,
 ) -> TokenStream {
     let &val_count = val_count;
 
@@ -272,7 +273,7 @@ fn derive_fields(
                     .remove(stringify!(#name))
                     .ok_or_else(|| ::bauble::DeserializeError::MissingAttribute {
                         attribute: stringify!(#name).to_owned(),
-                        ty: Self::INFO.to_owned(),
+                        ty: #info.to_owned(),
                         span,
                     })?
             }),
@@ -309,7 +310,7 @@ fn derive_fields(
                             .ok_or_else(|| ::bauble::DeserializeError::WrongTupleLength {
                                 expected: #val_count,
                                 found: #curr_value,
-                                ty: Self::INFO.to_owned(),
+                                ty: #info.to_owned(),
                                 span,
                             })?
                     }
@@ -319,7 +320,7 @@ fn derive_fields(
                         .remove(stringify!(#name))
                         .ok_or_else(|| ::bauble::DeserializeError::MissingField {
                             field: stringify!(#name).to_owned(),
-                            ty: Self::INFO.to_owned(),
+                            ty: #info.to_owned(),
                             span,
                         })?
                 },
@@ -366,7 +367,7 @@ fn derive_fields(
                 ::std::result::Result::Err(::bauble::DeserializeError::WrongTupleLength {
                     expected: #field_count,
                     found: #val_count + length,
-                    ty: Self::INFO.to_owned(),
+                    ty: #info.to_owned(),
                     span,
                 })?
             }
@@ -377,7 +378,7 @@ fn derive_fields(
             if let ::std::option::Option::Some((field, _)) = fields.into_iter().next() {
                 ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedField {
                     field,
-                    ty: Self::INFO.to_owned(),
+                    ty: #info.to_owned(),
                 })?
             }
         },
@@ -388,7 +389,7 @@ fn derive_fields(
             if let ::std::option::Option::Some((attribute, _)) = attributes.into_iter().next() {
                 ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedAttribute {
                     attribute,
-                    ty: Self::INFO.to_owned(),
+                    ty: #info.to_owned(),
                 })?
             }
         }
@@ -495,7 +496,12 @@ fn derive_fields(
 }
 
 // Generate code to deserialize a struct or variant. See `derive_fields` for more field docs.
-fn derive_struct(ty_info: TypeInfo, fields: &FieldsInfo, flatten: bool) -> TokenStream {
+fn derive_struct(
+    ty_info: TypeInfo,
+    fields: &FieldsInfo,
+    flatten: bool,
+    info: &TokenStream,
+) -> TokenStream {
     let pattern = match fields.ty {
         Some(false) => quote! { ::bauble::FieldsKind::Struct(mut fields) },
         Some(true) => quote! { ::bauble::FieldsKind::Tuple(mut fields) },
@@ -503,7 +509,7 @@ fn derive_struct(ty_info: TypeInfo, fields: &FieldsInfo, flatten: bool) -> Token
     };
 
     let fields = match fields.ty {
-        Some(tuple) => derive_fields(ty_info, fields, tuple, flatten),
+        Some(tuple) => derive_fields(ty_info, fields, tuple, flatten, &info),
         None => {
             // The struct or variant is a unit, so generate very basic deserialization
             let TypeInfo { ty, .. } = ty_info;
@@ -732,6 +738,10 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
 
     let (modified_impl_generics, _, _) = generics.split_for_impl();
 
+    let info = quote! {
+        <Self as ::bauble::FromBauble<#lifetime, #allocator>>::INFO
+    };
+
     let ident = &ast.ident;
     let name = rename.as_ref().unwrap_or(ident);
 
@@ -766,6 +776,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                 },
                 &fields,
                 flatten,
+                &info,
             );
 
             match flatten {
@@ -796,7 +807,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                                         ::bauble::DeserializeError::WrongKind {
                                             expected: ::bauble::ValueKind::Struct,
                                             found: value_kind,
-                                            ty: Self::INFO.to_owned(),
+                                            ty: #info.to_owned(),
                                             span,
                                         }
                                     )?,
@@ -805,7 +816,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                             _ => ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
                                 expected: ::bauble::ValueKind::Struct,
                                 found: value_kind,
-                                ty: Self::INFO.to_owned(),
+                                ty: #info.to_owned(),
                                 span,
                             })?,
                         })
@@ -891,6 +902,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                         },
                         &fields,
                         flatten,
+                        &info,
                     );
 
                     match flatten {
@@ -921,7 +933,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                                         ::bauble::DeserializeError::UnknownVariant {
                                             variant: name,
                                             kind: fields.variant_kind(),
-                                            ty: Self::INFO.to_owned(),
+                                            ty: #info.to_owned(),
                                         }
                                     )?,
                                 },
@@ -936,7 +948,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                 true => (
                     quote! {
                         ::bauble::TypeInfo::Flatten(&[
-                            #(&<#flattened_tys as ::bauble::FromBauble>::INFO,)*
+                            #(&<#flattened_tys as ::bauble::FromBauble<#lifetime, #allocator>>::INFO,)*
                         ])
                     },
                     quote! {
@@ -948,7 +960,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                                 ::std::result::Result::Err(
                                     ::bauble::DeserializeError::UnknownFlattenedVariant {
                                         variant: type_info,
-                                        ty: Self::INFO.to_owned(),
+                                        ty: #info.to_owned(),
                                     }
                                 )?
                             }
@@ -966,7 +978,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                                         ::bauble::DeserializeError::UnknownVariant {
                                             variant: name,
                                             kind: fields.variant_kind(),
-                                            ty: Self::INFO.to_owned(),
+                                            ty: #info.to_owned(),
                                         }
                                     )?,
                                 }
@@ -976,7 +988,7 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
                                     expected: ::bauble::ValueKind::Enum,
                                     found: v.kind(),
                                     span,
-                                    ty: Self::INFO.to_owned(),
+                                    ty: #info.to_owned(),
                                 })?
                             }
                         })
@@ -992,10 +1004,10 @@ pub fn derive_bauble_derive_input(ast: &DeriveInput) -> TokenStream {
 
     let validate_type_info = (!flatten).then(|| {
         quote! {
-            if !Self::INFO.contains(&type_info) {
+            if !#info.contains(&type_info) {
                 return ::std::result::Result::Err(
                     ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
-                        expected: Self::INFO.to_owned(),
+                        expected: #info.to_owned(),
                         found: type_info,
                     })
                 )
