@@ -25,7 +25,11 @@ impl DataFieldsKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OwnedTypeInfo {
-    Path { module: String, ident: String },
+    Path {
+        module: String,
+        ident: String,
+        always_ref: bool,
+    },
     Kind(ValueKind),
     Flatten(Vec<OwnedTypeInfo>),
 }
@@ -34,7 +38,7 @@ impl Display for OwnedTypeInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OwnedTypeInfo::Kind(kind) => write!(f, "{kind}"),
-            OwnedTypeInfo::Path { module, ident } => write!(f, "{module}::{ident}"),
+            OwnedTypeInfo::Path { module, ident, .. } => write!(f, "{module}::{ident}"),
             OwnedTypeInfo::Flatten(types) => {
                 write!(
                     f,
@@ -55,6 +59,7 @@ impl OwnedTypeInfo {
         OwnedTypeInfo::Path {
             module: module.into(),
             ident: ident.into(),
+            always_ref: false,
         }
     }
 }
@@ -76,6 +81,7 @@ impl<'a> TypeInfo<'a> {
             TypeInfo::Path { module, ident } => OwnedTypeInfo::Path {
                 module: module.to_string(),
                 ident: ident.to_string(),
+                always_ref: false,
             },
             &TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind),
             TypeInfo::Flatten(types) => {
@@ -91,6 +97,7 @@ impl<'a> TypeInfo<'a> {
                 OwnedTypeInfo::Path {
                     module: m,
                     ident: i,
+                    ..
                 },
             ) => module == m && ident == i,
             (TypeInfo::Kind(kind), OwnedTypeInfo::Kind(other_kind)) => kind == other_kind,
@@ -165,7 +172,7 @@ impl Reference {
     pub fn get_module(&self) -> Option<Cow<str>> {
         match self {
             Reference::Any(type_info) => match type_info {
-                OwnedTypeInfo::Path { module, ident } => {
+                OwnedTypeInfo::Path { module, ident, .. } => {
                     Some(Cow::Owned(format!("{module}::{ident}")))
                 }
                 OwnedTypeInfo::Kind(_) | OwnedTypeInfo::Flatten(_) => None,
