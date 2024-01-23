@@ -598,7 +598,7 @@ pub fn derive_bauble_derive_input(
                 .to_compile_error();
         }
 
-        match attr.parse_nested_meta(|meta| {
+        let nested_meta = attr.parse_nested_meta(|meta| {
             let Some(ident) = meta.path.get_ident() else {
                 Err(meta.error("path must be an identifier"))?
             };
@@ -696,7 +696,9 @@ pub fn derive_bauble_derive_input(
                     Ok(())
                 }
             }
-        }) {
+        });
+
+        match nested_meta {
             Ok(()) => (),
             Err(err) => return err.to_compile_error(),
         }

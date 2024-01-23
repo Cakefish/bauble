@@ -41,7 +41,7 @@ fn main() {
 
     let ctx = NoChecks;
 
-    let objects = convert_values("test.rsn".to_string(), values, &Symbols::new(&ctx));
+    let objects = convert_values("test.rsn".to_string(), values, &Symbols::new(&ctx), &src);
 
     match objects {
         Ok(objects) => {
