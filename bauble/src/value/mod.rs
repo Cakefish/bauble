@@ -430,6 +430,7 @@ pub fn convert_values<C: AssetContext>(
     path: String,
     values: Values,
     default_symbols: &Symbols<C>,
+    source: &str,
 ) -> Result<Vec<Object>> {
     let mut use_symbols = Symbols::new(&default_symbols.ctx);
     for use_ in values.uses {
@@ -504,8 +505,26 @@ pub fn convert_values<C: AssetContext>(
         .values
         .iter()
         .map(|value| convert_object(&path, &value.0.value, value.1, &symbols, &mut add_value))
-        .try_collect::<Vec<_>>()?;
-    objects.extend(parsed_objects);
+        .collect::<Vec<_>>();
+    {
+        use ariadne::{Color, Label, Report, ReportKind, Source};
+
+        for res in parsed_objects.iter() {
+            if let Err(e) = res {
+                Report::build(ReportKind::Error, (), e.span.start)
+                    .with_message(e.to_string())
+                    .with_label(
+                        Label::new(e.span.into_range())
+                            .with_message("Here")
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .eprint(Source::from(source))
+                    .unwrap()
+            }
+        }
+    }
+    objects.extend(parsed_objects.into_iter().try_collect::<Vec<_>>()?);
     Ok(objects)
 }
 

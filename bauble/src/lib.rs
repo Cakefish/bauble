@@ -46,7 +46,7 @@ pub fn simple_convert(src: &str) -> Result<Vec<Object>, Spanned<ConversionError>
 
     let ctx = value::NoChecks;
 
-    convert_values("".to_string(), values, &value::Symbols::new(&ctx))
+    convert_values("".to_string(), values, &value::Symbols::new(&ctx), src)
 }
 
 pub fn convert(
@@ -57,5 +57,5 @@ pub fn convert(
     let values =
         parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
 
-    convert_values(file_name.into(), values, &value::Symbols::new(&ctx))
+    convert_values(file_name.into(), values, &value::Symbols::new(&ctx), src)
 }
