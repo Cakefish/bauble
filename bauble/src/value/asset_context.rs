@@ -66,22 +66,45 @@ impl OwnedTypeInfo {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum TypeInfo<'a> {
-    Path { module: &'a str, ident: &'a str },
+    Path {
+        module: &'a str,
+        ident: &'a str,
+        always_ref: bool,
+    },
     Kind(ValueKind),
     Flatten(&'a [&'a TypeInfo<'a>]),
 }
 
 impl<'a> TypeInfo<'a> {
     pub const fn new(module: &'a str, ident: &'a str) -> Self {
-        TypeInfo::Path { module, ident }
+        TypeInfo::Path {
+            module,
+            ident,
+            always_ref: false,
+        }
+    }
+
+    pub const fn with_always_ref(self) -> Self {
+        match self {
+            TypeInfo::Path { module, ident, .. } => TypeInfo::Path {
+                module,
+                ident,
+                always_ref: true,
+            },
+            s => s,
+        }
     }
 
     pub fn to_owned(&self) -> OwnedTypeInfo {
         match self {
-            TypeInfo::Path { module, ident } => OwnedTypeInfo::Path {
+            TypeInfo::Path {
+                module,
+                ident,
+                always_ref,
+            } => OwnedTypeInfo::Path {
                 module: module.to_string(),
                 ident: ident.to_string(),
-                always_ref: false,
+                always_ref: *always_ref,
             },
             &TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind),
             TypeInfo::Flatten(types) => {
@@ -93,7 +116,7 @@ impl<'a> TypeInfo<'a> {
     pub fn contains(&self, other: &OwnedTypeInfo) -> bool {
         match (self, other) {
             (
-                TypeInfo::Path { module, ident },
+                TypeInfo::Path { module, ident, .. },
                 OwnedTypeInfo::Path {
                     module: m,
                     ident: i,

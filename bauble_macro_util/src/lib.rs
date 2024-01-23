@@ -584,6 +584,8 @@ pub fn derive_bauble_derive_input(
     let mut rename = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
+    // Set this typeinfo to always be a referece.
+    let mut always_ref = false;
 
     // Parse attributes
     for attr in &ast.attrs {
@@ -672,6 +674,19 @@ pub fn derive_bauble_derive_input(
 
                     if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
                         Err(meta.error("unexpected token after allocator"))?
+                    }
+
+                    Ok(())
+                }
+                "always_ref" => {
+                    if flatten {
+                        Err(meta.error("duplicate `always_ref` attribute"))?
+                    }
+
+                    always_ref = true;
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after always_ref"))?
                     }
 
                     Ok(())
@@ -979,6 +994,14 @@ pub fn derive_bauble_derive_input(
             }
         }
     });
+
+    let type_info = if always_ref {
+        quote! {
+            (#type_info).with_always_ref()
+        }
+    } else {
+        type_info
+    };
 
     // Assemble the implementation
     quote! {
