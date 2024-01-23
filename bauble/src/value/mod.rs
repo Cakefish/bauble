@@ -490,7 +490,12 @@ pub fn convert_values<C: AssetContext>(
     };
 
     for item in order {
-        let val = convert_value(&values.copies[item.as_str()], &symbols, &mut add_value)?;
+        let val = convert_value(
+            &values.copies[item.as_str()],
+            &symbols,
+            &mut add_value,
+            false,
+        )?;
 
         symbols.uses.insert(item, RefCopy::Resolved(val));
     }
@@ -545,13 +550,19 @@ fn convert_value<C: AssetContext>(
     value: &ParseObject,
     symbols: &Symbols<C>,
     add_value: &mut impl FnMut(Val) -> Val,
+    is_root: bool,
 ) -> Result<Val> {
     let attributes = Attributes(
         value
             .attributes
             .0
             .iter()
-            .map(|(ident, value)| Ok((ident.clone(), convert_value(value, symbols, add_value)?)))
+            .map(|(ident, value)| {
+                Ok((
+                    ident.clone(),
+                    convert_value(value, symbols, add_value, false)?,
+                ))
+            })
             .try_collect()?,
     );
 
@@ -627,8 +638,8 @@ fn convert_value<C: AssetContext>(
             map.iter()
                 .map(|(key, value)| {
                     Ok((
-                        convert_value(key, symbols, add_value)?,
-                        convert_value(value, symbols, add_value)?,
+                        convert_value(key, symbols, add_value, false)?,
+                        convert_value(value, symbols, add_value, false)?,
                     ))
                 })
                 .try_collect()?,
@@ -638,7 +649,10 @@ fn convert_value<C: AssetContext>(
                 fields
                     .iter()
                     .map(|(field, value)| {
-                        Ok((field.clone(), convert_value(value, symbols, add_value)?))
+                        Ok((
+                            field.clone(),
+                            convert_value(value, symbols, add_value, false)?,
+                        ))
                     })
                     .try_collect()?,
             );
@@ -688,7 +702,7 @@ fn convert_value<C: AssetContext>(
         parse::Value::Tuple { name, fields } => {
             let fields = fields
                 .iter()
-                .map(|val| convert_value(val, symbols, add_value))
+                .map(|val| convert_value(val, symbols, add_value, false))
                 .try_collect()?;
             match name {
                 Some(path) => match symbols.resolve_type(path) {
@@ -754,7 +768,7 @@ fn convert_value<C: AssetContext>(
             // TODO: Check for type?
             Value::Array(
                 arr.iter()
-                    .map(|val| convert_value(val, symbols, add_value))
+                    .map(|val| convert_value(val, symbols, add_value, false))
                     .try_collect()?,
             )
         }
@@ -785,10 +799,16 @@ fn convert_value<C: AssetContext>(
         parse::Value::Raw(data) => Value::Raw(data.clone()),
     };
 
-    Ok(Val {
+    let mut val = Val {
         value: val.spanned(value.value.span),
         attributes: attributes.spanned(value.attributes.span),
-    })
+    };
+
+    if !is_root && val.value.is_always_ref() {
+        val = add_value(val);
+    }
+
+    Ok(val)
 }
 
 /// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
@@ -799,7 +819,7 @@ fn convert_object<C: AssetContext>(
     symbols: &Symbols<C>,
     add_value: &mut impl FnMut(Val) -> Val,
 ) -> Result<Object> {
-    let value = convert_value(value, symbols, add_value)?;
+    let value = convert_value(value, symbols, add_value, false)?;
 
     Ok(create_object(path, name, value))
 }
