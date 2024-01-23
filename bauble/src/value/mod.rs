@@ -819,7 +819,7 @@ fn convert_object<C: AssetContext>(
     symbols: &Symbols<C>,
     add_value: &mut impl FnMut(Val) -> Val,
 ) -> Result<Object> {
-    let value = convert_value(value, symbols, add_value, false)?;
+    let value = convert_value(value, symbols, add_value, true)?;
 
     Ok(create_object(path, name, value))
 }
