@@ -584,6 +584,8 @@ pub fn derive_bauble_derive_input(
     let mut rename = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
+    // Set this typeinfo to always be a reference.
+    let mut always_ref = false;
 
     // Parse attributes
     for attr in &ast.attrs {
@@ -596,13 +598,16 @@ pub fn derive_bauble_derive_input(
                 .to_compile_error();
         }
 
-        match attr.parse_nested_meta(|meta| {
+        let nested_meta = attr.parse_nested_meta(|meta| {
             let Some(ident) = meta.path.get_ident() else {
                 Err(meta.error("path must be an identifier"))?
             };
 
             match ident.to_string().as_str() {
                 "flatten" => {
+                    if always_ref {
+                        Err(meta.error("`flatten` and `always_ref` are incompatible"))?
+                    }
                     if flatten {
                         Err(meta.error("duplicate `flatten` attribute"))?
                     }
@@ -676,12 +681,30 @@ pub fn derive_bauble_derive_input(
 
                     Ok(())
                 }
+                "always_ref" => {
+                    if flatten {
+                        Err(meta.error("`flatten` and `always_ref` are incompatible"))?
+                    }
+                    if always_ref {
+                        Err(meta.error("duplicate `always_ref` attribute"))?
+                    }
+
+                    always_ref = true;
+
+                    if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
+                        Err(meta.error("unexpected token after always_ref"))?
+                    }
+
+                    Ok(())
+                }
                 _ => {
                     attributes.push(ident.clone());
                     Ok(())
                 }
             }
-        }) {
+        });
+
+        match nested_meta {
             Ok(()) => (),
             Err(err) => return err.to_compile_error(),
         }
@@ -979,6 +1002,14 @@ pub fn derive_bauble_derive_input(
             }
         }
     });
+
+    let type_info = if always_ref {
+        quote! {
+            (#type_info).with_always_ref()
+        }
+    } else {
+        type_info
+    };
 
     // Assemble the implementation
     quote! {

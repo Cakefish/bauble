@@ -47,10 +47,13 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
 
                 let group = node
                     .padded_by(comments.clone())
-                    .separated_by(just(','))
+                    .separated_by(just(',').padded_by(comments.clone()))
                     .allow_trailing()
                     .collect()
-                    .delimited_by(just('{'), just('}'))
+                    .delimited_by(
+                        just('{').padded_by(comments.clone()),
+                        just('}').padded_by(comments.clone()),
+                    )
                     .map(PathTreeEnd::Group);
                 path_start
                     .map_with(|v, e| v.spanned(e.span()))
@@ -161,7 +164,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .map(|_| Value::Bool(true))
                 .or(just("false").map(|_| Value::Bool(false)));
 
-            let separator = just(',').padded_by(comments.clone()).padded();
+            let separator = just(',').padded_by(comments.clone());
 
             let sequence = object
                 .clone()
@@ -173,10 +176,16 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
             // Parser for arrays.
             let array = sequence
                 .clone()
-                .delimited_by(just('['), just(']'))
+                .delimited_by(
+                    just('[').padded_by(comments.clone()),
+                    just(']').padded_by(comments.clone()),
+                )
                 .map(Value::Array);
 
-            let tuple = sequence.delimited_by(just('('), just(')'));
+            let tuple = sequence.delimited_by(
+                just('(').padded_by(comments.clone()),
+                just(')').padded_by(comments.clone()),
+            );
 
             let structure = ident
                 .padded_by(comments.clone())
@@ -187,7 +196,10 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
-                .delimited_by(just('{'), just('}'))
+                .delimited_by(
+                    just('{').padded_by(comments.clone()),
+                    just('}').padded_by(comments.clone()),
+                )
                 .map(|fields| fields.into_iter().collect());
 
             let reference = just('$').ignore_then(path).map_with(|path, e| {
@@ -223,21 +235,23 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
             let map = object
                 .clone()
                 .padded_by(comments.clone())
-                .padded()
                 .then_ignore(just(':'))
-                .then(object)
+                .then(object.padded_by(comments.clone()))
                 .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
-                .delimited_by(just('{'), just('}'))
+                .delimited_by(
+                    just('{').padded_by(comments.clone()),
+                    just('}').padded_by(comments.clone()),
+                )
                 .map(Value::Map);
 
             // Parser for a tuple.
             let tuple = tuple.map(|fields| Value::Tuple { name: None, fields });
 
             let path_or = path_p
-                .separated_by(just('|'))
+                .separated_by(just('|').padded_by(comments.clone()))
                 .at_least(2)
                 .collect()
                 .map(Value::Or);
