@@ -605,6 +605,9 @@ pub fn derive_bauble_derive_input(
 
             match ident.to_string().as_str() {
                 "flatten" => {
+                    if always_ref {
+                        Err(meta.error("`flatten` and `always_ref` are incompatible"))?
+                    }
                     if flatten {
                         Err(meta.error("duplicate `flatten` attribute"))?
                     }
@@ -680,6 +683,9 @@ pub fn derive_bauble_derive_input(
                 }
                 "always_ref" => {
                     if flatten {
+                        Err(meta.error("`flatten` and `always_ref` are incompatible"))?
+                    }
+                    if always_ref {
                         Err(meta.error("duplicate `always_ref` attribute"))?
                     }
 
