@@ -584,7 +584,7 @@ pub fn derive_bauble_derive_input(
     let mut rename = None;
     // Attributes that are not type-level
     let mut attributes = vec![];
-    // Set this typeinfo to always be a referece.
+    // Set this typeinfo to always be a reference.
     let mut always_ref = false;
 
     // Parse attributes
