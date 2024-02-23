@@ -403,7 +403,6 @@ impl<C: AssetContext> Symbols<C> {
 
         item.into_owned()
             .to_asset()
-            .map(|_| path.to_string())
             .ok_or(ConversionError::ExpectedAsset.spanned(path.span))
     }
 

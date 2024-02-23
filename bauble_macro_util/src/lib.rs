@@ -936,7 +936,7 @@ pub fn derive_bauble_derive_input(
                 true => (
                     quote! {
                         ::bauble::TypeInfo::Flatten(&[
-                            #(&<#flattened_tys as ::bauble::FromBauble>::INFO,)*
+                            #(&<#flattened_tys as ::bauble::FromBauble<#lifetime, #allocator>>::INFO,)*
                         ])
                     },
                     quote! {
