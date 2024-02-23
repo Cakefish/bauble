@@ -484,14 +484,19 @@ pub fn convert_values<C: AssetContext>(
     let mut objects = Vec::new();
     let mut auto_value_idx = 0;
 
-    let mut add_value = |val: Val| {
+    let mut add_value = |mut val: Val| {
         let name = format!("@{auto_value_idx:x}");
         let span = val.value.span;
+
+        // TODO: Possibly list possible attributes for a type info, and chose which to use for which value.
+        let attributes =
+            std::mem::replace(&mut val.attributes, Attributes::default().spanned(span));
+
         objects.push(create_object(&path, &name, val));
         auto_value_idx += 1;
         Val {
             value: Value::Ref(format!("{path}::{name}")).spanned(span),
-            attributes: Attributes::default().spanned(span),
+            attributes,
         }
     };
 
