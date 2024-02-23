@@ -432,15 +432,18 @@ pub fn convert_values<C: AssetContext>(
     source: &str,
 ) -> Result<Vec<Object>> {
     let mut use_symbols = Symbols::new(&default_symbols.ctx);
+    let mut use_errors = Vec::new();
     for use_ in values.uses {
-        use_symbols.add_use(&use_)?;
+        if let Err(e) = use_symbols.add_use(&use_) {
+            use_errors.push(e);
+        }
     }
 
     let mut symbols = default_symbols.clone();
 
     for (symbol, _) in &values.values {
         let path = format!("{path}::{symbol}");
-        symbols
+        if let Err(e) = symbols
             .add_ref(
                 symbol.value.clone(),
                 Reference::Specific {
@@ -449,7 +452,10 @@ pub fn convert_values<C: AssetContext>(
                     module: None,
                 },
             )
-            .map_err(|e| e.spanned(symbol.span))?;
+            .map_err(|e| e.spanned(symbol.span))
+        {
+            use_errors.push(e);
+        }
     }
     symbols.add(use_symbols);
 
@@ -508,20 +514,28 @@ pub fn convert_values<C: AssetContext>(
     {
         use ariadne::{Color, Label, Report, ReportKind, Source};
 
-        for res in parsed_objects.iter() {
-            if let Err(e) = res {
-                Report::build(ReportKind::Error, (), e.span.start)
-                    .with_message(e.to_string())
-                    .with_label(
-                        Label::new(e.span.into_range())
-                            .with_message("Here")
-                            .with_color(Color::Red),
-                    )
-                    .finish()
-                    .eprint(Source::from(source))
-                    .unwrap()
-            }
+        for e in parsed_objects
+            .iter()
+            .filter_map(|res| match res {
+                Err(e) => Some(e),
+                Ok(_) => None,
+            })
+            .chain(use_errors.iter())
+        {
+            Report::build(ReportKind::Error, (), e.span.start)
+                .with_message(e.to_string())
+                .with_label(
+                    Label::new(e.span.into_range())
+                        .with_message("Here")
+                        .with_color(Color::Red),
+                )
+                .finish()
+                .eprint(Source::from(source))
+                .unwrap()
         }
+    }
+    if let Some(e) = use_errors.into_iter().next() {
+        return Err(e);
     }
     objects.extend(parsed_objects.into_iter().try_collect::<Vec<_>>()?);
     Ok(objects)
