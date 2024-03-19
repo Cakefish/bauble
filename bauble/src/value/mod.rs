@@ -162,7 +162,8 @@ impl Value {
 #[derive(Debug)]
 pub struct Object {
     pub object_path: AssetPath,
-    pub type_path: TypePath,
+    /// Optionally explicit type path, otherwise derive from value.
+    pub type_path: Option<TypePath>,
     pub path: String,
     pub value: Val,
 }
@@ -524,7 +525,7 @@ pub fn convert_values<C: AssetContext>(
             )
             .and_then(|mut object| {
                 if let Some(type_path) = &value.1.type_path {
-                    object.type_path = symbols.resolve_type(type_path)?.type_info();
+                    object.type_path = Some(symbols.resolve_type(type_path)?.type_info());
                 }
                 Ok(object)
             })
@@ -879,7 +880,7 @@ fn create_object(path: &str, name: &str, value: Val) -> Object {
     Object {
         // TODO: Create an object path.
         object_path: name.to_string(),
-        type_path: value.value.type_info(),
+        type_path: None,
         path: path.to_string(),
         value,
     }
