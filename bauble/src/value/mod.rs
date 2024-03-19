@@ -168,6 +168,14 @@ pub struct Object {
     pub value: Val,
 }
 
+impl Object {
+    pub fn value_type(&self) -> OwnedTypeInfo {
+        self.type_path
+            .clone()
+            .unwrap_or_else(|| self.value.value.type_info())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConversionError {
     ModuleNotFound,
