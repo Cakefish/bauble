@@ -514,7 +514,21 @@ pub fn convert_values<C: AssetContext>(
     let parsed_objects = values
         .values
         .iter()
-        .map(|value| convert_object(&path, &value.0.value, value.1, &symbols, &mut add_value))
+        .map(|value| {
+            convert_object(
+                &path,
+                &value.0.value,
+                &value.1.object,
+                &symbols,
+                &mut add_value,
+            )
+            .and_then(|mut object| {
+                if let Some(type_path) = &value.1.type_path {
+                    object.type_path = symbols.resolve_type(type_path)?.type_info();
+                }
+                Ok(object)
+            })
+        })
         .collect::<Vec<_>>();
     {
         use ariadne::{Color, Label, Report, ReportKind, Source};

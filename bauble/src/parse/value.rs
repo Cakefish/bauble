@@ -315,6 +315,7 @@ impl Object {
 
 fn indented_display_value(
     ident: &Ident,
+    type_path: Option<&Spanned<Path>>,
     object: &Object,
     indent: usize,
     f: &mut fmt::Formatter<'_>,
@@ -330,14 +331,26 @@ fn indented_display_value(
         write!(f, "{i}")?;
     }
 
-    write!(f, "{ident} = ")?;
+    write!(f, "{ident}")?;
+
+    if let Some(ty) = type_path {
+        write!(f, ": {ty}")?;
+    }
+
+    write!(f, " = ")?;
     object.value.indented_display(indent, f)
+}
+
+#[derive(Debug)]
+pub struct Binding {
+    pub type_path: Option<Spanned<Path>>,
+    pub object: Object,
 }
 
 #[derive(Debug)]
 pub struct Values {
     pub uses: Vec<Use>,
-    pub values: IndexMap<Ident, Object>,
+    pub values: IndexMap<Ident, Binding>,
     pub copies: IndexMap<Ident, Object>,
 }
 
@@ -351,13 +364,13 @@ impl Values {
         }
 
         for (ident, object) in self.values.iter() {
-            indented_display_value(ident, object, indent, f)?;
+            indented_display_value(ident, object.type_path.as_ref(), &object.object, indent, f)?;
             writeln!(f, "\n")?;
         }
 
         for (ident, object) in self.copies.iter() {
             write!(f, "{i}copy ")?;
-            indented_display_value(ident, object, indent, f)?;
+            indented_display_value(ident, None, object, indent, f)?;
             writeln!(f, "\n")?;
         }
 

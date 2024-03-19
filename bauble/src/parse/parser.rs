@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use crate::{
     parse::{
         value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},
-        Ident, Object,
+        Binding, Ident, Object,
     },
     spanned::{SpanExt, Spanned},
 };
@@ -333,13 +333,23 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
     fn binding<'a, V: 'a + Debug>(
         ident: impl 'a + Parser<'a, &'a str, Ident, extra::Err<Rich<'a, char>>>,
         value: impl 'a + Parser<'a, &'a str, V, extra::Err<Rich<'a, char>>>,
+        path: impl 'a + Parser<'a, &'a str, Spanned<Path>, extra::Err<Rich<'a, char>>> + Clone,
         comments: impl 'a + Clone + Parser<'a, &'a str, (), extra::Err<Rich<'a, char>>>,
-    ) -> impl Parser<'a, &'a str, (Ident, V), extra::Err<Rich<'a, char>>> {
+    ) -> impl Parser<'a, &'a str, (Ident, Option<Spanned<Path>>, V), extra::Err<Rich<'a, char>>>
+    {
         ident
-            .padded_by(comments)
+            .padded_by(comments.clone())
             .padded()
+            .then(
+                just(':')
+                    .ignore_then(path)
+                    .padded_by(comments)
+                    .padded()
+                    .or_not(),
+            )
             .then_ignore(just('='))
             .then(value)
+            .map(|((ident, ty), val)| (ident, ty, val))
             .boxed()
     }
 
@@ -348,12 +358,14 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
         Copy,
     }
 
+    let path = path.map_with(|p, e| p.spanned(e.span()));
+
     uses.then(
         just("copy")
             .padded()
-            .ignore_then(binding(ident, object.clone(), comments.clone()))
+            .ignore_then(binding(ident, object.clone(), path, comments.clone()))
             .map(|binding| (binding, ItemType::Copy))
-            .or(binding(ident, object, comments).map(|binding| (binding, ItemType::Value)))
+            .or(binding(ident, object, path, comments).map(|binding| (binding, ItemType::Value)))
             .repeated()
             .collect::<Vec<_>>(),
     )
@@ -364,11 +376,15 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 values: IndexMap::default(),
                 copies: IndexMap::default(),
             },
-            |mut values, ((ident, object), ty)| {
+            |mut values, ((ident, type_path, object), ty)| {
                 match ty {
-                    ItemType::Value => values.values.insert(ident, object),
-                    ItemType::Copy => values.copies.insert(ident, object),
-                };
+                    ItemType::Value => {
+                        values.values.insert(ident, Binding { type_path, object });
+                    }
+                    ItemType::Copy => {
+                        values.copies.insert(ident, object);
+                    }
+                }
                 values
             },
         )

@@ -157,6 +157,17 @@ pub enum TypeKind {
     Any(OwnedTypeInfo),
 }
 
+impl TypeKind {
+    pub fn type_info(&self) -> OwnedTypeInfo {
+        match self {
+            TypeKind::Struct(s) => s.type_info.clone(),
+            TypeKind::EnumVariant(e) => e.enum_type_info.clone(),
+            TypeKind::BitField(b) => b.type_info.clone(),
+            TypeKind::Any(t) => t.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Reference {
     Any(OwnedTypeInfo),
