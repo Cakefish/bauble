@@ -128,6 +128,9 @@ impl Value {
             OwnedTypeInfo::Path {
                 always_ref: true,
                 ..
+            } | OwnedTypeInfo::Flatten {
+                always_ref: true,
+                ..
             }
         )
     }

@@ -777,10 +777,15 @@ pub fn derive_bauble_derive_input(
 
                     (
                         quote! {
-                            ::bauble::TypeInfo::Flatten(&[
-                                &<#flattened_ty as ::bauble::FromBauble<#lifetime, #allocator>>
-                                    ::INFO,
-                            ])
+                            ::bauble::TypeInfo::Flatten {
+                                types: &[
+                                    &<#flattened_ty as ::bauble::FromBauble<#lifetime, #allocator>>
+                                        ::INFO,
+                                ],
+                                module: #path,
+                                ident: stringify!(#name),
+                                always_ref: false,
+                            }
                         },
                         quote! { ::std::result::Result::Ok( { #case } ) },
                     )
@@ -935,9 +940,14 @@ pub fn derive_bauble_derive_input(
             match flatten {
                 true => (
                     quote! {
-                        ::bauble::TypeInfo::Flatten(&[
-                            #(&<#flattened_tys as ::bauble::FromBauble<#lifetime, #allocator>>::INFO,)*
-                        ])
+                        ::bauble::TypeInfo::Flatten {
+                            types: &[
+                                #(&<#flattened_tys as ::bauble::FromBauble<#lifetime, #allocator>>::INFO,)*
+                            ],
+                            module: #path,
+                            ident: stringify!(#name),
+                            always_ref: false,
+                        }
                     },
                     quote! {
                         ::std::result::Result::Ok(
