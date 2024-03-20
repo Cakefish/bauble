@@ -128,6 +128,9 @@ impl Value {
             OwnedTypeInfo::Path {
                 always_ref: true,
                 ..
+            } | OwnedTypeInfo::Flatten {
+                always_ref: true,
+                ..
             }
         )
     }
@@ -162,9 +165,18 @@ impl Value {
 #[derive(Debug)]
 pub struct Object {
     pub object_path: AssetPath,
-    pub type_path: TypePath,
+    /// Optionally explicit type path, otherwise derive from value.
+    pub type_path: Option<TypePath>,
     pub path: String,
     pub value: Val,
+}
+
+impl Object {
+    pub fn value_type(&self) -> OwnedTypeInfo {
+        self.type_path
+            .clone()
+            .unwrap_or_else(|| self.value.value.type_info())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -514,7 +526,21 @@ pub fn convert_values<C: AssetContext>(
     let parsed_objects = values
         .values
         .iter()
-        .map(|value| convert_object(&path, &value.0.value, value.1, &symbols, &mut add_value))
+        .map(|value| {
+            convert_object(
+                &path,
+                &value.0.value,
+                &value.1.object,
+                &symbols,
+                &mut add_value,
+            )
+            .and_then(|mut object| {
+                if let Some(type_path) = &value.1.type_path {
+                    object.type_path = Some(symbols.resolve_type(type_path)?.type_info());
+                }
+                Ok(object)
+            })
+        })
         .collect::<Vec<_>>();
     {
         use ariadne::{Color, Label, Report, ReportKind, Source};
@@ -865,7 +891,7 @@ fn create_object(path: &str, name: &str, value: Val) -> Object {
     Object {
         // TODO: Create an object path.
         object_path: name.to_string(),
-        type_path: value.value.type_info(),
+        type_path: None,
         path: path.to_string(),
         value,
     }

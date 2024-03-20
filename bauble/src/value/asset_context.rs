@@ -31,7 +31,12 @@ pub enum OwnedTypeInfo {
         always_ref: bool,
     },
     Kind(ValueKind),
-    Flatten(Vec<OwnedTypeInfo>),
+    Flatten {
+        module: String,
+        ident: String,
+        always_ref: bool,
+        types: Vec<OwnedTypeInfo>,
+    },
 }
 
 impl Display for OwnedTypeInfo {
@@ -39,7 +44,7 @@ impl Display for OwnedTypeInfo {
         match self {
             OwnedTypeInfo::Kind(kind) => write!(f, "{kind}"),
             OwnedTypeInfo::Path { module, ident, .. } => write!(f, "{module}::{ident}"),
-            OwnedTypeInfo::Flatten(types) => {
+            OwnedTypeInfo::Flatten { types, .. } => {
                 write!(
                     f,
                     "({})",
@@ -72,7 +77,13 @@ pub enum TypeInfo<'a> {
         always_ref: bool,
     },
     Kind(ValueKind),
-    Flatten(&'a [&'a TypeInfo<'a>]),
+    Flatten {
+        module: &'a str,
+        ident: &'a str,
+        always_ref: bool,
+
+        types: &'a [&'a TypeInfo<'a>],
+    },
 }
 
 impl<'a> TypeInfo<'a> {
@@ -91,6 +102,17 @@ impl<'a> TypeInfo<'a> {
                 ident,
                 always_ref: true,
             },
+            TypeInfo::Flatten {
+                module,
+                ident,
+                types,
+                ..
+            } => TypeInfo::Flatten {
+                module,
+                ident,
+                always_ref: true,
+                types,
+            },
             s => s,
         }
     }
@@ -107,9 +129,17 @@ impl<'a> TypeInfo<'a> {
                 always_ref: *always_ref,
             },
             &TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind),
-            TypeInfo::Flatten(types) => {
-                OwnedTypeInfo::Flatten(types.iter().map(|&ty| ty.to_owned()).collect())
-            }
+            TypeInfo::Flatten {
+                module,
+                ident,
+                always_ref,
+                types,
+            } => OwnedTypeInfo::Flatten {
+                types: types.iter().map(|&ty| ty.to_owned()).collect(),
+                module: module.to_string(),
+                ident: ident.to_string(),
+                always_ref: *always_ref,
+            },
         }
     }
 
@@ -124,7 +154,26 @@ impl<'a> TypeInfo<'a> {
                 },
             ) => module == m && ident == i,
             (TypeInfo::Kind(kind), OwnedTypeInfo::Kind(other_kind)) => kind == other_kind,
-            (TypeInfo::Flatten(types), other) => types.iter().any(|ty| ty.contains(other)),
+            (
+                TypeInfo::Flatten {
+                    types,
+                    module,
+                    ident,
+                    ..
+                },
+                other,
+            ) => {
+                (if let OwnedTypeInfo::Path {
+                    module: m,
+                    ident: i,
+                    ..
+                } = other
+                {
+                    module == m && ident == i
+                } else {
+                    false
+                }) || types.iter().any(|ty| ty.contains(other))
+            }
             _ => false,
         }
     }
@@ -155,6 +204,17 @@ pub enum TypeKind {
     EnumVariant(EnumVariant),
     BitField(BitField),
     Any(OwnedTypeInfo),
+}
+
+impl TypeKind {
+    pub fn type_info(&self) -> OwnedTypeInfo {
+        match self {
+            TypeKind::Struct(s) => s.type_info.clone(),
+            TypeKind::EnumVariant(e) => e.enum_type_info.clone(),
+            TypeKind::BitField(b) => b.type_info.clone(),
+            TypeKind::Any(t) => t.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -195,10 +255,11 @@ impl Reference {
     pub fn get_module(&self) -> Option<Cow<str>> {
         match self {
             Reference::Any(type_info) => match type_info {
-                OwnedTypeInfo::Path { module, ident, .. } => {
+                OwnedTypeInfo::Path { module, ident, .. }
+                | OwnedTypeInfo::Flatten { module, ident, .. } => {
                     Some(Cow::Owned(format!("{module}::{ident}")))
                 }
-                OwnedTypeInfo::Kind(_) | OwnedTypeInfo::Flatten(_) => None,
+                OwnedTypeInfo::Kind(_) => None,
             },
             Reference::Specific { module, .. } => module.as_deref().map(Cow::Borrowed),
         }
