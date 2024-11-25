@@ -29,6 +29,7 @@ pub enum OwnedTypeInfo {
         module: String,
         ident: String,
         always_ref: bool,
+        attributes: Vec<String>,
     },
     Kind(ValueKind),
     Flatten {
@@ -65,6 +66,7 @@ impl OwnedTypeInfo {
             module: module.into(),
             ident: ident.into(),
             always_ref: false,
+            attributes: Vec::new(),
         }
     }
 }
@@ -75,6 +77,7 @@ pub enum TypeInfo<'a> {
         module: &'a str,
         ident: &'a str,
         always_ref: bool,
+        attributes: &'a [&'a str],
     },
     Kind(ValueKind),
     Flatten {
@@ -92,15 +95,22 @@ impl<'a> TypeInfo<'a> {
             module,
             ident,
             always_ref: false,
+            attributes: &[],
         }
     }
 
     pub const fn with_always_ref(self) -> Self {
         match self {
-            TypeInfo::Path { module, ident, .. } => TypeInfo::Path {
+            TypeInfo::Path {
+                module,
+                ident,
+                attributes,
+                ..
+            } => TypeInfo::Path {
                 module,
                 ident,
                 always_ref: true,
+                attributes,
             },
             TypeInfo::Flatten {
                 module,
@@ -117,16 +127,35 @@ impl<'a> TypeInfo<'a> {
         }
     }
 
+    pub const fn with_attributes(self, attributes: &'a [&'a str]) -> Self {
+        match self {
+            TypeInfo::Path {
+                module,
+                ident,
+                always_ref,
+                ..
+            } => TypeInfo::Path {
+                module,
+                ident,
+                always_ref,
+                attributes,
+            },
+            s => s,
+        }
+    }
+
     pub fn to_owned(&self) -> OwnedTypeInfo {
         match self {
             TypeInfo::Path {
                 module,
                 ident,
                 always_ref,
+                attributes,
             } => OwnedTypeInfo::Path {
                 module: module.to_string(),
                 ident: ident.to_string(),
                 always_ref: *always_ref,
+                attributes: attributes.iter().map(|s| s.to_string()).collect(),
             },
             &TypeInfo::Kind(kind) => OwnedTypeInfo::Kind(kind),
             TypeInfo::Flatten {

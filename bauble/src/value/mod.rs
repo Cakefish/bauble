@@ -134,6 +134,19 @@ impl Value {
             }
         )
     }
+    pub fn attributes(&self) -> &[String] {
+        let type_info = match self {
+            Value::Tuple(Some(type_info), _)
+            | Value::Struct(Some(type_info), _)
+            | Value::Enum(type_info, _, _) => type_info,
+            _ => return &[],
+        };
+
+        match type_info {
+            OwnedTypeInfo::Path { attributes, .. } => attributes,
+            _ => &[],
+        }
+    }
     pub fn kind(&self) -> ValueKind {
         match self {
             Value::Unit => ValueKind::Unit,
@@ -500,9 +513,15 @@ pub fn convert_values<C: AssetContext>(
         let name = format!("@{auto_value_idx:x}");
         let span = val.value.span;
 
-        // TODO: Possibly list possible attributes for a type info, and chose which to use for which value.
-        let attributes =
-            std::mem::replace(&mut val.attributes, Attributes::default().spanned(span));
+        let mut kept_attrs = Attributes::default().spanned(span);
+
+        for attr in val.value.attributes() {
+            if let Some(val) = val.attributes.0.remove(attr.as_str()) {
+                kept_attrs.0.insert(attr.clone().spanned(span), val);
+            }
+        }
+
+        let attributes = std::mem::replace(&mut val.attributes, kept_attrs);
 
         objects.push(create_object(&path, &name, val));
         auto_value_idx += 1;

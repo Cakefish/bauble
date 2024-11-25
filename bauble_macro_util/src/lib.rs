@@ -749,6 +749,8 @@ pub fn derive_bauble_derive_input(
         None => quote! { module_path!() },
     };
 
+    let mut field_attributes = Vec::new();
+
     // Generate code to deserialize this type
     let (type_info, match_value) = match &ast.data {
         Data::Struct(data) => {
@@ -756,6 +758,18 @@ pub fn derive_bauble_derive_input(
                 Ok(fields) => fields,
                 Err(err) => return err,
             };
+
+            for field in &fields.fields {
+                if matches!(
+                    field.ty,
+                    FieldTy::Val {
+                        attribute: true,
+                        ..
+                    }
+                ) {
+                    field_attributes.push(field.name.to_string());
+                }
+            }
 
             let case = derive_struct(
                 TypeInfo {
@@ -887,6 +901,17 @@ pub fn derive_bauble_derive_input(
                         Ok(fields) => fields,
                         Err(err) => return Some((quote! {}, err)),
                     };
+                    for field in &fields.fields {
+                        if matches!(
+                            field.ty,
+                            FieldTy::Val {
+                                attribute: true,
+                                ..
+                            }
+                        ) {
+                            field_attributes.push(field.name.to_string());
+                        }
+                    }
                     let derive = derive_struct(
                         TypeInfo {
                             ty: quote! { Self::#ident },
@@ -1019,6 +1044,14 @@ pub fn derive_bauble_derive_input(
         }
     } else {
         type_info
+    };
+
+    let type_info = if field_attributes.is_empty() {
+        type_info
+    } else {
+        quote! {
+            (#type_info).with_attributes(&[#(#field_attributes),*])
+        }
     };
 
     // Assemble the implementation
