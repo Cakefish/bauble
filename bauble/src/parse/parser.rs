@@ -151,7 +151,7 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
             let literal = just('#').ignore_then(
                 select! {
                     c if c.is_alphanumeric() => (),
-                    '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' => (),
+                    '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' | '/' | '\\' => (),
                 }
                     .repeated()
                     .to_slice()
