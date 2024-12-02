@@ -60,7 +60,7 @@ fireball_projectile = Projectile {
 ```
 
 For just a raw value after `#`, without using braces `{}`, the following characters are accepted:
- - Special characters: `!`, `#`, `@`, `%`, `&`, `?`, `.`, `=`, `<`, `>`, `_`, `-`, `+`, `*`
+ - Special characters: `!`, `#`, `@`, `%`, `&`, `?`, `.`, `=`, `<`, `>`, `_`, `-`, `+`, `*`, `/`, `\`
  - Alphabetical numerical characters, see (is_alphanumeric)[https://doc.rust-lang.org/std/primitive.char.html#method.is_alphanumeric].
 
 This list is hardcoded in the library, but the list of special characters could be expanded.
