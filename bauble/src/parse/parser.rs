@@ -1,6 +1,6 @@
-use std::fmt::Debug;
+use std::{borrow::Cow, fmt::Debug, rc::Rc};
 
-use chumsky::prelude::*;
+use chumsky::{prelude::*, text::Char};
 use indexmap::IndexMap;
 
 use crate::{
@@ -11,21 +11,186 @@ use crate::{
     spanned::{SpanExt, Spanned},
 };
 
-type Error<'a> = extra::Err<Rich<'a, char>>;
+type Extra<'a> = extra::Err<Rich<'a, char, crate::Span>>;
+
+#[derive(Clone)]
+pub struct ParserSource<'a, A> {
+    pub path: &'a str,
+    pub ctx: &'a A,
+}
+
+impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, A> {
+    type Span = crate::Span;
+
+    type Token = char;
+
+    type MaybeToken = char;
+
+    type Cursor = usize;
+
+    type Cache = (&'a str, Rc<str>);
+
+    fn begin(self) -> (Self::Cursor, Self::Cache) {
+        (
+            0,
+            (
+                self.ctx
+                    .get_source(self.path)
+                    .map(|s| s.text())
+                    .unwrap_or(""),
+                self.path.into(),
+            ),
+        )
+    }
+
+    fn cursor_location(cursor: &Self::Cursor) -> usize {
+        *cursor
+    }
+
+    #[inline(always)]
+    unsafe fn next_maybe(
+        (text, _): &mut Self::Cache,
+        cursor: &mut Self::Cursor,
+    ) -> Option<Self::MaybeToken> {
+        if *cursor < text.len() {
+            // SAFETY: `cursor < self.len()` above guarantees cursor is in-bounds
+            //         We only ever return cursors that are at a character boundary
+            let c = unsafe {
+                text.get_unchecked(*cursor..)
+                    .chars()
+                    .next()
+                    .unwrap_unchecked()
+            };
+            *cursor += c.len_utf8();
+            Some(c)
+        } else {
+            None
+        }
+    }
+
+    unsafe fn span(
+        (_, file): &mut Self::Cache,
+        range: std::ops::Range<&Self::Cursor>,
+    ) -> Self::Span {
+        crate::Span::new(file.clone(), *range.start..*range.end)
+    }
+}
+
+impl<'a, A: crate::AssetContext> chumsky::input::ValueInput<'a> for ParserSource<'a, A> {
+    unsafe fn next(cache: &mut Self::Cache, cursor: &mut Self::Cursor) -> Option<Self::Token> {
+        unsafe { Self::next_maybe(cache, cursor) }
+    }
+}
+
+impl<'a, A: crate::AssetContext> chumsky::input::ExactSizeInput<'a> for ParserSource<'a, A> {
+    unsafe fn span_from(
+        cache: &mut Self::Cache,
+        range: std::ops::RangeFrom<&Self::Cursor>,
+    ) -> Self::Span {
+        crate::Span::new(cache.1.clone(), *range.start..cache.0.len())
+    }
+}
+
+impl<'a, A: crate::AssetContext> chumsky::input::SliceInput<'a> for ParserSource<'a, A> {
+    type Slice = &'a str;
+
+    fn full_slice(cache: &mut Self::Cache) -> Self::Slice {
+        cache.0
+    }
+
+    unsafe fn slice(cache: &mut Self::Cache, range: std::ops::Range<&Self::Cursor>) -> Self::Slice {
+        unsafe { cache.0.get_unchecked(*range.start..*range.end) }
+    }
+
+    unsafe fn slice_from(
+        cache: &mut Self::Cache,
+        from: std::ops::RangeFrom<&Self::Cursor>,
+    ) -> Self::Slice {
+        unsafe { cache.0.get_unchecked(*from.start..) }
+    }
+}
+
+#[derive(Clone)]
+pub enum TextExpected<'src> {
+    /// Whitespace (for example: spaces, tabs, or newlines).
+    Whitespace,
+    /// Inline whitespace (for example: spaces or tabs).
+    InlineWhitespace,
+    /// A newline character or sequence.
+    Newline,
+    /// A numeric digit within the given radix range.
+    ///
+    /// For example:
+    ///
+    /// - `Digit(0..10)` implies any base-10 digit
+    /// - `Digit(1..16)` implies any non-zero hexadecimal digit
+    Digit(std::ops::Range<u32>),
+    /// Part of an identifier, either ASCII or unicode.
+    IdentifierPart,
+    /// A specific identifier.
+    Identifier(&'src str),
+}
+
+impl<'a, T> From<TextExpected<'a>> for chumsky::error::RichPattern<'a, T> {
+    fn from(value: TextExpected<'a>) -> Self {
+        match value {
+            TextExpected::Whitespace => Self::Label(Cow::Borrowed("whitespace")),
+            TextExpected::InlineWhitespace => Self::Label(Cow::Borrowed("inline whitespace")),
+            TextExpected::Newline => Self::Label(Cow::Borrowed("newline")),
+            TextExpected::Digit(r) if r.start > 0 => Self::Label(Cow::Borrowed("non-zero digit")),
+            TextExpected::Digit(_) => Self::Label(Cow::Borrowed("digit")),
+            TextExpected::IdentifierPart => Self::Label(Cow::Borrowed("identifier")),
+            TextExpected::Identifier(i) => Self::Identifier(i.to_string()),
+        }
+    }
+}
+
 // TODO Re-add error recovery
-pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
-    let comment_end = just('\n').or(end().map(|_| '\0'));
+pub fn parser<'a, A: crate::AssetContext + 'a>()
+-> impl Parser<'a, ParserSource<'a, A>, Values, Extra<'a>> {
+    let comment_end = just::<_, ParserSource<'a, A>, Extra<'a>>('\n').or(end().map(|_| '\0'));
     let comments = just("//")
-        .ignore_then(recursive::<'_, '_, &str, char, _, _, _>(|more_comment| {
-            comment_end.or(any().ignore_then(more_comment))
-        }))
+        .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
+            |more_comment| comment_end.or(any().ignore_then(more_comment)),
+        ))
         .ignored()
         .padded()
         .repeated()
         .padded(); // Have to pad again in case there are no repetitions
 
     // A rust identifier, use snake case.
-    let ident = text::ident()
+    let ident = any()
+        .try_map(|c: char, span| {
+            if c.is_ident_start() {
+                Ok(c)
+            } else {
+                Err(
+                    chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                        [TextExpected::IdentifierPart],
+                        Some(chumsky::util::MaybeRef::Val(c)),
+                        span,
+                    ),
+                )
+            }
+        })
+        .then(
+            any()
+                .try_map(|c: char, span| {
+                    if c.is_ident_continue() {
+                        Ok(c)
+                    } else {
+                        Err(
+                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                                [TextExpected::IdentifierPart],
+                                Some(chumsky::util::MaybeRef::Val(c)),
+                                span,
+                            ),
+                        )
+                    }
+                })
+                .repeated(),
+        )
+        .to_slice()
         .map_with(|ident: &str, e| ident.to_owned().spanned(e.span()))
         .padded();
 
@@ -40,44 +205,50 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
 
     let uses = just("use")
         .padded_by(comments.clone())
-        .ignore_then(recursive::<'_, '_, &str, Spanned<PathTreeNode>, _, _, _>(
-            |node| {
-                let path_end = path_end.map(PathTreeEnd::PathEnd);
-                let everything = just('*').map(|_| PathTreeEnd::Everything);
+        .ignore_then(recursive::<
+            '_,
+            '_,
+            ParserSource<'a, A>,
+            Spanned<PathTreeNode>,
+            _,
+            _,
+            _,
+        >(|node| {
+            let path_end = path_end.map(PathTreeEnd::PathEnd);
+            let everything = just('*').map(|_| PathTreeEnd::Everything);
 
-                let group = node
-                    .padded_by(comments.clone())
-                    .separated_by(just(',').padded_by(comments.clone()))
-                    .allow_trailing()
-                    .collect()
-                    .delimited_by(
-                        just('{').padded_by(comments.clone()),
-                        just('}').padded_by(comments.clone()),
-                    )
-                    .map(PathTreeEnd::Group);
-                path_start
-                    .map_with(|v, e| v.spanned(e.span()))
-                    .then(
-                        path_end
-                            .or(everything)
-                            .or(group)
-                            .map_with(|end, e| end.spanned(e.span())),
-                    )
-                    .map_with(|(start, end), e| {
-                        PathTreeNode {
-                            leading: start,
-                            end,
-                        }
-                        .spanned(e.span())
-                    })
-            },
-        ))
+            let group = node
+                .padded_by(comments.clone())
+                .separated_by(just(',').padded_by(comments.clone()))
+                .allow_trailing()
+                .collect()
+                .delimited_by(
+                    just('{').padded_by(comments.clone()),
+                    just('}').padded_by(comments.clone()),
+                )
+                .map(PathTreeEnd::Group);
+            path_start
+                .map_with(|v, e| v.spanned(e.span()))
+                .then(
+                    path_end
+                        .or(everything)
+                        .or(group)
+                        .map_with(|end, e| end.spanned(e.span())),
+                )
+                .map_with(|(start, end), e| {
+                    PathTreeNode {
+                        leading: start,
+                        end,
+                    }
+                    .spanned(e.span())
+                })
+        }))
         .then_ignore(just(';').padded_by(comments.clone()))
         .repeated()
         .collect();
 
     let object = recursive(
-        |object: Recursive<dyn Parser<'a, &'a str, Object, Error<'a>>>| {
+        |object: Recursive<dyn Parser<'a, ParserSource<'a, A>, Object, Extra<'a>>>| {
             let attribute = just('#').ignore_then(
                 ident
                     .padded_by(comments.clone())
@@ -103,11 +274,61 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
                 .map(|attributes| Attributes(attributes.value).spanned(attributes.span))
                 .boxed();
 
+            let int = any()
+                .try_map(move |c: char, span| {
+                    if c.is_ascii_digit() && c != char::digit_zero() {
+                        Ok(c)
+                    } else {
+                        Err(
+                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                                [TextExpected::Digit(1..10)],
+                                Some(chumsky::util::MaybeRef::Val(c)),
+                                span,
+                            ),
+                        )
+                    }
+                })
+                .then(
+                    any()
+                        .try_map(move |c: char, span| {
+                            if c.is_ascii_digit() {
+                                Ok(())
+                            } else {
+                                Err(chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                                    [TextExpected::Digit(0..10)],
+                                    Some(chumsky::util::MaybeRef::Val(c)),
+                                    span,
+                                ))
+                            }
+                        })
+                        .repeated(),
+                )
+                .ignored()
+                .or(just(char::digit_zero()).ignored())
+                .to_slice();
+
+            let digits = any()
+                .try_map(move |c: char, span| {
+                    if c.is_ascii_digit() {
+                        Ok(c)
+                    } else {
+                        Err(
+                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                                [TextExpected::Digit(0..10)],
+                                Some(chumsky::util::MaybeRef::Val(c)),
+                                span,
+                            ),
+                        )
+                    }
+                })
+                .repeated()
+                .at_least(1);
+
             // A number with or without decimals.
             let num = just('-')
                 .or_not()
-                .then(text::int(10))
-                .then(just('.').ignore_then(text::digits(10).to_slice()).or_not())
+                .then(int)
+                .then(just('.').ignore_then(digits.to_slice()).or_not())
                 .to_slice()
                 .try_map(|s: &str, span| {
                     Ok(Value::Num(s.parse().map_err(|_| {
@@ -330,13 +551,12 @@ pub fn parser<'a>() -> impl Parser<'a, &'a str, Values, Error<'a>> {
         },
     );
 
-    fn binding<'a, V: 'a + Debug>(
-        ident: impl 'a + Parser<'a, &'a str, Ident, extra::Err<Rich<'a, char>>>,
-        value: impl 'a + Parser<'a, &'a str, V, extra::Err<Rich<'a, char>>>,
-        path: impl 'a + Parser<'a, &'a str, Spanned<Path>, extra::Err<Rich<'a, char>>> + Clone,
-        comments: impl 'a + Clone + Parser<'a, &'a str, (), extra::Err<Rich<'a, char>>>,
-    ) -> impl Parser<'a, &'a str, (Ident, Option<Spanned<Path>>, V), extra::Err<Rich<'a, char>>>
-    {
+    fn binding<'a, V: 'a + Debug, A: crate::AssetContext + 'a>(
+        ident: impl 'a + Parser<'a, ParserSource<'a, A>, Ident, Extra<'a>>,
+        value: impl 'a + Parser<'a, ParserSource<'a, A>, V, Extra<'a>>,
+        path: impl 'a + Parser<'a, ParserSource<'a, A>, Spanned<Path>, Extra<'a>> + Clone,
+        comments: impl 'a + Clone + Parser<'a, ParserSource<'a, A>, (), Extra<'a>>,
+    ) -> impl Parser<'a, ParserSource<'a, A>, (Ident, Option<Spanned<Path>>, V), Extra<'a>> {
         ident
             .padded_by(comments.clone())
             .padded()

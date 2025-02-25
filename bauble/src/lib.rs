@@ -7,55 +7,42 @@ pub mod value;
 
 pub use bauble_macros::FromBauble;
 
-pub use chumsky::span::SimpleSpan;
 pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
+use spanned::Span;
 pub use spanned::{SpanExt, Spanned};
+use value::AssetContextCache;
 pub use value::{
-    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, TypeInfo, Val,
-    Value, ValueKind, convert_values,
+    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, Source, TypeInfo,
+    Val, Value, ValueKind, convert_values,
 };
 
 use parse::Values;
-pub fn parse(src: &str) -> Option<Values> {
-    use ariadne::{Color, Label, Report, ReportKind, Source};
+
+pub fn parse(path: &str, ctx: &impl AssetContext) -> Option<Values> {
+    use ariadne::{Color, Label, Report, ReportKind};
     use chumsky::Parser;
 
     let parser = parse::parser();
-    let result = parser.parse(src);
+    let result = parser.parse(parse::ParserSource { path, ctx });
 
     result.errors().for_each(|e| {
-        Report::build(ReportKind::Error, e.span().into_range())
+        Report::build(ReportKind::Error, e.span().clone())
             .with_message(e.to_string())
             .with_label(
-                Label::new(e.span().into_range())
+                Label::new(e.span().clone())
                     .with_message(e.reason().to_string())
                     .with_color(Color::Red),
             )
             .finish()
-            .eprint(Source::from(&src))
+            .eprint(AssetContextCache(ctx))
             .unwrap();
     });
 
     result.into_output()
 }
 
-/// Converts a source with no checks.
-pub fn simple_convert(src: &str) -> Result<Vec<Object>, Spanned<ConversionError>> {
-    let values =
-        parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
+pub fn convert(path: &str, ctx: impl AssetContext) -> Option<Vec<Object>> {
+    let values = parse(path, &ctx)?;
 
-    let ctx = value::NoChecks;
-
-    convert_values("".to_string(), values, &value::Symbols::new(&ctx), src)
-}
-
-pub fn convert(
-    src: &str,
-    file_name: impl Into<String>,
-    ctx: &impl AssetContext,
-) -> Result<Vec<Object>, Spanned<ConversionError>> {
-    let values =
-        parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
-
-    convert_values(file_name.into(), values, &value::Symbols::new(&ctx), src)
+    convert_values(path, values, &value::Symbols::new(&ctx))
 }

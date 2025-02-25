@@ -273,7 +273,7 @@ fn derive_fields(
                     .ok_or_else(|| ::bauble::DeserializeError::MissingAttribute {
                         attribute: stringify!(#name).to_owned(),
                         ty: Self::INFO.to_owned(),
-                        span,
+                        span: span.clone(),
                     })?
             }),
             (
@@ -310,7 +310,7 @@ fn derive_fields(
                                 expected: #val_count,
                                 found: #curr_value,
                                 ty: Self::INFO.to_owned(),
-                                span,
+                                span: span.clone(),
                             })?
                     }
                 }
@@ -320,7 +320,7 @@ fn derive_fields(
                         .ok_or_else(|| ::bauble::DeserializeError::MissingField {
                             field: stringify!(#name).to_owned(),
                             ty: Self::INFO.to_owned(),
-                            span,
+                            span: span.clone(),
                         })?
                 },
             }),
@@ -367,7 +367,7 @@ fn derive_fields(
                     expected: #field_count,
                     found: #val_count + length,
                     ty: Self::INFO.to_owned(),
-                    span,
+                    span: span.clone(),
                 })?
             }
         },
@@ -418,9 +418,9 @@ fn derive_fields(
                     ::bauble::FromBauble::from_bauble(::bauble::Val {
                         attributes: ::bauble::Spanned {
                             value: ::bauble::Attributes(attributes),
-                            span: attributes_span,
+                            span: attributes_span.clone(),
                         },
-                        value: ::bauble::Spanned { value, span },
+                        value: ::bauble::Spanned { value, span: span.clone() },
                     }, allocator)?,
                 )?
             },
@@ -816,7 +816,7 @@ pub fn derive_bauble_derive_input(
                                             expected: ::bauble::ValueKind::Struct,
                                             found: value_kind,
                                             ty: Self::INFO.to_owned(),
-                                            span,
+                                            span: span.clone(),
                                         }
                                     )?,
                                 }
@@ -825,7 +825,7 @@ pub fn derive_bauble_derive_input(
                                 expected: ::bauble::ValueKind::Struct,
                                 found: value_kind,
                                 ty: Self::INFO.to_owned(),
-                                span,
+                                span: span.clone(),
                             })?,
                         })
                     },
@@ -1010,7 +1010,7 @@ pub fn derive_bauble_derive_input(
                                 ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
                                     expected: ::bauble::ValueKind::Enum,
                                     found: v.kind(),
-                                    span,
+                                    span: span.clone(),
                                     ty: Self::INFO.to_owned(),
                                 })?
                             }
@@ -1078,7 +1078,7 @@ pub fn derive_bauble_derive_input(
             > {
                 let value_kind = value.kind();
                 let type_info = ::bauble::Spanned {
-                    span,
+                    span: span.clone(),
                     value: value.type_info(),
                 };
 

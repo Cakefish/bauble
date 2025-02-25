@@ -1,10 +1,10 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
-    Attributes, TypeInfo, Val, Value, ValueKind,
+    AssetContext, Attributes, TypeInfo, Val, Value, ValueKind,
     parse::{Ident, Path},
     spanned::{Span, SpanExt, Spanned},
-    value::{ConversionError, OwnedTypeInfo},
+    value::{AssetContextCache, OwnedTypeInfo},
 };
 use num_traits::ToPrimitive;
 
@@ -25,6 +25,24 @@ impl Display for VariantKind {
             Path => write!(f, "path"),
         }
     }
+}
+
+pub fn print_errors<T>(
+    res: Result<T, Box<DeserializeError>>,
+    ctx: &impl AssetContext,
+) -> Option<T> {
+    res.inspect_err(|err| {
+        let span = err.err_span();
+        use ariadne::{Color, Label, Report, ReportKind};
+
+        Report::build(ReportKind::Error, span.clone())
+            .with_message(err.to_string())
+            .with_label(Label::new(span).with_message("Here").with_color(Color::Red))
+            .finish()
+            .eprint(AssetContextCache(ctx))
+            .unwrap();
+    })
+    .ok()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,7 +116,6 @@ pub enum DeserializeError {
         message: String,
         span: Span,
     },
-    Conversion(Spanned<ConversionError>),
     MissingAttribute {
         attribute: String,
         ty: OwnedTypeInfo,
@@ -117,91 +134,82 @@ impl Display for DeserializeError {
         match self {
             WrongTypePath {
                 expected,
-                found: Spanned { span, value },
-            } => write!(f, "{span}: expected path `{expected}`, found `{value}`"),
-            MissingTypePath { ty: Some(ty), span } => write!(f, "{span}: missing type path `{ty}`"),
-            MissingTypePath { ty: None, span } => write!(f, "{span}: missing type path"),
+                found: Spanned { value, .. },
+            } => write!(f, "Expected path `{expected}`, found `{value}`"),
+            MissingTypePath { ty: Some(ty), .. } => write!(f, "Missing type path `{ty}`"),
+            MissingTypePath { ty: None, .. } => write!(f, "Missing type path"),
             UnexpectedTypePath {
-                ty: Spanned { span, value },
-            } => write!(f, "{span}: unexpected type path `{value}`"),
-            MissingField { field, ty, span } => {
-                write!(f, "{span}: missing field `{field}` in `{ty}`")
+                ty: Spanned { value, .. },
+            } => write!(f, "Unexpected type path `{value}`"),
+            MissingField { field, ty, .. } => {
+                write!(f, "Missing field `{field}` in `{ty}`")
             }
             UnexpectedField {
-                field: Spanned { span, value },
+                field: Spanned { value, .. },
                 ty,
-            } => write!(f, "{span}: unexpected field `{value}` in `{ty}`"),
+            } => write!(f, "Unexpected field `{value}` in `{ty}`"),
             WrongTupleLength {
                 expected,
                 found,
                 ty,
-                span,
+                ..
             } => write!(
                 f,
-                "{span}: wrong tuple length, expected `{expected}`, found `{found}` in `{ty}`"
+                "Wrong tuple length, expected `{expected}`, found `{found}` in `{ty}`"
             ),
             WrongArrayLength {
                 expected,
                 found,
                 ty,
-                span,
+                ..
             } => write!(
                 f,
-                "{span}: wrong array length, expected `{expected}`, found `{found}` in `{ty}`"
+                "Wrong array length, expected `{expected}`, found `{found}` in `{ty}`"
             ),
             UnknownVariant {
-                variant: Spanned { span, value },
+                variant: Spanned { value, .. },
                 kind,
                 ty,
-            } => write!(
-                f,
-                "{span}: unknown variant `{value}` of kind {kind} in `{ty}`"
-            ),
+            } => write!(f, "Unknown variant `{value}` of kind {kind} in `{ty}`"),
             UnknownFlattenedVariant {
-                variant: Spanned { span, value },
+                variant: Spanned { value, .. },
                 ty,
-            } => write!(f, "{span}: unknown flattened variant `{value}` in `{ty}`"),
+            } => write!(f, "Unknown flattened variant `{value}` in `{ty}`"),
             WrongFields {
                 found,
                 expected,
                 ty,
-                span,
+                ..
             } => write!(
                 f,
-                "{span}: wrong fields, expected {expected}, found {found} in `{ty}`"
+                "wrong fields, expected {expected}, found {found} in `{ty}`"
             ),
-            MissingVariantName { ty, span } => {
-                write!(f, "{span}: missing variant name in `{ty}`")
+            MissingVariantName { ty, .. } => {
+                write!(f, "Missing variant name in `{ty}`")
             }
             NotAVariant {
                 ty,
-                path: Spanned { span, value },
-            } => write!(f, "{span}: `{value}` is not a variant of `{ty}`"),
+                path: Spanned { value, .. },
+            } => write!(f, "`{value}` is not a variant of `{ty}`"),
             UnexpectedAttribute {
-                attribute: Spanned { span, value },
+                attribute: Spanned { value, .. },
                 ty,
-            } => write!(f, "{span}: unexpected attribute `{value}` in `{ty}`"),
+            } => write!(f, "Unexpected attribute `{value}` in `{ty}`"),
             WrongKind {
                 expected,
                 found,
                 ty,
-                span,
+                ..
             } => write!(
                 f,
-                "{span}: wrong kind, expected {expected}, found {found} in `{ty}`"
+                "Wrong kind, expected {expected}, found {found} in `{ty}`"
             ),
-            Custom { message, span } => write!(f, "{span}: {message}"),
-            Conversion(Spanned { span, value }) => write!(f, "{span}: {value}"),
-            MissingAttribute {
-                attribute,
-                ty,
-                span,
-            } => write!(
-                f,
-                "{span}: expected attribute {attribute} to be present in `{ty}`"
-            ),
-            UnknownType { expected, span } => {
-                write!(f, "{span}: Unknown type, expected type `{expected}`")
+            Custom { message, .. } => write!(f, "{message}"),
+            MissingAttribute { attribute, ty, .. } => {
+                write!(f, "Expected attribute {attribute} to be present in `{ty}`")
+            }
+            UnknownType { expected, .. } => {
+                write!(f, "Unknown type, expected type `{expected}`")
             }
         }
     }
@@ -213,45 +221,44 @@ impl DeserializeError {
     pub fn err_span(&self) -> Span {
         use DeserializeError::*;
 
-        let (&WrongTypePath {
+        let (WrongTypePath {
             found: Spanned { span, .. },
             ..
         }
-        | &MissingTypePath { span, .. }
-        | &UnexpectedTypePath {
+        | MissingTypePath { span, .. }
+        | UnexpectedTypePath {
             ty: Spanned { span, .. },
         }
-        | &MissingField { span, .. }
-        | &UnexpectedField {
+        | MissingField { span, .. }
+        | UnexpectedField {
             field: Spanned { span, .. },
             ..
         }
-        | &WrongTupleLength { span, .. }
-        | &WrongArrayLength { span, .. }
-        | &UnknownVariant {
+        | WrongTupleLength { span, .. }
+        | WrongArrayLength { span, .. }
+        | UnknownVariant {
             variant: Spanned { span, .. },
             ..
         }
-        | &UnknownFlattenedVariant {
+        | UnknownFlattenedVariant {
             variant: Spanned { span, .. },
             ..
         }
-        | &WrongFields { span, .. }
-        | &MissingVariantName { span, .. }
-        | &NotAVariant {
+        | WrongFields { span, .. }
+        | MissingVariantName { span, .. }
+        | NotAVariant {
             path: Spanned { span, .. },
             ..
         }
-        | &UnexpectedAttribute {
+        | UnexpectedAttribute {
             attribute: Spanned { span, .. },
             ..
         }
-        | &WrongKind { span, .. }
-        | &Custom { span, .. }
-        | &Conversion(Spanned { span, .. })
-        | &MissingAttribute { span, .. }
-        | &UnknownType { span, .. }) = self;
-        span
+        | WrongKind { span, .. }
+        | Custom { span, .. }
+        | MissingAttribute { span, .. }
+        | UnknownType { span, .. }) = self;
+        span.clone()
     }
 }
 
@@ -464,7 +471,7 @@ macro_rules! impl_tuple {
                     (Tuple(name, seq), span) => {
                         if let Some(name) = name {
                             Err(DeserializeError::UnexpectedTypePath {
-                                ty: name.spanned(span),
+                                ty: name.spanned(span.clone()),
                             })?
                         }
 
@@ -489,7 +496,7 @@ macro_rules! impl_tuple {
                                 expected: LEN,
                                 found: seq.len(),
                                 ty: Self::INFO.to_owned(),
-                                span,
+                                span: span.clone(),
                             }))?
                         }
                     }

@@ -364,6 +364,27 @@ pub trait AssetContext: Clone {
     /// If there is only one valid `Reference` with the identifier `ident`
     /// somewhere in a child path of `path`, return that.
     fn with_ident(&self, path: &str, ident: &str) -> Option<Reference>;
+
+    fn get_source(&self, path: &str) -> Option<&Source>;
+}
+
+pub struct AssetContextCache<A>(pub A);
+
+impl<'a, S: AsRef<str>, A: AssetContext + 'a> ariadne::Cache<S> for AssetContextCache<&'a A> {
+    type Storage = String;
+
+    fn fetch(
+        &mut self,
+        id: &S,
+    ) -> Result<&ariadne::Source<Self::Storage>, Box<dyn std::fmt::Debug + '_>> {
+        self.0
+            .get_source(id.as_ref())
+            .ok_or_else(|| Box::new("Path not found") as _)
+    }
+
+    fn display<'b>(&self, id: &'b S) -> Option<Box<dyn std::fmt::Display + 'b>> {
+        Some(Box::new(id.as_ref()))
+    }
 }
 
 impl<T: AssetContext> AssetContext for &T {
@@ -377,6 +398,10 @@ impl<T: AssetContext> AssetContext for &T {
 
     fn with_ident(&self, path: &str, ident: &str) -> Option<Reference> {
         (*self).with_ident(path, ident)
+    }
+
+    fn get_source(&self, path: &str) -> Option<&Source> {
+        (*self).get_source(path)
     }
 }
 
@@ -400,10 +425,18 @@ impl<A: AssetContext, B: AssetContext> AssetContext for OrContext<A, B> {
             .with_ident(path, ident)
             .or_else(|| self.b.with_ident(path, ident))
     }
+
+    fn get_source(&self, path: &str) -> Option<&Source> {
+        self.a.get_source(path).or_else(|| self.b.get_source(path))
+    }
 }
 
+pub type Source = ariadne::Source<String>;
+
 #[derive(Clone)]
-pub struct NoChecks;
+pub struct NoChecks {
+    pub src: Source,
+}
 
 impl AssetContext for NoChecks {
     fn get_ref(&self, path: &str) -> Option<Reference> {
@@ -418,5 +451,9 @@ impl AssetContext for NoChecks {
 
     fn with_ident(&self, _path: &str, _ident: &str) -> Option<Reference> {
         None
+    }
+
+    fn get_source(&self, _file: &str) -> Option<&Source> {
+        Some(&self.src)
     }
 }
