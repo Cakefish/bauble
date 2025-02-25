@@ -2,7 +2,7 @@
 name = "bauble_macros"
 version = "0.0.0"
 authors = ["Cakefish <cakefish@cakefish.com>"]
-edition = "2021"
+edition = "2024"
 description = "An extensible file format built for asset systems"
 repository = "https://github.com/Cakefish/bauble"
 license = "MIT OR Apache-2.0"
