@@ -22,7 +22,7 @@ fn main() {
     println!("Done!");
 
     result.errors().for_each(|e| {
-        Report::build(ReportKind::Error, (), e.span().start)
+        Report::build(ReportKind::Error, e.span().into_range())
             .with_code(3)
             .with_message(e.to_string())
             .with_label(

@@ -516,7 +516,7 @@ pub fn convert_values<C: AssetContext>(
         let mut kept_attrs = Attributes::default().spanned(span);
 
         for attr in val.value.attributes() {
-            if let Some(val) = val.attributes.0.remove(attr.as_str()) {
+            if let Some(val) = val.attributes.0.shift_remove(attr.as_str()) {
                 kept_attrs.0.insert(attr.clone().spanned(span), val);
             }
         }
@@ -566,13 +566,10 @@ pub fn convert_values<C: AssetContext>(
 
         for e in parsed_objects
             .iter()
-            .filter_map(|res| match res {
-                Err(e) => Some(e),
-                Ok(_) => None,
-            })
+            .filter_map(|r| r.as_ref().err())
             .chain(use_errors.iter())
         {
-            Report::build(ReportKind::Error, (), e.span.start)
+            Report::build(ReportKind::Error, e.span.into_range())
                 .with_message(e.to_string())
                 .with_label(
                     Label::new(e.span.into_range())

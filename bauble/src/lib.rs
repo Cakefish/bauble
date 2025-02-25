@@ -24,7 +24,7 @@ pub fn parse(src: &str) -> Option<Values> {
     let result = parser.parse(src);
 
     result.errors().for_each(|e| {
-        Report::build(ReportKind::Error, (), e.span().start)
+        Report::build(ReportKind::Error, e.span().into_range())
             .with_message(e.to_string())
             .with_label(
                 Label::new(e.span().into_range())
