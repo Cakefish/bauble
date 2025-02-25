@@ -1,10 +1,10 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
+    Attributes, TypeInfo, Val, Value, ValueKind,
     parse::{Ident, Path},
     spanned::{Span, SpanExt, Spanned},
     value::{ConversionError, OwnedTypeInfo},
-    Attributes, TypeInfo, Val, Value, ValueKind,
 };
 use num_traits::ToPrimitive;
 

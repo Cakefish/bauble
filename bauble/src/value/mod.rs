@@ -4,9 +4,9 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
 use crate::{
+    VariantKind,
     parse::{self, Object as ParseObject, Path, PathEnd, PathTreeEnd, Use, Values},
     spanned::{SpanExt, Spanned},
-    VariantKind,
 };
 
 mod asset_context;
@@ -770,7 +770,7 @@ fn convert_value<C: AssetContext>(
                             return Err(ConversionError::ExpectedTupleFields.spanned(path.span));
                         }
                         TypeKind::BitField(_) => {
-                            return Err(ConversionError::ExpectedType.spanned(path.span))
+                            return Err(ConversionError::ExpectedType.spanned(path.span));
                         }
                     },
                     Err(err) => return Err(err),
@@ -822,7 +822,7 @@ fn convert_value<C: AssetContext>(
                             return Err(ConversionError::ExpectedFields.spanned(path.span));
                         }
                         TypeKind::BitField(_) => {
-                            return Err(ConversionError::ExpectedType.spanned(path.span))
+                            return Err(ConversionError::ExpectedType.spanned(path.span));
                         }
                     },
                     Err(conversion_error) => {

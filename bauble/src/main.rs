@@ -2,9 +2,9 @@ use std::{fs::File, io::Read};
 
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use bauble::{
-    parse::{self},
-    value::{convert_values, NoChecks, Symbols},
     DefaultAllocator, FromBauble,
+    parse::{self},
+    value::{NoChecks, Symbols, convert_values},
 };
 use chumsky::Parser;
 
