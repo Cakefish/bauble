@@ -1,4 +1,4 @@
-#![feature(iterator_try_collect)]
+#![feature(iterator_try_collect, let_chains)]
 
 pub mod convert;
 pub mod parse;
@@ -8,8 +8,7 @@ pub mod value;
 pub use bauble_macros::FromBauble;
 
 pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
-use spanned::Span;
-pub use spanned::{SpanExt, Spanned};
+pub use spanned::{Span, SpanExt, Spanned};
 use value::AssetContextCache;
 pub use value::{
     AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, Source, TypeInfo,

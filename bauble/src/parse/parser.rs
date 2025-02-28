@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt::Debug, rc::Rc};
+use std::{borrow::Cow, fmt::Debug, sync::Arc};
 
 use chumsky::{prelude::*, text::Char};
 use indexmap::IndexMap;
@@ -28,7 +28,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
 
     type Cursor = usize;
 
-    type Cache = (&'a str, Rc<str>);
+    type Cache = (&'a str, Arc<str>);
 
     fn begin(self) -> (Self::Cursor, Self::Cache) {
         (

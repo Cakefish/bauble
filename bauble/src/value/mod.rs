@@ -123,16 +123,7 @@ impl Value {
             _ => return false,
         };
 
-        matches!(
-            type_info,
-            OwnedTypeInfo::Path {
-                always_ref: true,
-                ..
-            } | OwnedTypeInfo::Flatten {
-                always_ref: true,
-                ..
-            }
-        )
+        type_info.is_always_ref()
     }
     pub fn attributes(&self) -> &[String] {
         let type_info = match self {
@@ -490,9 +481,13 @@ pub fn convert_values<C: AssetContext>(
     }
 
     let mut objects = Vec::new();
-    let mut auto_value_idx = 0;
-    let mut add_value = |mut val: Val| {
-        let name = format!("@{auto_value_idx:x}");
+    let mut name_allocs = HashMap::new();
+    let mut add_value = |name: &str, mut val: Val| {
+        let idx = *name_allocs
+            .entry(name.to_string())
+            .and_modify(|i| *i += 1u64)
+            .or_insert(0);
+        let name = format!("{name}@{idx}");
         let span = val.value.span();
 
         let mut kept_attrs = Attributes::default().spanned(span.clone());
@@ -506,7 +501,6 @@ pub fn convert_values<C: AssetContext>(
         let attributes = std::mem::replace(&mut val.attributes, kept_attrs);
 
         objects.push(create_object(path, &name, val));
-        auto_value_idx += 1;
         Val {
             value: Value::Ref(format!("{path}::{name}")).spanned(span),
             attributes,
@@ -534,6 +528,7 @@ pub fn convert_values<C: AssetContext>(
                     &symbols,
                     &mut add_value,
                     false,
+                    &item,
                 ) {
                     Ok(v) => v,
                     Err(err) => {
@@ -639,9 +634,11 @@ fn find_copy_refs<'a, C: AssetContext>(
 fn convert_value<C: AssetContext>(
     value: &ParseObject,
     symbols: &Symbols<C>,
-    add_value: &mut impl FnMut(Val) -> Val,
+    add_value: &mut impl FnMut(&str, Val) -> Val,
     is_root: bool,
+    object_name: &str,
 ) -> Result<Val> {
+    let attr_name = format!("{object_name}@attr");
     let attributes = Attributes(
         value
             .attributes
@@ -650,11 +647,28 @@ fn convert_value<C: AssetContext>(
             .map(|(ident, value)| {
                 Ok((
                     ident.clone(),
-                    convert_value(value, symbols, add_value, false)?,
+                    convert_value(value, symbols, add_value, false, &attr_name)?,
                 ))
             })
             .try_collect()?,
     );
+
+    let (add_new_value, object_name) = if !is_root
+        && let Some(type_path) = value.value.type_path()
+        && let Ok(type_info) = symbols.resolve_type(type_path).map(|t| t.type_info())
+        && type_info.is_always_ref()
+        && let Some(type_path) = type_info.path()
+    {
+        (
+            true,
+            // NOTE: We do this to try and have the same type for a certain temp value ident. And we don't
+            // want `::` in an ident.
+            // TODO: @perf when we have type ids, use that here to differentiate and get shorter strings.
+            &*format!("{object_name}@{}", type_path.to_string().replace("::", ":")),
+        )
+    } else {
+        (false, object_name)
+    };
 
     let val = match &value.value.value {
         parse::Value::Num(num) => Value::Num(*num),
@@ -728,8 +742,8 @@ fn convert_value<C: AssetContext>(
             map.iter()
                 .map(|(key, value)| {
                     Ok((
-                        convert_value(key, symbols, add_value, false)?,
-                        convert_value(value, symbols, add_value, false)?,
+                        convert_value(key, symbols, add_value, false, object_name)?,
+                        convert_value(value, symbols, add_value, false, object_name)?,
                     ))
                 })
                 .try_collect()?,
@@ -741,7 +755,7 @@ fn convert_value<C: AssetContext>(
                     .map(|(field, value)| {
                         Ok((
                             field.clone(),
-                            convert_value(value, symbols, add_value, false)?,
+                            convert_value(value, symbols, add_value, false, object_name)?,
                         ))
                     })
                     .try_collect()?,
@@ -794,7 +808,7 @@ fn convert_value<C: AssetContext>(
         parse::Value::Tuple { name, fields } => {
             let fields = fields
                 .iter()
-                .map(|val| convert_value(val, symbols, add_value, false))
+                .map(|val| convert_value(val, symbols, add_value, false, object_name))
                 .try_collect()?;
             match name {
                 Some(path) => match symbols.resolve_type(path) {
@@ -860,7 +874,7 @@ fn convert_value<C: AssetContext>(
             // TODO: Check for type?
             Value::Array(
                 arr.iter()
-                    .map(|val| convert_value(val, symbols, add_value, false))
+                    .map(|val| convert_value(val, symbols, add_value, false, object_name))
                     .try_collect()?,
             )
         }
@@ -896,8 +910,8 @@ fn convert_value<C: AssetContext>(
         attributes: attributes.spanned(value.attributes.span()),
     };
 
-    if !is_root && val.value.is_always_ref() {
-        val = add_value(val);
+    if add_new_value {
+        val = add_value(object_name, val);
     }
 
     Ok(val)
@@ -909,17 +923,16 @@ fn convert_object<C: AssetContext>(
     name: &str,
     value: &ParseObject,
     symbols: &Symbols<C>,
-    add_value: &mut impl FnMut(Val) -> Val,
+    add_value: &mut impl FnMut(&str, Val) -> Val,
 ) -> Result<Object> {
-    let value = convert_value(value, symbols, add_value, true)?;
+    let value = convert_value(value, symbols, add_value, true, name)?;
 
     Ok(create_object(path, name, value))
 }
 
 fn create_object(path: &str, name: &str, value: Val) -> Object {
     Object {
-        // TODO: Create an object path.
-        object_path: name.to_string(),
+        object_path: format!("{path}::{name}"),
         type_path: None,
         path: path.to_string(),
         value,

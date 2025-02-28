@@ -69,6 +69,29 @@ impl OwnedTypeInfo {
             attributes: Vec::new(),
         }
     }
+
+    pub fn path(&self) -> Option<String> {
+        if let OwnedTypeInfo::Path { module, ident, .. }
+        | OwnedTypeInfo::Flatten { module, ident, .. } = self
+        {
+            Some(format!("{module}::{ident}"))
+        } else {
+            None
+        }
+    }
+
+    pub fn is_always_ref(&self) -> bool {
+        matches!(
+            self,
+            OwnedTypeInfo::Path {
+                always_ref: true,
+                ..
+            } | OwnedTypeInfo::Flatten {
+                always_ref: true,
+                ..
+            }
+        )
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -407,8 +430,8 @@ impl<T: AssetContext> AssetContext for &T {
 
 #[derive(Clone)]
 pub struct OrContext<A: AssetContext, B: AssetContext> {
-    a: A,
-    b: B,
+    pub a: A,
+    pub b: B,
 }
 
 impl<A: AssetContext, B: AssetContext> AssetContext for OrContext<A, B> {

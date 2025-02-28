@@ -222,6 +222,14 @@ impl Value {
             Value::Error => "error",
         }
     }
+
+    pub fn type_path(&self) -> Option<&Spanned<Path>> {
+        match self {
+            Value::Path(name) => Some(name),
+            Value::Struct { name, .. } | Value::Tuple { name, .. } => name.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Value {

@@ -4,52 +4,69 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     ops::{Deref, DerefMut, Range},
-    rc::Rc,
+    sync::Arc,
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Span {
-    start: usize,
-    end: usize,
-    file: Rc<str>,
+    pub start: usize,
+    pub end: usize,
+    path: Arc<str>,
 }
 
 impl std::fmt::Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}>:{}..{}", self.file, self.start, self.end)
+        write!(f, "<{}>:{}..{}", self.path, self.start, self.end)
     }
 }
 
 impl Span {
-    pub fn new(file: impl Into<Rc<str>>, range: Range<usize>) -> Self {
+    pub fn new(file: impl Into<Arc<str>>, range: Range<usize>) -> Self {
         Self {
             start: range.start,
             end: range.end,
-            file: file.into(),
+            path: file.into(),
         }
     }
     pub fn empty() -> Self {
         Self {
             start: 0,
             end: 0,
-            file: "".into(),
+            path: "".into(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    pub fn sub_span(&self, range: Range<usize>) -> Span {
+        Span {
+            path: self.path.clone(),
+            start: self.start + range.start,
+            end: self.end + range.end,
         }
     }
 }
 
 impl chumsky::span::Span for crate::Span {
-    type Context = Rc<str>;
+    type Context = Arc<str>;
     type Offset = usize;
 
     fn new(context: Self::Context, range: Range<Self::Offset>) -> Self {
         Self {
             start: range.start,
             end: range.end,
-            file: context,
+            path: context,
         }
     }
     fn context(&self) -> Self::Context {
-        self.file.clone()
+        self.path.clone()
     }
     fn start(&self) -> Self::Offset {
         self.start
@@ -60,10 +77,10 @@ impl chumsky::span::Span for crate::Span {
 }
 
 impl ariadne::Span for Span {
-    type SourceId = Rc<str>;
+    type SourceId = Arc<str>;
 
     fn source(&self) -> &Self::SourceId {
-        &self.file
+        &self.path
     }
 
     fn start(&self) -> usize {
