@@ -403,10 +403,17 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 )
                 .map(Value::Array);
 
-            let tuple = sequence.delimited_by(
-                just('(').padded_by(comments.clone()),
-                just(')').padded_by(comments.clone()),
-            );
+            let tuple = sequence
+                .delimited_by(
+                    just('(').padded_by(comments.clone()),
+                    just(')').padded_by(comments.clone()),
+                )
+                .recover_with(via_parser(nested_delimiters(
+                    '(',
+                    ')',
+                    [('{', '}'), ('[', ']')],
+                    |_| Vec::new(),
+                )));
 
             let structure = ident
                 .padded_by(comments.clone())
@@ -421,7 +428,13 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                     just('{').padded_by(comments.clone()),
                     just('}').padded_by(comments.clone()),
                 )
-                .map(|fields| fields.into_iter().collect());
+                .map(|fields| fields.into_iter().collect())
+                .recover_with(via_parser(nested_delimiters(
+                    '{',
+                    '}',
+                    [('[', ']'), ('(', ')')],
+                    |_| crate::parse::Fields::new(),
+                )));
 
             let reference = just('$').ignore_then(path).map_with(|path, e| {
                 // We have at least 1 element in the path.
@@ -466,6 +479,12 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                     just('{').padded_by(comments.clone()),
                     just('}').padded_by(comments.clone()),
                 )
+                .recover_with(via_parser(nested_delimiters(
+                    '{',
+                    '}',
+                    [('[', ']'), ('(', ')')],
+                    |_| Vec::new(),
+                )))
                 .map(Value::Map);
 
             // Parser for a tuple.
@@ -514,30 +533,12 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 raw,
                 literal,
             ))
-            .recover_with(via_parser(nested_delimiters(
-                '{',
-                '}',
-                [('[', ']'), ('(', ')')],
-                |_| Value::Error,
-            )))
-            .recover_with(via_parser(nested_delimiters(
-                '[',
-                ']',
-                [('{', '}'), ('(', ')')],
-                |_| Value::Error,
-            )))
-            .recover_with(via_parser(nested_delimiters(
-                '(',
-                ')',
-                [('{', '}'), ('[', ']')],
-                |_| Value::Error,
-            )));
             // TODO Get this recovery method working again
             //
-            // .recover_with(skip_then_retry_until(
-            //     any().ignored(),
-            //     one_of(['}', ']', ')']),
-            // ));
+            .recover_with(skip_then_retry_until(
+                any().ignored(),
+                one_of(['}', ']', ')']).ignored(),
+            ));
 
             attributes
                 .then(

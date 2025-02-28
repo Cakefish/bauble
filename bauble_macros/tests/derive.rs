@@ -1,4 +1,4 @@
-use bauble::{FromBauble, Source, convert::print_errors, value::NoChecks};
+use bauble::{FromBauble, Source, error::print_errors, value::NoChecks};
 
 fn simple_convert<'a, T: FromBauble<'a>>(
     src: &str,
@@ -8,7 +8,7 @@ fn simple_convert<'a, T: FromBauble<'a>>(
     let ctx = NoChecks {
         src: Source::from(src.to_string()),
     };
-    let objects = bauble::convert("test", &ctx)?;
+    let objects = print_errors(bauble::convert("test", &ctx), &ctx)?;
     for object in objects {
         if object.object_path.ends_with(object_name) {
             return print_errors(T::from_bauble(object.value, alloc), &ctx);

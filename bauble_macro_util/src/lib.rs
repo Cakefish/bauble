@@ -269,12 +269,12 @@ fn derive_fields(
                 _,
             ) => Some(quote! {
                 attributes
-                    .remove(stringify!(#name))
-                    .ok_or_else(|| ::bauble::DeserializeError::MissingAttribute {
+                    .shift_remove(stringify!(#name))
+                    .ok_or_else(|| ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::MissingAttribute {
                         attribute: stringify!(#name).to_owned(),
+                        attributes_span: attributes_span.clone(),
                         ty: Self::INFO.to_owned(),
-                        span: span.clone(),
-                    })?
+                    }))?
             }),
             (
                 FieldTy::Val {
@@ -285,7 +285,7 @@ fn derive_fields(
                 _,
             ) => Some(quote! {
                 attributes
-                    .remove(stringify!(#name))
+                    .shift_remove(stringify!(#name))
             }),
             (
                 FieldTy::Val {
@@ -306,22 +306,20 @@ fn derive_fields(
                     quote! {
                         fields
                             .next()
-                            .ok_or_else(|| ::bauble::DeserializeError::WrongTupleLength {
+                            .ok_or_else(|| ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongTupleLength {
                                 expected: #val_count,
                                 found: #curr_value,
                                 ty: Self::INFO.to_owned(),
-                                span: span.clone(),
-                            })?
+                            }))?
                     }
                 }
                 false => quote! {
                     fields
-                        .remove(stringify!(#name))
-                        .ok_or_else(|| ::bauble::DeserializeError::MissingField {
+                        .shift_remove(stringify!(#name))
+                        .ok_or_else(|| ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::MissingField {
                             field: stringify!(#name).to_owned(),
                             ty: Self::INFO.to_owned(),
-                            span: span.clone(),
-                        })?
+                        }))?
                 },
             }),
             (
@@ -344,7 +342,7 @@ fn derive_fields(
                     }
                     false => quote! {
                         fields
-                            .remove(stringify!(#name))
+                            .shift_remove(stringify!(#name))
                     },
                 })
             }
@@ -363,22 +361,21 @@ fn derive_fields(
 
             let length = fields.len();
             if length != 0 {
-                ::std::result::Result::Err(::bauble::DeserializeError::WrongTupleLength {
+                ::std::result::Result::Err(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongTupleLength {
                     expected: #field_count,
                     found: #val_count + length,
                     ty: Self::INFO.to_owned(),
-                    span: span.clone(),
-                })?
+                }))?
             }
         },
         (false, false) => quote! {
             let values = (#( #values, )*);
 
             if let ::std::option::Option::Some((field, _)) = fields.into_iter().next() {
-                ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedField {
+                ::std::result::Result::Err(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnexpectedField {
                     field,
                     ty: Self::INFO.to_owned(),
-                })?
+                }))?
             }
         },
     };
@@ -386,10 +383,10 @@ fn derive_fields(
     let check_attributes = (!flatten).then(|| {
         quote! {
             if let ::std::option::Option::Some((attribute, _)) = attributes.into_iter().next() {
-                ::std::result::Result::Err(::bauble::DeserializeError::UnexpectedAttribute {
+                ::std::result::Result::Err(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnexpectedAttribute {
                     attribute,
                     ty: Self::INFO.to_owned(),
-                })?
+                }))?
             }
         }
     });
@@ -812,21 +809,19 @@ pub fn derive_bauble_derive_input(
                                 match fields {
                                     #case
                                     _ => ::std::result::Result::Err(
-                                        ::bauble::DeserializeError::WrongKind {
+                                        ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongKind {
                                             expected: ::bauble::ValueKind::Struct,
                                             found: value_kind,
                                             ty: Self::INFO.to_owned(),
-                                            span: span.clone(),
-                                        }
+                                        })
                                     )?,
                                 }
                             }
-                            _ => ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
+                            _ => ::std::result::Result::Err(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongKind {
                                 expected: ::bauble::ValueKind::Struct,
                                 found: value_kind,
                                 ty: Self::INFO.to_owned(),
-                                span: span.clone(),
-                            })?,
+                            }))?,
                         })
                     },
                 ),
@@ -948,11 +943,11 @@ pub fn derive_bauble_derive_input(
                                 stringify!(#ident) => match fields {
                                     #derive
                                     _ => ::std::result::Result::Err(
-                                        ::bauble::DeserializeError::UnknownVariant {
+                                        ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnknownVariant {
                                             variant: name,
                                             kind: fields.variant_kind(),
                                             ty: Self::INFO.to_owned(),
-                                        }
+                                        })
                                     )?,
                                 },
                             },
@@ -981,10 +976,10 @@ pub fn derive_bauble_derive_input(
                             // TODO Perhaps this can be fixed by setting local `const`s
                             #(#variant_convert)* {
                                 ::std::result::Result::Err(
-                                    ::bauble::DeserializeError::UnknownFlattenedVariant {
+                                    ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnknownFlattenedVariant {
                                         variant: type_info,
                                         ty: Self::INFO.to_owned(),
-                                    }
+                                    })
                                 )?
                             }
                         )
@@ -998,21 +993,20 @@ pub fn derive_bauble_derive_input(
                                 match name.as_str() {
                                     #(#variant_convert)*
                                     _ => ::std::result::Result::Err(
-                                        ::bauble::DeserializeError::UnknownVariant {
+                                        ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnknownVariant {
                                             variant: name,
                                             kind: fields.variant_kind(),
                                             ty: Self::INFO.to_owned(),
-                                        }
+                                        })
                                     )?,
                                 }
                             },
                             v => {
-                                ::std::result::Result::Err(::bauble::DeserializeError::WrongKind {
+                                ::std::result::Result::Err(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongKind {
                                     expected: ::bauble::ValueKind::Enum,
                                     found: v.kind(),
-                                    span: span.clone(),
                                     ty: Self::INFO.to_owned(),
-                                })?
+                                }))?
                             }
                         })
                     },
@@ -1029,10 +1023,10 @@ pub fn derive_bauble_derive_input(
         quote! {
             if !Self::INFO.contains(&type_info) {
                 return ::std::result::Result::Err(
-                    ::std::boxed::Box::new(::bauble::DeserializeError::WrongTypePath {
+                    ::std::boxed::Box::new(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongTypePath {
                         expected: Self::INFO.to_owned(),
-                        found: type_info,
-                    })
+                        path_span: type_info.span(),
+                    }))
                 )
             }
         }
@@ -1074,7 +1068,7 @@ pub fn derive_bauble_derive_input(
                 allocator: &#allocator,
             ) -> ::std::result::Result<
                 <#allocator as ::bauble::BaubleAllocator<#lifetime>>::Out<Self>,
-                ::std::boxed::Box<::bauble::DeserializeError>
+                ::bauble::FromBaubleError,
             > {
                 let value_kind = value.kind();
                 let type_info = ::bauble::Spanned {

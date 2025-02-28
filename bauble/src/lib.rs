@@ -1,15 +1,18 @@
 #![feature(iterator_try_collect, let_chains)]
 
 pub mod convert;
+pub mod error;
 pub mod parse;
 pub mod spanned;
 pub mod value;
 
 pub use bauble_macros::FromBauble;
 
-pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
+pub use convert::{
+    BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, FromBaubleError, VariantKind,
+};
+pub use error::{BaubleError, BaubleErrors, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
-use value::AssetContextCache;
 pub use value::{
     AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, Source, TypeInfo,
     Val, Value, ValueKind, convert_values,
@@ -17,31 +20,20 @@ pub use value::{
 
 use parse::Values;
 
-pub fn parse(path: &str, ctx: &impl AssetContext) -> Option<Values> {
-    use ariadne::{Color, Label, Report, ReportKind};
+pub fn parse<'a>(path: &'a str, ctx: &'a impl AssetContext) -> Result<Values, BaubleErrors<'a>> {
     use chumsky::Parser;
 
     let parser = parse::parser();
     let result = parser.parse(parse::ParserSource { path, ctx });
 
-    result.errors().for_each(|e| {
-        Report::build(ReportKind::Error, e.span().clone())
-            .with_message(e.to_string())
-            .with_label(
-                Label::new(e.span().clone())
-                    .with_message(e.reason().to_string())
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint(AssetContextCache(ctx))
-            .unwrap();
-    });
-
-    result.into_output()
+    result.into_result().map_err(BaubleErrors::from)
 }
 
-pub fn convert(path: &str, ctx: impl AssetContext) -> Option<Vec<Object>> {
-    let values = parse(path, &ctx)?;
+pub fn convert<'a>(
+    path: &'a str,
+    ctx: &'a impl AssetContext,
+) -> Result<Vec<Object>, BaubleErrors<'a>> {
+    let values = parse(path, ctx)?;
 
-    convert_values(path, values, &value::Symbols::new(&ctx))
+    convert_values(path, values, &value::Symbols::new(ctx))
 }

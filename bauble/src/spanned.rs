@@ -20,6 +20,12 @@ impl std::fmt::Display for Span {
     }
 }
 
+impl From<Span> for Arc<str> {
+    fn from(value: Span) -> Self {
+        value.path
+    }
+}
+
 impl Span {
     pub fn new(file: impl Into<Arc<str>>, range: Range<usize>) -> Self {
         Self {
@@ -28,6 +34,7 @@ impl Span {
             path: file.into(),
         }
     }
+
     pub fn empty() -> Self {
         Self {
             start: 0,

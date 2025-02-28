@@ -4,7 +4,8 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
 use crate::{
-    VariantKind,
+    BaubleError, BaubleErrors, VariantKind,
+    error::Level,
     parse::{self, Object as ParseObject, Path, PathEnd, PathTreeEnd, Use, Values},
     spanned::{SpanExt, Spanned},
 };
@@ -23,6 +24,15 @@ pub struct Val {
     pub attributes: Spanned<Attributes>,
 }
 
+impl Val {
+    pub fn span(&self) -> crate::Span {
+        crate::Span::new(
+            self.value.span.clone(),
+            self.attributes.span.start..self.value.span.end,
+        )
+    }
+}
+
 pub type Ident = Spanned<String>;
 
 pub type Map = Vec<(Val, Val)>;
@@ -32,7 +42,7 @@ pub type Fields = IndexMap<Ident, Val>;
 pub type Sequence = Vec<Val>;
 
 // type path.
-type TypePath = OwnedTypeInfo;
+type TypePath = Spanned<OwnedTypeInfo>;
 
 type AssetPath = String;
 
@@ -133,7 +143,7 @@ impl Value {
             _ => return &[],
         };
 
-        match type_info {
+        match &type_info.value {
             OwnedTypeInfo::Path { attributes, .. } => attributes,
             _ => &[],
         }
@@ -160,8 +170,17 @@ impl Value {
         match self {
             Self::Struct(Some(type_info), _)
             | Self::BitFlags(Some(type_info), _)
-            | Self::Enum(type_info, _, _) => type_info.clone(),
+            | Self::Enum(type_info, _, _) => type_info.value.clone(),
             value => OwnedTypeInfo::Kind(value.kind()),
+        }
+    }
+
+    pub fn type_path(&self) -> Option<TypePath> {
+        match self {
+            Self::Struct(Some(type_info), _)
+            | Self::BitFlags(Some(type_info), _)
+            | Self::Enum(type_info, _, _) => Some(type_info.clone()),
+            _ => None,
         }
     }
 }
@@ -178,7 +197,8 @@ pub struct Object {
 impl Object {
     pub fn value_type(&self) -> OwnedTypeInfo {
         self.type_path
-            .clone()
+            .as_ref()
+            .map(|t| t.value.clone())
             .unwrap_or_else(|| self.value.value.type_info())
     }
 }
@@ -197,34 +217,39 @@ pub enum ConversionError {
     ExpectedType,
     ExpectedExactType(OwnedTypeInfo),
     CopyCycle,
-    ParseError,
 }
 
-impl Display for ConversionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use ConversionError::*;
+impl BaubleError for Spanned<ConversionError> {
+    fn msg_general(&self) -> crate::error::ErrorMsg {
+        Cow::Borrowed("Conversion error").spanned(self.span())
+    }
 
-        match self {
-            ModuleNotFound => write!(f, "module not found"),
-            AmbiguousUse => write!(f, "ambiguous use"),
-            ExpectedUnit => write!(f, "expected unit"),
-            ExpectedTupleFields => write!(f, "expected tuple fields"),
-            ExpectedFields => write!(f, "expected fields"),
-            ExpectedBitfield => write!(f, "expected bitfield"),
-            UnexpectedIdent => write!(f, "unexpected identifier"),
-            TooManyArguments => write!(f, "too many arguments"),
-            ExpectedAsset => write!(f, "expected asset"),
-            ExpectedType => write!(f, "expected type"),
-            ExpectedExactType(type_info) => {
-                write!(f, "expected type {type_info}")
+    fn msgs_specific(&self) -> Vec<(crate::error::ErrorMsg, crate::error::Level)> {
+        // TODO: Include more info in these errors.
+        let msg = match &self.value {
+            ConversionError::ModuleNotFound => "Module not found",
+            ConversionError::AmbiguousUse => "Ambiguous use",
+            ConversionError::ExpectedUnit => "Expected unit",
+            ConversionError::ExpectedTupleFields => "Expected unnamed fields",
+            ConversionError::ExpectedFields => "Expected named fields",
+            ConversionError::ExpectedBitfield => "Expected bitfield",
+            ConversionError::UnexpectedIdent => "Unexpected identifier",
+            ConversionError::TooManyArguments => "Too many arguments",
+            ConversionError::ExpectedAsset => "Expected asset reference",
+            ConversionError::ExpectedType => "Expected a type",
+            ConversionError::ExpectedExactType(type_info) => {
+                return vec![(
+                    Cow::<str>::Owned(format!("Expected the type `{type_info}`"))
+                        .spanned(self.span()),
+                    Level::Error,
+                )];
             }
-            CopyCycle => write!(f, "Copy cycle"),
-            ParseError => write!(f, "Parse error"),
-        }
+            ConversionError::CopyCycle => "Copy cycle",
+        };
+
+        vec![(Cow::Borrowed(msg).spanned(self.span()), Level::Error)]
     }
 }
-
-impl Error for ConversionError {}
 
 type Result<T> = std::result::Result<T, Spanned<ConversionError>>;
 
@@ -422,19 +447,23 @@ impl<C: AssetContext> Symbols<C> {
             .ok_or(ConversionError::ExpectedAsset.spanned(path.span()))
     }
 
-    fn resolve_type(&self, path: &Spanned<Path>) -> Result<TypeKind> {
+    fn resolve_type(&self, path: &Spanned<Path>) -> Result<(TypeKind, TypePath)> {
         let item = self.resolve_item(path)?;
 
         item.into_owned()
             .to_type()
+            .map(|kind| {
+                let path = kind.type_info().spanned(path.span());
+                (kind, path)
+            })
             .ok_or(ConversionError::ExpectedType.spanned(path.span()))
     }
 
-    fn resolve_bitfield(&self, path: &Spanned<Path>) -> Result<BitField> {
+    fn resolve_bitfield(&self, path: &Spanned<Path>) -> Result<Spanned<BitField>> {
         let item = self.resolve_type(path)?;
 
-        if let TypeKind::BitField(bitfield) = item {
-            Ok(bitfield)
+        if let TypeKind::BitField(bitfield) = item.0 {
+            Ok(bitfield.spanned(item.1.span))
         } else {
             Err(ConversionError::ExpectedBitfield.spanned(path.span()))
         }
@@ -445,7 +474,7 @@ pub fn convert_values<C: AssetContext>(
     path: &str,
     values: Values,
     default_symbols: &Symbols<C>,
-) -> Option<Vec<Object>> {
+) -> std::result::Result<Vec<Object>, BaubleErrors<'static>> {
     let mut use_symbols = Symbols::new(&default_symbols.ctx);
     let mut use_errors = Vec::new();
     for use_ in values.uses {
@@ -545,52 +574,35 @@ pub fn convert_values<C: AssetContext>(
         }
     }
 
-    let parsed_objects = values
-        .values
-        .iter()
-        .map(|value| {
-            convert_object(
-                path,
-                &value.0.value,
-                &value.1.object,
-                &symbols,
-                &mut add_value,
-            )
-            .and_then(|mut object| {
-                if let Some(type_path) = &value.1.type_path {
-                    object.type_path = Some(symbols.resolve_type(type_path)?.type_info());
-                }
-                Ok(object)
-            })
-        })
-        .collect::<Vec<_>>();
-    {
-        use ariadne::{Color, Label, Report, ReportKind};
+    let mut ok = Vec::new();
+    let mut err = use_errors;
 
-        let mut cache = AssetContextCache(&symbols.ctx);
-        for e in parsed_objects
-            .iter()
-            .filter_map(|r| r.as_ref().err())
-            .chain(use_errors.iter())
-        {
-            Report::build(ReportKind::Error, e.span())
-                .with_message(e.to_string())
-                .with_label(
-                    Label::new(e.span())
-                        .with_message("Here")
-                        .with_color(Color::Red),
-                )
-                .finish()
-                .eprint(&mut cache)
-                .unwrap()
+    for value in values.values.iter().map(|value| {
+        convert_object(
+            path,
+            &value.0.value,
+            &value.1.object,
+            &symbols,
+            &mut add_value,
+        )
+        .and_then(|mut object| {
+            if let Some(type_path) = &value.1.type_path {
+                object.type_path = Some(symbols.resolve_type(type_path)?.1);
+            }
+            Ok(object)
+        })
+    }) {
+        match value {
+            Ok(obj) => ok.push(obj),
+            Err(e) => err.push(e),
         }
     }
 
-    if use_errors.is_empty() {
-        objects.extend(parsed_objects.into_iter().try_collect::<Vec<_>>().ok()?);
-        Some(objects)
+    if err.is_empty() {
+        objects.extend(ok);
+        Ok(objects)
     } else {
-        None
+        Err(err.into())
     }
 }
 
@@ -655,9 +667,9 @@ fn convert_value<C: AssetContext>(
 
     let (add_new_value, object_name) = if !is_root
         && let Some(type_path) = value.value.type_path()
-        && let Ok(type_info) = symbols.resolve_type(type_path).map(|t| t.type_info())
-        && type_info.is_always_ref()
-        && let Some(type_path) = type_info.path()
+        && let Ok((_, type_path)) = symbols.resolve_type(type_path)
+        && type_path.is_always_ref()
+        && let Some(type_path) = type_path.path()
     {
         (
             true,
@@ -690,18 +702,18 @@ fn convert_value<C: AssetContext>(
             }
         }
         parse::Value::Path(path) => match symbols.resolve_type(path) {
-            Ok(val) => match val {
-                TypeKind::Any(ty) => Value::Struct(Some(ty), FieldsKind::Unit),
+            Ok((val, type_path)) => match val {
+                TypeKind::Any(_) => Value::Struct(Some(type_path), FieldsKind::Unit),
                 TypeKind::Struct(Struct {
                     kind: DataFieldsKind::Unit,
-                    type_info,
-                }) => Value::Struct(Some(type_info), FieldsKind::Unit),
+                    ..
+                }) => Value::Struct(Some(type_path), FieldsKind::Unit),
                 TypeKind::EnumVariant(EnumVariant {
                     kind: DataFieldsKind::Unit,
-                    enum_type_info,
                     variant,
+                    ..
                 }) => Value::Enum(
-                    enum_type_info,
+                    type_path,
                     variant.spanned(path.last.span()),
                     FieldsKind::Unit,
                 ),
@@ -725,10 +737,9 @@ fn convert_value<C: AssetContext>(
                 }) => {
                     return Err(ConversionError::ExpectedTupleFields.spanned(path.span()));
                 }
-                TypeKind::BitField(bitfield) => Value::BitFlags(
-                    Some(bitfield.type_info),
-                    vec![bitfield.variant.spanned(path.span())],
-                ),
+                TypeKind::BitField(bitfield) => {
+                    Value::BitFlags(Some(type_path), vec![bitfield.variant.spanned(path.span())])
+                }
             },
             Err(conversion_error) => {
                 if path.is_just("None") {
@@ -762,20 +773,18 @@ fn convert_value<C: AssetContext>(
             );
             match name {
                 Some(path) => match symbols.resolve_type(path) {
-                    Ok(val) => match val {
-                        TypeKind::Any(ty) => Value::Struct(Some(ty), fields),
+                    Ok((val, type_path)) => match val {
+                        TypeKind::Any(_) => Value::Struct(Some(type_path), fields),
                         // TODO: Check the fields here
                         TypeKind::Struct(Struct {
                             kind: DataFieldsKind::Struct(_),
-                            type_info,
-                        }) => Value::Struct(Some(type_info), fields),
+                            ..
+                        }) => Value::Struct(Some(type_path), fields),
                         TypeKind::EnumVariant(EnumVariant {
                             kind: DataFieldsKind::Struct(_),
-                            enum_type_info,
                             variant,
-                        }) => {
-                            Value::Enum(enum_type_info, variant.spanned(path.last.span()), fields)
-                        }
+                            ..
+                        }) => Value::Enum(type_path, variant.spanned(path.last.span()), fields),
                         TypeKind::Struct(Struct {
                             kind: DataFieldsKind::Unit,
                             ..
@@ -812,19 +821,21 @@ fn convert_value<C: AssetContext>(
                 .try_collect()?;
             match name {
                 Some(path) => match symbols.resolve_type(path) {
-                    Ok(val) => match val {
-                        TypeKind::Any(ty) => Value::Struct(Some(ty), FieldsKind::Tuple(fields)),
+                    Ok((val, type_path)) => match val {
+                        TypeKind::Any(_) => {
+                            Value::Struct(Some(type_path), FieldsKind::Tuple(fields))
+                        }
                         // TODO: Check the fields here
                         TypeKind::Struct(Struct {
                             kind: DataFieldsKind::Tuple(_),
-                            type_info,
-                        }) => Value::Struct(Some(type_info), FieldsKind::Tuple(fields)),
+                            ..
+                        }) => Value::Struct(Some(type_path), FieldsKind::Tuple(fields)),
                         TypeKind::EnumVariant(EnumVariant {
                             kind: DataFieldsKind::Tuple(_),
-                            enum_type_info,
                             variant,
+                            ..
                         }) => Value::Enum(
-                            enum_type_info,
+                            type_path,
                             variant.spanned(path.last.span()),
                             FieldsKind::Tuple(fields),
                         ),
@@ -879,28 +890,28 @@ fn convert_value<C: AssetContext>(
             )
         }
         parse::Value::Or(values) => {
-            let mut type_info = None::<OwnedTypeInfo>;
+            let mut type_info = None::<TypePath>;
             let values = values
                 .iter()
                 .map(|path| {
                     let bitfield = symbols.resolve_bitfield(path)?;
                     if let Some(type_info) = &type_info {
-                        if *type_info == bitfield.type_info {
-                            Ok(bitfield.variant.spanned(path.span()))
+                        if type_info.value == bitfield.type_info {
+                            Ok(bitfield.value.variant.spanned(path.span()))
                         } else {
-                            Err(ConversionError::ExpectedExactType(type_info.clone())
+                            Err(ConversionError::ExpectedExactType(type_info.value.clone())
                                 .spanned(path.span()))
                         }
                     } else {
-                        type_info = Some(bitfield.type_info);
-                        Ok(bitfield.variant.spanned(path.span()))
+                        type_info = Some(bitfield.value.type_info.spanned(bitfield.span));
+                        Ok(bitfield.value.variant.spanned(path.span()))
                     }
                 })
                 .try_collect::<Vec<_>>()?;
 
             Value::BitFlags(type_info, values)
         }
-        parse::Value::Error => return Err(ConversionError::ParseError.spanned(value.value.span())),
+        // parse::Value::Error => return Err(ConversionError::ParseError.spanned(value.value.span())),
         parse::Value::Unit => Value::Unit,
         parse::Value::Raw(data) => Value::Raw(data.clone()),
     };
