@@ -65,7 +65,9 @@ pub trait BaubleError {
             );
         }
 
-        report.finish()
+        report
+            .with_config(ariadne::Config::new().with_compact(true))
+            .finish()
     }
 }
 

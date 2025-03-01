@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashMap, error::Error, fmt::Display};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt::Display,
+};
 
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
@@ -216,12 +220,17 @@ pub enum ConversionError {
     ExpectedAsset,
     ExpectedType,
     ExpectedExactType(OwnedTypeInfo),
-    CopyCycle,
+    CopyCycle(Vec<(Spanned<String>, Vec<Spanned<String>>)>),
 }
 
 impl BaubleError for Spanned<ConversionError> {
     fn msg_general(&self) -> crate::error::ErrorMsg {
-        Cow::Borrowed("Conversion error").spanned(self.span())
+        let msg = match &self.value {
+            ConversionError::CopyCycle(_) => "A copy cycle was found",
+            _ => "Conversion error",
+        };
+
+        Cow::Borrowed(msg).spanned(self.span())
     }
 
     fn msgs_specific(&self) -> Vec<(crate::error::ErrorMsg, crate::error::Level)> {
@@ -244,7 +253,23 @@ impl BaubleError for Spanned<ConversionError> {
                     Level::Error,
                 )];
             }
-            ConversionError::CopyCycle => "Copy cycle",
+            ConversionError::CopyCycle(cycle) => {
+                return cycle
+                    .iter()
+                    .flat_map(|(a, contained)| {
+                        std::iter::once((
+                            Cow::<str>::Owned(format!("`{a}` which depends on")).spanned(a.span()),
+                            Level::Error,
+                        ))
+                        .chain(contained.iter().map(|b| {
+                            (
+                                Cow::<str>::Owned(format!("`${b}` here")).spanned(b.span()),
+                                Level::Error,
+                            )
+                        }))
+                    })
+                    .collect();
+            }
         };
 
         vec![(Cow::Borrowed(msg).spanned(self.span()), Level::Error)]
@@ -537,14 +562,53 @@ pub fn convert_values<C: AssetContext>(
     };
 
     let mut spans = HashMap::new();
+    let mut contained_spans = HashMap::<&str, Vec<Spanned<&str>>>::new();
     let mut copy_graph = petgraph::graphmap::DiGraphMap::new();
 
     for (symbol, value) in &values.copies {
         spans.insert(symbol.as_str(), symbol.span());
         copy_graph.add_node(symbol.as_str());
         find_copy_refs(value, &symbols, &mut |s| {
-            copy_graph.add_edge(s, symbol.as_str(), ());
+            copy_graph.add_edge(symbol.as_str(), s.value, ());
+            contained_spans.entry(symbol).or_default().push(s);
         });
+    }
+
+    let mut node_removals = Vec::new();
+    for scc in petgraph::algo::tarjan_scc(&copy_graph) {
+        if scc.len() == 1
+            && contained_spans
+                .get(scc[0])
+                .is_none_or(|i| i.iter().all(|s| s.value != scc[0]))
+        {
+            continue;
+        }
+        let scc_set = HashSet::<&str>::from_iter(scc.iter().copied());
+        use_errors.push(
+            ConversionError::CopyCycle(
+                scc.iter()
+                    .map(|s| {
+                        (
+                            s.to_string().spanned(spans[s].clone()),
+                            contained_spans
+                                .get(s)
+                                .into_iter()
+                                .flatten()
+                                .filter(|s| scc_set.contains(s.value))
+                                .map(|s| s.clone().map(|s| s.to_string()))
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )
+            .spanned(spans[scc[0]].clone()),
+        );
+
+        node_removals.extend(scc);
+    }
+
+    for removal in node_removals {
+        copy_graph.remove_node(removal);
     }
 
     match petgraph::algo::toposort(&copy_graph, None) {
@@ -569,9 +633,7 @@ pub fn convert_values<C: AssetContext>(
                 symbols.uses.insert(item, RefCopy::Resolved(val));
             }
         }
-        Err(err) => {
-            use_errors.push(ConversionError::CopyCycle.spanned(spans[err.node_id()].clone()));
-        }
+        Err(_) => unreachable!("We removed all scc before running toposort"),
     }
 
     let mut ok = Vec::new();
@@ -609,7 +671,7 @@ pub fn convert_values<C: AssetContext>(
 fn find_copy_refs<'a, C: AssetContext>(
     object: &ParseObject,
     symbols: &'a Symbols<C>,
-    found: &mut impl FnMut(&'a str),
+    found: &mut impl FnMut(Spanned<&'a str>),
 ) {
     for obj in object.attributes.0.values() {
         find_copy_refs(obj, symbols, found)
@@ -619,7 +681,7 @@ fn find_copy_refs<'a, C: AssetContext>(
         parse::Value::Ref(reference) => {
             if let Some(ident) = reference.as_ident() {
                 if let Some((ident, _)) = symbols.try_resolve_copy(ident) {
-                    found(ident)
+                    found(ident.spanned(reference.span()))
                 }
             }
         }
@@ -695,7 +757,10 @@ fn convert_value<C: AssetContext>(
                     val.attributes.0.extend(attributes.0);
                     return Ok(val);
                 } else {
-                    return Err(ConversionError::CopyCycle.spanned(path.span()));
+                    return Ok(Val {
+                        value: Spanned::new(path.span(), Value::Unit),
+                        attributes: Spanned::new(path.span().sub_span(0..0), Default::default()),
+                    });
                 }
             } else {
                 Value::Ref(symbols.resolve_asset(path)?)

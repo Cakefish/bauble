@@ -145,15 +145,63 @@ impl<'a, T> From<TextExpected<'a>> for chumsky::error::RichPattern<'a, T> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct State<T>(T);
+
+impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for State<T> {
+    type Checkpoint = State<T>;
+    #[inline(always)]
+    fn on_token(&mut self, _: &<I as Input<'src>>::Token) {}
+    #[inline(always)]
+    fn on_save<'parse>(&self, _: &chumsky::input::Cursor<'src, 'parse, I>) -> Self::Checkpoint {
+        *self
+    }
+    #[inline(always)]
+    fn on_rewind<'parse>(
+        &mut self,
+        c: &chumsky::input::Checkpoint<'src, 'parse, I, Self::Checkpoint>,
+    ) {
+        *self = *c.inspector();
+    }
+}
+
 // TODO Re-add error recovery
 pub fn parser<'a, A: crate::AssetContext + 'a>()
 -> impl Parser<'a, ParserSource<'a, A>, Values, Extra<'a>> {
     let comment_end = just::<_, ParserSource<'a, A>, Extra<'a>>('\n').or(end().map(|_| '\0'));
-    let comments = just("//")
-        .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
-            |more_comment| comment_end.or(any().ignore_then(more_comment)),
-        ))
+    let comments = just("/*")
+        .ignore_then(
+            recursive(move |more_comment| {
+                just("*/")
+                    .map_with(|_, e| {
+                        let state: &mut State<usize> = e.state();
+                        let res: Option<usize> = state.0.checked_sub(1);
+                        if let Some(new_state) = res {
+                            state.0 = new_state;
+                        }
+                        res
+                    })
+                    .filter(|d| d.is_none())
+                    .ignored()
+                    .or(just("/*")
+                        .map_with(|_, e| {
+                            let state: &mut State<usize> = e.state();
+
+                            state.0 += 1
+                        })
+                        .or_not()
+                        .then(more_comment.clone())
+                        .ignored())
+                    .or(any().ignore_then(more_comment).ignored())
+            })
+            .with_state(State(0usize)),
+        )
         .ignored()
+        .or(just("//")
+            .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
+                |more_comment| comment_end.or(any().ignore_then(more_comment)),
+            ))
+            .ignored())
         .padded()
         .repeated()
         .padded(); // Have to pad again in case there are no repetitions
@@ -191,8 +239,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 .repeated(),
         )
         .to_slice()
-        .map_with(|ident: &str, e| ident.to_owned().spanned(e.span()))
-        .padded();
+        .map_with(|ident: &str, e| ident.to_owned().spanned(e.span()));
 
     let path_start = ident.then_ignore(just("::")).repeated().collect::<Vec<_>>();
     let path_end = ident
@@ -251,6 +298,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         |object: Recursive<dyn Parser<'a, ParserSource<'a, A>, Object, Extra<'a>>>| {
             let attribute = just('#').ignore_then(
                 ident
+                    .padded()
                     .padded_by(comments.clone())
                     .then_ignore(just('='))
                     .then(object.clone())
@@ -418,7 +466,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
             let structure = ident
                 .padded_by(comments.clone())
                 .padded()
-                .then_ignore(just(':'))
+                .then_ignore(just(':').padded().padded_by(comments.clone()))
                 .then(object.clone())
                 .separated_by(separator.clone())
                 .allow_trailing()
@@ -563,12 +611,14 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
             .padded()
             .then(
                 just(':')
+                    .padded_by(comments.clone())
+                    .padded()
                     .ignore_then(path)
-                    .padded_by(comments)
+                    .padded_by(comments.clone())
                     .padded()
                     .or_not(),
             )
-            .then_ignore(just('='))
+            .then_ignore(just('=').padded().padded_by(comments))
             .then(value)
             .map(|((ident, ty), val)| (ident, ty, val))
             .boxed()
