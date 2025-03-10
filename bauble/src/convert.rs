@@ -1,10 +1,10 @@
 use std::{error::Error, fmt::Display};
 
 use crate::{
+    Attributes, TypeInfo, Val, Value, ValueKind,
     parse::{Ident, Path},
     spanned::{Span, SpanExt, Spanned},
     value::{ConversionError, OwnedTypeInfo},
-    Attributes, TypeInfo, Val, Value, ValueKind,
 };
 use num_traits::ToPrimitive;
 
@@ -271,7 +271,7 @@ pub trait BaubleAllocator<'a> {
 
 pub struct DefaultAllocator;
 
-impl<'a> BaubleAllocator<'a> for DefaultAllocator {
+impl BaubleAllocator<'_> for DefaultAllocator {
     type Out<T> = T;
 
     unsafe fn wrap<T>(&self, value: T) -> Self::Out<T> {
@@ -400,7 +400,7 @@ impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
     }
 }
 
-impl<'a> FromBauble<'a> for String {
+impl FromBauble<'_> for String {
     const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Str);
 
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {
@@ -433,7 +433,7 @@ impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Opt
     }
 }
 
-impl<'a> FromBauble<'a> for () {
+impl FromBauble<'_> for () {
     const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Unit);
 
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, Box<DeserializeError>> {

@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
 use syn::{
-    parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
     AttrStyle, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment, Token,
-    Type, WhereClause, WherePredicate,
+    Type, WhereClause, WherePredicate, parenthesized, parse::Parse, parse2, punctuated::Punctuated,
+    spanned::Spanned, token::PathSep,
 };
 
 /// General kind of field

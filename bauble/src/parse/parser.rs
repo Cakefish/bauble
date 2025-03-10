@@ -5,8 +5,8 @@ use indexmap::IndexMap;
 
 use crate::{
     parse::{
-        value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},
         Binding, Ident, Object,
+        value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},
     },
     spanned::{SpanExt, Spanned},
 };

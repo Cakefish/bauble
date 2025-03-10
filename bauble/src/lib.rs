@@ -11,8 +11,8 @@ pub use chumsky::span::SimpleSpan;
 pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
 pub use spanned::{SpanExt, Spanned};
 pub use value::{
-    convert_values, AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo,
-    TypeInfo, Val, Value, ValueKind,
+    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, TypeInfo, Val,
+    Value, ValueKind, convert_values,
 };
 
 use parse::Values;
@@ -24,7 +24,7 @@ pub fn parse(src: &str) -> Option<Values> {
     let result = parser.parse(src);
 
     result.errors().for_each(|e| {
-        Report::build(ReportKind::Error, (), e.span().start)
+        Report::build(ReportKind::Error, e.span().into_range())
             .with_message(e.to_string())
             .with_label(
                 Label::new(e.span().into_range())
