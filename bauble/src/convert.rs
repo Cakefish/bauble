@@ -164,7 +164,6 @@ impl BaubleError for Spanned<DeserializeError> {
     }
 
     fn msgs_specific(&self) -> Vec<(ErrorMsg, Level)> {
-        use Level::*;
         match &self.value {
             DeserializeError::WrongTypePath {
                 expected,
@@ -176,7 +175,7 @@ impl BaubleError for Spanned<DeserializeError> {
                         path_span.clone(),
                         Cow::Owned(format!("Expected the path `{expected}`")),
                     ),
-                    Error,
+                    Level::Error,
                 )]
             }
             DeserializeError::UnexpectedTypePath { path_span, .. } => {
@@ -185,7 +184,7 @@ impl BaubleError for Spanned<DeserializeError> {
                         path_span.clone(),
                         Cow::Borrowed("Didn't expect a path here"),
                     ),
-                    Error,
+                    Level::Error,
                 )]
             }
             DeserializeError::MissingField { field, .. } => {
@@ -194,13 +193,13 @@ impl BaubleError for Spanned<DeserializeError> {
                         self.span(),
                         Cow::Owned(format!("Missing field the field {field}")),
                     ),
-                    Error,
+                    Level::Error,
                 )]
             }
             DeserializeError::UnexpectedField { field, .. } => {
                 vec![(
                     Spanned::new(field.span.clone(), Cow::Borrowed("Unexpected field")),
-                    Error,
+                    Level::Error,
                 )]
             }
             DeserializeError::WrongTupleLength {
@@ -317,11 +316,12 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
         allocator: &DefaultAllocator,
     ) -> Result<Self, FromBaubleError> {
         if let Some((attribute, _)) = attributes.into_iter().next() {
+            let span = attribute.span();
             Err(DeserializeError::UnexpectedAttribute {
                 attribute,
                 ty: Self::INFO.to_owned(),
             }
-            .spanned(span.clone()))?
+            .spanned(span))?
         }
 
         Ok(match value {
@@ -346,7 +346,7 @@ macro_rules! match_val {
         {
             let value = $value;
             if let Some((attribute, _)) = value.attributes.value.0.iter().next() {
-                Err($crate::Spanned::new(value.span(), $crate::DeserializeError::UnexpectedAttribute {
+                Err($crate::Spanned::new(attribute.span(), $crate::DeserializeError::UnexpectedAttribute {
                     attribute: attribute.clone(),
                     ty: $crate::OwnedTypeInfo::Kind($crate::ValueKind::$ident),
                 }))?

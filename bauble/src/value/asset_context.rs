@@ -476,7 +476,7 @@ impl AssetContext for NoChecks {
         None
     }
 
-    fn get_source(&self, _file: &str) -> Option<&Source> {
+    fn get_source(&self, _path: &str) -> Option<&Source> {
         Some(&self.src)
     }
 }
