@@ -31,7 +31,7 @@ impl Level {
 
 pub type ErrorMsg = Spanned<Cow<'static, str>>;
 
-pub trait BaubleError {
+pub trait BaubleError: 'static {
     fn level(&self) -> Level {
         Level::Error
     }
@@ -97,12 +97,27 @@ impl<B: BaubleError> BaubleError for Box<B> {
     }
 }
 
-pub struct BaubleErrors<'a>(Vec<Box<dyn BaubleError + 'a>>);
+pub struct BaubleErrors(Vec<Box<dyn BaubleError>>);
 
-impl BaubleErrors<'_> {
+impl BaubleErrors {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn extend(&mut self, other: BaubleErrors) {
+        self.0.extend(other.0);
+    }
+
+    pub fn push<B: BaubleError>(&mut self, error: B) {
+        self.0.push(Box::new(error))
+    }
+
     fn for_reports(
         &self,
-        mut handle_report: impl for<'a> FnMut(Report<'a, Span>),
+        mut handle_report: impl for<'b> FnMut(Report<'b, Span>),
         ctx: &impl AssetContext,
     ) {
         for error in self.0.iter() {
@@ -132,13 +147,13 @@ impl BaubleErrors<'_> {
     }
 }
 
-impl<'a, B: BaubleError + 'a> From<B> for BaubleErrors<'a> {
+impl<B: BaubleError> From<B> for BaubleErrors {
     fn from(value: B) -> Self {
         Self(vec![Box::new(value)])
     }
 }
 
-impl<'a, B: BaubleError + 'a> From<Vec<B>> for BaubleErrors<'a> {
+impl<B: BaubleError> From<Vec<B>> for BaubleErrors {
     fn from(value: Vec<B>) -> Self {
         Self(
             value
@@ -149,8 +164,8 @@ impl<'a, B: BaubleError + 'a> From<Vec<B>> for BaubleErrors<'a> {
     }
 }
 
-pub fn print_errors<'a, T>(
-    res: Result<T, impl Into<BaubleErrors<'a>>>,
+pub fn print_errors<T>(
+    res: Result<T, impl Into<BaubleErrors>>,
     ctx: &impl AssetContext,
 ) -> Option<T> {
     res.map_err(|errors| {
