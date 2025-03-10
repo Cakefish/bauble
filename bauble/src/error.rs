@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use ariadne::Report;
 
-use crate::{AssetContext, Span, Spanned, value::AssetContextCache};
+use crate::{AssetContext, Span, Spanned, bauble_context::AssetContextCache, types::TypeRegistry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -40,26 +40,26 @@ pub trait BaubleError {
         !matches!(self.level(), Level::Error)
     }
 
-    fn msg_general(&self) -> ErrorMsg;
+    fn msg_general(&self, types: &TypeRegistry) -> ErrorMsg;
 
-    fn msgs_specific(&self) -> Vec<(ErrorMsg, Level)>;
+    fn msgs_specific(&self, types: &TypeRegistry) -> Vec<(ErrorMsg, Level)>;
 
     fn help(&self) -> Option<Cow<'static, str>> {
         None
     }
 
-    fn report(&self) -> Report<'_, Span> {
-        let msg = self.msg_general();
+    fn report(&self, types: &TypeRegistry) -> Report<'_, Span> {
+        let msg = self.msg_general(types);
         let mut report =
-            Report::build(self.level().report_kind(), msg.span()).with_message(msg.value);
+            Report::build(self.level().report_kind(), msg.span).with_message(msg.value);
 
         if let Some(help) = self.help() {
             report.set_help(help);
         }
 
-        for (msg, level) in self.msgs_specific() {
+        for (msg, level) in self.msgs_specific(types) {
             report.add_label(
-                ariadne::Label::new(msg.span())
+                ariadne::Label::new(msg.span)
                     .with_message(msg.value.clone())
                     .with_color(level.color()),
             );
@@ -72,37 +72,63 @@ pub trait BaubleError {
 }
 
 impl<B: BaubleError> BaubleError for Box<B> {
-    fn msg_general(&self) -> ErrorMsg {
-        B::msg_general(self)
+    fn msg_general(&self, registry: &TypeRegistry) -> ErrorMsg {
+        B::msg_general(self, registry)
     }
 
-    fn msgs_specific(&self) -> Vec<(ErrorMsg, Level)> {
-        B::msgs_specific(self)
+    fn msgs_specific(&self, registry: &TypeRegistry) -> Vec<(ErrorMsg, Level)> {
+        B::msgs_specific(self, registry)
+    }
+
+    fn level(&self) -> Level {
+        B::level(self)
+    }
+
+    fn can_ignore(&self) -> bool {
+        B::can_ignore(self)
+    }
+
+    fn help(&self) -> Option<Cow<'static, str>> {
+        B::help(self)
+    }
+
+    fn report(&self, registry: &TypeRegistry) -> Report<'_, Span> {
+        B::report(self, registry)
     }
 }
 
 pub struct BaubleErrors<'a>(Vec<Box<dyn BaubleError + 'a>>);
 
 impl BaubleErrors<'_> {
-    fn for_reports(&self, mut handle_report: impl for<'a> FnMut(Report<'a, Span>)) {
+    fn for_reports(
+        &self,
+        mut handle_report: impl for<'a> FnMut(Report<'a, Span>),
+        ctx: &impl AssetContext,
+    ) {
         for error in self.0.iter() {
-            handle_report(BaubleError::report(error.as_ref()))
+            handle_report(BaubleError::report(error.as_ref(), ctx.type_registry()))
         }
     }
 
     pub fn print_errors(&self, ctx: &impl AssetContext) {
-        self.for_reports(|report| {
-            let _ = report.eprint(AssetContextCache(ctx));
-        });
+        self.for_reports(
+            |report| {
+                let _ = report.eprint(AssetContextCache(ctx));
+            },
+            ctx,
+        );
     }
 
     pub fn write_errors<W>(&self, ctx: &impl AssetContext, w: &mut W)
     where
         W: std::io::Write,
     {
-        self.for_reports(|report| {
-            let _ = report.write(AssetContextCache(ctx), &mut *w);
-        });
+        self.for_reports(
+            |report| {
+                let _ = report.write(AssetContextCache(ctx), &mut *w);
+            },
+            ctx,
+        );
     }
 }
 

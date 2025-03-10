@@ -1,39 +1,42 @@
-#![feature(iterator_try_collect, let_chains)]
+#![feature(iterator_try_collect, let_chains, ptr_metadata)]
 
+pub mod bauble_context;
 pub mod convert;
 pub mod error;
 pub mod parse;
 pub mod spanned;
+pub mod types;
 pub mod value;
 
 pub use bauble_macros::FromBauble;
 
+pub use bauble_context::{AssetContext, FileId};
 pub use convert::{
-    BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, FromBaubleError, VariantKind,
+    Bauble, BaubleAllocator, DefaultAllocator, DeserializeError, FromBaubleError,
+    FullDeserializeError, VariantKind,
 };
 pub use error::{BaubleError, BaubleErrors, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
-pub use value::{
-    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, Source, TypeInfo,
-    Val, Value, ValueKind, convert_values,
-};
+pub use types::path;
+pub use value::{Attributes, ConversionError, FieldsKind, Object, Val, Value, convert_values};
+
+pub mod private {
+    pub use indexmap::IndexMap;
+}
 
 use parse::Values;
 
-pub fn parse<'a>(path: &'a str, ctx: &'a impl AssetContext) -> Result<Values, BaubleErrors<'a>> {
+pub fn parse(file_id: FileId, ctx: &impl AssetContext) -> Result<Values, BaubleErrors<'_>> {
     use chumsky::Parser;
 
     let parser = parse::parser();
-    let result = parser.parse(parse::ParserSource { path, ctx });
+    let result = parser.parse(parse::ParserSource { file_id, ctx });
 
     result.into_result().map_err(BaubleErrors::from)
 }
 
-pub fn convert<'a>(
-    path: &'a str,
-    ctx: &'a impl AssetContext,
-) -> Result<Vec<Object>, BaubleErrors<'a>> {
-    let values = parse(path, ctx)?;
+pub fn convert(file_id: FileId, ctx: &impl AssetContext) -> Result<Vec<Object>, BaubleErrors<'_>> {
+    let values = parse(file_id, ctx)?;
 
-    convert_values(path, values, &value::Symbols::new(ctx))
+    convert_values(file_id, values, &value::Symbols::new(ctx))
 }

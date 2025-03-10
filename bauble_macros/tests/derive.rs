@@ -1,6 +1,6 @@
-use bauble::{FromBauble, Source, error::print_errors, value::NoChecks};
+use bauble::{Bauble, Source, error::print_errors, value::NoChecks};
 
-fn simple_convert<'a, T: FromBauble<'a>>(
+fn simple_convert<'a, T: Bauble<'a>>(
     src: &str,
     object_name: &str,
     alloc: &'a bauble::DefaultAllocator,

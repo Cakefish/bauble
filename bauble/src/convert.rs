@@ -1,13 +1,13 @@
 use std::{borrow::Cow, fmt::Display};
 
 use crate::{
-    Attributes, TypeInfo, Val, Value, ValueKind,
+    Val, Value,
     error::{BaubleError, ErrorMsg, Level},
     parse::Ident,
-    spanned::{Span, SpanExt, Spanned},
-    value::OwnedTypeInfo,
+    path::{TypePath, TypePathElem},
+    spanned::{Span, Spanned},
+    types::{self, TypeId},
 };
-use num_traits::ToPrimitive;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum VariantKind {
@@ -28,56 +28,38 @@ impl Display for VariantKind {
     }
 }
 
+pub struct FullDeserializeError {
+    in_type: std::any::TypeId,
+    value_span: Span,
+    kind: DeserializeError,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeserializeError {
-    WrongTypePath {
-        expected: OwnedTypeInfo,
-        path_span: Span,
-    },
-    UnexpectedTypePath {
-        path_span: Span,
-        ty: OwnedTypeInfo,
-    },
     MissingField {
         field: String,
-        ty: OwnedTypeInfo,
-    },
-    UnexpectedField {
-        field: Ident,
-        ty: OwnedTypeInfo,
     },
     WrongTupleLength {
         expected: usize,
         found: usize,
-        ty: OwnedTypeInfo,
     },
     WrongArrayLength {
         expected: usize,
         found: usize,
-        ty: OwnedTypeInfo,
     },
     UnknownVariant {
         variant: Ident,
-        kind: VariantKind,
-        ty: OwnedTypeInfo,
     },
-    UnknownFlattenedVariant {
-        variant: Spanned<OwnedTypeInfo>,
-        ty: OwnedTypeInfo,
+    WrongType {
+        found: TypeId,
     },
-    UnexpectedAttribute {
-        attribute: Ident,
-        ty: OwnedTypeInfo,
-    },
-    WrongKind {
-        expected: ValueKind,
-        found: ValueKind,
-        ty: OwnedTypeInfo,
+    WrongVariantType {
+        variant: TypePathElem,
+        found: TypeId,
     },
     MissingAttribute {
         attribute: String,
         attributes_span: Span,
-        ty: OwnedTypeInfo,
     },
     Custom(CustomError),
 }
@@ -111,94 +93,65 @@ impl CustomError {
     pub fn with_err_label(self, s: Spanned<impl Into<Cow<'static, str>>>) -> Self {
         self.with_label(s, Level::Error)
     }
-
-    pub fn error(self, span: Span) -> Spanned<DeserializeError> {
-        DeserializeError::Custom(self).spanned(span)
-    }
 }
 
-impl BaubleError for Spanned<DeserializeError> {
+impl BaubleError for FullDeserializeError {
     fn level(&self) -> Level {
-        match &self.value {
+        match &self.kind {
             DeserializeError::Custom(custom_error) => custom_error.level,
             _ => Level::Error,
         }
     }
-    fn msg_general(&self) -> ErrorMsg {
-        let msg = match &self.value {
-            DeserializeError::WrongTypePath { .. } => Cow::Borrowed("Wrong type path"),
-            DeserializeError::UnexpectedTypePath { ty, .. } => {
-                Cow::Owned(format!("Unexpected type path for the type {ty}"))
-            }
-            DeserializeError::MissingField { ty, .. } => {
-                Cow::Owned(format!("Missing field for the type {ty}"))
-            }
-            DeserializeError::UnexpectedField { ty, .. } => {
-                Cow::Owned(format!("Unexpected field for the type {ty}"))
-            }
-            DeserializeError::WrongTupleLength { ty, .. } => {
-                Cow::Owned(format!("Wrong tuple length for the type {ty}"))
-            }
-            DeserializeError::WrongArrayLength { ty, .. } => {
-                Cow::Owned(format!("Wrong array length for the type {ty}"))
-            }
-            DeserializeError::UnknownVariant { ty, .. } => {
-                Cow::Owned(format!("Unknown variant for the type {ty}"))
-            }
-            DeserializeError::UnknownFlattenedVariant { ty, .. } => {
-                Cow::Owned(format!("Unknown flattened variant for the type {ty}"))
-            }
-            DeserializeError::UnexpectedAttribute { ty, .. } => {
-                Cow::Owned(format!("Unexpected attribute for the type {ty}"))
-            }
-            DeserializeError::WrongKind { ty, .. } => {
-                Cow::Owned(format!("Wrong kind for the type {ty}"))
-            }
-            DeserializeError::MissingAttribute { ty, .. } => {
-                Cow::Owned(format!("Missing attributy for the type {ty}"))
-            }
-            DeserializeError::Custom(custom) => custom.message.clone(),
+    fn msg_general(&self, types: &types::TypeRegistry) -> ErrorMsg {
+        let ty = match types.get_type_by_id(self.in_type) {
+            Some(ty) => ty.meta.path.borrow(),
+            None => TypePath::new("<unregistered type>").unwrap(),
         };
 
-        Spanned::new(self.span.clone(), msg)
+        let msg = match &self.kind {
+            DeserializeError::MissingField { .. } => {
+                format!("Missing field for the type {ty}")
+            }
+            DeserializeError::WrongTupleLength { .. } => {
+                format!("Wrong tuple length for the type {ty}")
+            }
+            DeserializeError::WrongArrayLength { .. } => {
+                format!("Wrong array length for the type {ty}")
+            }
+            DeserializeError::UnknownVariant { .. } => {
+                format!("Unknown variant for the type {ty}")
+            }
+            DeserializeError::WrongType { .. } => {
+                format!("Wrong kind for the type {ty}")
+            }
+            DeserializeError::WrongVariantType { variant, .. } => {
+                format!("Wrong kind for the variant {variant} of type {ty}")
+            }
+            DeserializeError::MissingAttribute { .. } => {
+                format!("Missing attributy for the type {ty}")
+            }
+            DeserializeError::Custom(custom) => {
+                format!("error for type {ty}: {}", custom.message)
+            }
+        };
+
+        Spanned::new(self.value_span, Cow::Owned(msg))
     }
 
-    fn msgs_specific(&self) -> Vec<(ErrorMsg, Level)> {
-        match &self.value {
-            DeserializeError::WrongTypePath {
-                expected,
-                path_span,
-                ..
-            } => {
-                vec![(
-                    Spanned::new(
-                        path_span.clone(),
-                        Cow::Owned(format!("Expected the path `{expected}`")),
-                    ),
-                    Level::Error,
-                )]
-            }
-            DeserializeError::UnexpectedTypePath { path_span, .. } => {
-                vec![(
-                    Spanned::new(
-                        path_span.clone(),
-                        Cow::Borrowed("Didn't expect a path here"),
-                    ),
-                    Level::Error,
-                )]
-            }
+    fn msgs_specific(&self, types: &types::TypeRegistry) -> Vec<(ErrorMsg, Level)> {
+        use Level::*;
+        let ty = match types.get_type_by_id(self.in_type) {
+            Some(ty) => ty.meta.path.borrow(),
+            None => TypePath::new("<unregistered type>").unwrap(),
+        };
+
+        match &self.kind {
             DeserializeError::MissingField { field, .. } => {
                 vec![(
                     Spanned::new(
-                        self.span(),
+                        self.value_span,
                         Cow::Owned(format!("Missing field the field {field}")),
                     ),
-                    Level::Error,
-                )]
-            }
-            DeserializeError::UnexpectedField { field, .. } => {
-                vec![(
-                    Spanned::new(field.span.clone(), Cow::Borrowed("Unexpected field")),
                     Level::Error,
                 )]
             }
@@ -210,7 +163,7 @@ impl BaubleError for Spanned<DeserializeError> {
             } => {
                 vec![(
                     Spanned::new(
-                        self.span(),
+                        self.value_span,
                         Cow::Owned(format!(
                             "Expected the length {expected}, found length {found}."
                         )),
@@ -220,29 +173,32 @@ impl BaubleError for Spanned<DeserializeError> {
             }
             DeserializeError::UnknownVariant { variant, .. } => {
                 vec![(
-                    Spanned::new(variant.span(), Cow::Borrowed("Unknown variant")),
+                    Spanned::new(variant.span, Cow::Borrowed("Unknown variant")),
                     Level::Error,
                 )]
             }
-            DeserializeError::UnknownFlattenedVariant { variant, .. } => {
-                vec![(
-                    Spanned::new(variant.span(), Cow::Borrowed("Unknown flattened variant")),
-                    Level::Error,
-                )]
-            }
-            DeserializeError::UnexpectedAttribute { attribute, .. } => {
-                vec![(
-                    Spanned::new(attribute.span(), Cow::Borrowed("Unexpected attribute")),
-                    Level::Error,
-                )]
-            }
-            DeserializeError::WrongKind {
-                expected, found, ..
-            } => {
+            DeserializeError::WrongType { found } => {
                 vec![(
                     Spanned::new(
-                        self.span(),
-                        Cow::Owned(format!("Expected the kind {expected}, found {found}")),
+                        self.value_span,
+                        // TODO:
+                        Cow::Owned(format!(
+                            "Expected the kind {ty}, found {}",
+                            types.key_type(*found).meta.path
+                        )),
+                    ),
+                    Level::Error,
+                )]
+            }
+            DeserializeError::WrongVariantType { variant, found } => {
+                vec![(
+                    Spanned::new(
+                        self.value_span,
+                        // TODO:
+                        Cow::Owned(format!(
+                            "Expected the variant {variant} of {ty}, found {}",
+                            types.key_type(*found).meta.path
+                        )),
                     ),
                     Level::Error,
                 )]
@@ -254,7 +210,7 @@ impl BaubleError for Spanned<DeserializeError> {
             } => {
                 vec![(
                     Spanned::new(
-                        attributes_span.clone(),
+                        *attributes_span,
                         Cow::Owned(format!("Missing the attribute `{attribute}`")),
                     ),
                     Level::Error,
@@ -265,7 +221,7 @@ impl BaubleError for Spanned<DeserializeError> {
     }
 }
 
-pub type FromBaubleError = Box<Spanned<DeserializeError>>;
+pub type FromBaubleError = Box<FullDeserializeError>;
 
 // TODO Maybe `unsafe trait`?
 pub trait BaubleAllocator<'a> {
@@ -295,50 +251,423 @@ impl BaubleAllocator<'_> for DefaultAllocator {
     }
 }
 
-pub trait FromBauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized {
-    const INFO: TypeInfo<'static>;
-
-    fn from_bauble(data: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError>;
+/*
+#[derive(Clone, Copy)]
+pub struct FromBaubleCtx<'r, 'alloc, A: BaubleAllocator<'alloc>, Ctx: AssetContext> {
+    pub allocator: &'r A,
+    pub ctx: &'r Ctx,
+    _marker: PhantomData<&'alloc ()>,
 }
 
-impl<'a, T: FromBauble<'a>> FromBauble<'a> for Vec<T> {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
-
-    fn from_bauble(
-        Val {
-            attributes:
-                Spanned {
-                    value: Attributes(attributes),
-                    ..
+impl<'r, 'alloc, A: BaubleAllocator<'alloc>, Ctx: AssetContext> FromBaubleCtx<'r, 'alloc, A, Ctx> {
+    pub fn type_id<T: Bauble<'alloc, A>>(&self, span: &Span) -> Result<TypeId, FromBaubleError> {
+        self.ctx.type_registry().type_id::<T, A>().ok_or_else(|| {
+            Box::new(FullDeserializeError {
+                in_type: types::TypeRegistry::any_type(),
+                value_span: span.clone(),
+                kind: DeserializeError::UnregisteredType {
+                    type_name: std::any::type_name::<T>(),
                 },
-            value: Spanned { value, span },
-        }: Val,
-        allocator: &DefaultAllocator,
-    ) -> Result<Self, FromBaubleError> {
-        if let Some((attribute, _)) = attributes.into_iter().next() {
-            let span = attribute.span();
-            Err(DeserializeError::UnexpectedAttribute {
-                attribute,
-                ty: Self::INFO.to_owned(),
-            }
-            .spanned(span))?
+            })
+        })
+    }
+    /// Can panic if this type isn't registered.
+    pub fn error<T: Bauble<'alloc, A>>(
+        &self,
+        span: Span,
+        error: DeserializeError,
+    ) -> FromBaubleError {
+        match self.type_id::<T>(&span) {
+            Ok(in_type) => Box::new(FullDeserializeError {
+                in_type,
+                value_span: span,
+                kind: error,
+            }),
+            Err(err) => err,
+        }
+    }
+
+    pub fn custom_error<T: Bauble<'alloc, A>>(
+        &self,
+        span: Span,
+        error: CustomError,
+    ) -> FromBaubleError {
+        self.error::<T>(span, DeserializeError::Custom(error))
+    }
+
+    pub fn make_type_value<'a, T: Bauble<'alloc, A>>(
+        &'a self,
+        mut val: Val,
+    ) -> Result<TypeValue<'a, 'alloc, A, Ctx, T>, FromBaubleError> {
+        let id = self.type_id::<T>(&val.value.span)?;
+
+        if self.ctx.type_registry().can_infer_from(id, val.ty) {
+            return Err(Box::new(FullDeserializeError {
+                in_type: id,
+                value_span: val.span(),
+                kind: DeserializeError::WrongType { got: val.ty },
+            }));
         }
 
-        Ok(match value {
-            Value::Array(array) => array
-                .into_iter()
-                .map(|data| T::from_bauble(data, allocator))
-                .collect::<Result<_, _>>()?,
-            _ => Err(DeserializeError::WrongKind {
-                expected: ValueKind::Array,
-                found: value.kind(),
-                ty: Self::INFO.to_owned(),
+        let val_ty = self.ctx.type_registry().key_type(val.ty);
+
+        let span = val.span();
+
+        let mut attributes = IndexMap::new();
+        let attributes_span = val.attributes.span();
+
+        for (ident, _) in &val_ty.meta.attributes.required {
+            let (key, attr) = val
+                .attributes
+                .0
+                .shift_remove_entry(ident.as_str())
+                .ok_or_else(|| {
+                    self.error::<T>(
+                        span.clone(),
+                        DeserializeError::MissingAttribute {
+                            attribute: ident.clone(),
+                            attributes_span: attributes_span.clone(),
+                        },
+                    )
+                })?;
+            match attributes.insert(key, attr) {
+                Some(_) => unreachable!("We're inserting from a map"),
+                None => {}
             }
-            .spanned(span))?,
+        }
+
+        if val_ty.meta.attributes.allow_additional.is_some() {
+            attributes.append(&mut val.attributes.0);
+        } else {
+            for (ident, _) in &val_ty.meta.attributes.optional {
+                if let Some((key, attr)) = val.attributes.0.shift_remove_entry(ident.as_str()) {
+                    match attributes.insert(key, attr) {
+                        Some(_) => unreachable!("We're inserting from a map"),
+                        None => {}
+                    }
+                }
+            }
+        }
+
+        let attributes = attributes.spanned(attributes_span);
+
+        let kind = if matches!(val_ty.kind, types::TypeKind::Transparent(_)) {
+            TypeValueKind::Transparent(val)
+        } else {
+            match (val.value.value, &val_ty.kind) {
+                (Value::Tuple(values), types::TypeKind::Tuple(ty)) => {
+                    TypeValueKind::Tuple { ty, values }
+                }
+                (Value::Array(values), types::TypeKind::Array(ty)) => {
+                    TypeValueKind::Array { ty, values }
+                }
+                (Value::Map(values), types::TypeKind::Map(ty)) => TypeValueKind::Map { ty, values },
+                (Value::Ref(value), types::TypeKind::Ref(ty)) => TypeValueKind::Ref { ty, value },
+                (Value::BitFlags(values), types::TypeKind::BitFlags(ty)) => {
+                    TypeValueKind::BitFlags { ty, values }
+                }
+                (Value::Primitive(value), types::TypeKind::Primitive(prim)) => todo!(),
+
+                (value, ty) => {
+                    return Err(self.error::<T>(span, DeserializeError::WrongKind {}));
+                }
+            }
+        };
+
+        Ok(TypeValue {
+            type_meta: &val_ty.meta,
+            into_type: id,
+            // TODO:
+            variant: None,
+            attributes,
+            ctx: *self,
+            span,
+            kind,
+            _marker: PhantomData,
         })
     }
 }
 
+pub enum TypeValueKind<'a> {
+    Transparent(Val),
+    Tuple {
+        ty: &'a types::UnnamedFields,
+        values: Vec<Val>,
+    },
+    Array {
+        ty: &'a types::ArrayType,
+        values: Vec<Val>,
+    },
+    Map {
+        ty: &'a types::MapType,
+        values: Vec<(Val, Val)>,
+    },
+    BitFlags {
+        ty: &'a types::BitFlagsType,
+        values: Vec<TypePathElem>,
+    },
+    Ref {
+        ty: TypeId,
+        value: TypePath,
+    },
+    Primitive(PrimitiveValue),
+    Struct {
+        ty: &'a types::Fields,
+        fields: FieldValue<'a>,
+    },
+}
+
+pub enum FieldValue<'a> {
+    Unit,
+    Unnamed {
+        ty: &'a types::UnnamedFields,
+        values: Vec<Val>,
+    },
+    Named {
+        ty: &'a types::NamedFields,
+        fields: crate::value::Fields,
+    },
+}
+
+pub struct TypeValue<
+    'r,
+    'alloc,
+    A: BaubleAllocator<'alloc>,
+    Ctx: AssetContext,
+    T: Bauble<'alloc, A>,
+> {
+    /// The type meta of the value.
+    pub type_meta: &'r types::TypeMeta,
+    /// The `TypeId` of `T`, i.e the type we're deserializing into.
+    pub into_type: TypeId,
+    /// If the value is an enum variant this is `Some((enum type id, variant identifier))`.
+    pub variant: Option<(TypeId, TypePathElem<&'r str>)>,
+    attributes: Spanned<crate::value::Fields>,
+    ctx: FromBaubleCtx<'r, 'alloc, A, Ctx>,
+    span: Span,
+    kind: TypeValueKind<'r>,
+    _marker: PhantomData<T>,
+}
+
+impl<'r, 'alloc, A: BaubleAllocator<'alloc>, Ctx: AssetContext, T: Bauble<'alloc, A>>
+    TypeValue<'r, 'alloc, A, Ctx, T>
+{
+    pub fn span(&self) -> Span {
+        self.span.clone()
+    }
+
+    pub fn take_attribute(&mut self, s: &str) -> Option<Val> {
+        self.attributes.shift_remove(s)
+    }
+
+    pub fn take_required_attribute(&mut self, s: &str) -> Result<Val, FromBaubleError> {
+        self.take_attribute(s).ok_or_else(|| {
+            self.error(DeserializeError::MissingAttribute {
+                attribute: s.to_string(),
+                attributes_span: self.attributes.span(),
+            })
+        })
+    }
+
+    pub fn take_attributes(&mut self) -> Spanned<impl IntoIterator<Item = (Ident, Val)>> {
+        let span = self.attributes.span();
+        self.attributes.drain(..).spanned(span)
+    }
+
+    pub fn take_val(&mut self) -> TypeValueKind<'r> {
+        std::mem::replace(
+            &mut self.kind,
+            TypeValueKind::Primitive(PrimitiveValue::Unit),
+        )
+    }
+
+    pub fn error(&self, error: DeserializeError) -> FromBaubleError {
+        self.ctx.error::<T>(self.span(), error)
+    }
+
+    pub fn custom_error(&self, error: CustomError) -> FromBaubleError {
+        self.ctx.custom_error::<T>(self.span(), error)
+    }
+
+    pub fn ctx(&self) -> FromBaubleCtx<'r, 'alloc, A, Ctx> {
+        self.ctx
+    }
+}
+
+impl<'r, 'alloc, A: BaubleAllocator<'alloc>, Ctx: AssetContext> std::ops::Deref
+    for FromBaubleCtx<'r, 'alloc, A, Ctx>
+{
+    type Target = A;
+
+    fn deref(&self) -> &Self::Target {
+        &self.allocator
+    }
+}
+*/
+
+pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static {
+    /// Constructs a reflection type that bauble uses to parse and resolve types.
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type;
+
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError>;
+
+    fn error(span: crate::Span, error: DeserializeError) -> FromBaubleError {
+        Box::new(FullDeserializeError {
+            in_type: std::any::TypeId::of::<Self>(),
+            value_span: span,
+            kind: error,
+        })
+    }
+}
+
+impl Bauble<'_> for Val {
+    fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new("bauble::Val").unwrap().to_owned(),
+                ..Default::default()
+            },
+            kind: types::TypeKind::Primitive(types::Primitive::Any),
+        }
+    }
+
+    fn from_bauble(
+        val: Val,
+        _: &DefaultAllocator,
+    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, FromBaubleError> {
+        Ok(val)
+    }
+}
+
+impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, A>();
+
+        let generic_path = TypePath::new("std::Option").unwrap();
+        let generic = registry.get_or_register_generic_type(generic_path);
+
+        let kind = registry.build_enum([
+            (
+                TypePathElem::new("Some").unwrap(),
+                types::Fields::Unnamed(types::UnnamedFields {
+                    required: vec![types::FieldType {
+                        id: inner,
+                        extra: Default::default(),
+                    }],
+                    ..Default::default()
+                }),
+                types::NamedFields::default(),
+            ),
+            (
+                TypePathElem::new("None").unwrap(),
+                types::Fields::Unit,
+                types::NamedFields::default(),
+            ),
+        ]);
+
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new(format!(
+                    "{generic_path}<{}>",
+                    registry.key_type(inner).meta.path
+                ))
+                .unwrap(),
+                generic_base_type: Some(generic),
+                ..Default::default()
+            },
+            kind,
+        }
+    }
+
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+        let span = val.value.span;
+        let Value::Enum(variant, val) = val.value.value else {
+            return Err(Self::error(
+                span,
+                DeserializeError::WrongType { found: val.ty },
+            ));
+        };
+
+        match variant.as_str() {
+            "Some" => match val.value.value {
+                Value::Struct(crate::FieldsKind::Unnamed(fields)) if fields.len() == 1 => {
+                    let Some(inner) = fields.into_iter().next() else {
+                        unreachable!()
+                    };
+
+                    // SAFETY: We pass the same allocator we validate with.
+                    let inner = unsafe { allocator.validate(T::from_bauble(inner, allocator)?)? };
+
+                    // SAFETY: We used this allocator to create `inner`.
+                    Ok(unsafe { allocator.wrap(Some(inner)) })
+                }
+                _ => Err(Self::error(
+                    val.value.span,
+                    DeserializeError::WrongVariantType {
+                        variant: variant.value,
+                        found: val.ty,
+                    },
+                )),
+            },
+            "None" => {
+                // SAFETY: `None` doesn't contain any allocations.
+                Ok(unsafe { allocator.wrap(None) })
+            }
+            _ => Err(Self::error(
+                span,
+                DeserializeError::UnknownVariant {
+                    variant: variant.map(|s| s.to_string()),
+                },
+            )),
+        }
+    }
+}
+
+impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, _>();
+
+        let generic_path = TypePath::new("std::Vec").unwrap();
+        let generic = registry.get_or_register_generic_type(generic_path);
+
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new(format!(
+                    "{generic_path}<{}>",
+                    registry.key_type(inner).meta.path
+                ))
+                .unwrap(),
+                generic_base_type: Some(generic),
+                ..Default::default()
+            },
+            kind: types::TypeKind::Array(types::ArrayType {
+                ty: types::FieldType {
+                    id: inner,
+                    extra: Default::default(),
+                },
+                len: None,
+            }),
+        }
+    }
+
+    fn from_bauble(
+        val: Val,
+        allocator: &DefaultAllocator,
+    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, FromBaubleError> {
+        match val.value.value {
+            Value::Array(items) => items
+                .into_iter()
+                .map(|val| T::from_bauble(val, allocator))
+                .try_collect(),
+            _ => Err(Self::error(
+                val.span(),
+                DeserializeError::WrongType { found: val.ty },
+            )),
+        }
+    }
+}
+
+/*
 /// Match on a simple value, assumes no attributes, and only one valid Value to convert from.
 #[macro_export]
 macro_rules! match_val {
@@ -346,19 +675,17 @@ macro_rules! match_val {
         {
             let value = $value;
             if let Some((attribute, _)) = value.attributes.value.0.iter().next() {
-                Err($crate::Spanned::new(attribute.span(), $crate::DeserializeError::UnexpectedAttribute {
+                Err($crate::DeserializeError::new::<Self>(value.span(), $crate::DeserializeErrorKind::UnexpectedAttribute {
                     attribute: attribute.clone(),
-                    ty: $crate::OwnedTypeInfo::Kind($crate::ValueKind::$ident),
                 }))?
             }
 
             let $crate::Spanned { value, span } = value.value;
             Ok(match (value, span) {
                 ($crate::Value::$ident $(($($field),+))?, $span) => $block,
-                (value, span) => Err($crate::Spanned::new(span, $crate::DeserializeError::WrongKind {
+                (value, span) => Err($crate::DeserializeError::new::<Self>(span, $crate::DeserializeErrorKind::WrongKind {
                     expected: $crate::ValueKind::$ident,
                     found: value.kind(),
-                    ty: $crate::OwnedTypeInfo::Kind($crate::ValueKind::$ident),
                 }))?,
             })
         }
@@ -368,8 +695,16 @@ macro_rules! match_val {
 macro_rules! impl_nums {
     ($($ty:ty,)*) => {
         $(
-            impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for $ty {
-                const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Num);
+            impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for $ty {
+                fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+                    types::Type {
+                        meta: types::TypeMeta {
+                            path: TypePath::new(stringify!($ty)).unwrap().to_owned(),
+                            ..Default::default()
+                        },
+                        kind: types::TypeKind::Number,
+                    }
+                }
 
                 fn from_bauble(
                     val: Val,
@@ -379,11 +714,10 @@ macro_rules! impl_nums {
                         val,
                         (Num(number), span) => {
                             let number = paste::paste!(number.[< to_ $ty >]())
-                                .ok_or_else(|| DeserializeError::Custom(CustomError {
-                                    message: Cow::Borrowed("Invalid number"),
-                                    level: Level::Error,
-                                    labels: vec![(Spanned::new(span.clone(), Cow::Owned(format!("{} is not a valid {}", number, stringify!($ty)))), Level::Error)]
-                                }).spanned(span))?;
+                                .ok_or_else(||
+                                    CustomError::new("Invalid number")
+                                    .with_err_label(format!("{number} is not a valid {}", stringify!($ty)).spanned(span.clone()))
+                                    .error::<Self>(span))?;
                             // SAFETY: No allocations are contained in these types.
                             unsafe { allocator.wrap(number) }
                         }
@@ -400,8 +734,91 @@ impl_nums! {
     f32, f64,
 }
 
-impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Bool);
+impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for () {
+    fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new("()").unwrap().to_owned(),
+                ..Default::default()
+            },
+            kind: types::TypeKind::Unit,
+        }
+    }
+
+    fn from_bauble(val: Val, a: &A) -> Result<A::Out<Self>, FromBaubleError> {
+        match_val!(
+            val,
+            // SAFETY: No allocations
+            (Unit, _span) => unsafe { a.wrap(()) },
+        )
+    }
+}
+/*
+impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, _>();
+
+        let generic_path = TypePath::new("std::vec::Vec").unwrap();
+        let generic = registry.get_or_register_generic_type(generic_path);
+
+        types::Type {
+            meta: types::TypeMeta {
+                generic_base_type: Some(generic),
+                path: TypePath::new(format!(
+                    "{generic_path}<{}>",
+                    registry.key_type(inner).meta.path
+                ))
+                .unwrap(),
+                ..Default::default()
+            },
+            kind: crate::types::TypeKind::Array {
+                ty: types::FieldType {
+                    id: inner,
+                    extra: Default::default(),
+                },
+                len: None,
+            },
+        }
+    }
+
+    fn from_bauble<Ctx: AssetContext>(
+        val: Val,
+        ctx: FromBaubleCtx<'_, 'a, DefaultAllocator, Ctx>,
+    ) -> Result<Self, FromBaubleError> {
+        let ty = ctx.get_type::<Self>(&val)?;
+        if let Some((attribute, _)) = attributes.into_iter().next() {
+            Err(FullDeserializeError::new::<Self>(
+                span.clone(),
+                DeserializeError::UnexpectedAttribute { attribute },
+            ))?
+        }
+
+        Ok(match value {
+            Value::Array(array) => array
+                .into_iter()
+                .map(|data| T::from_bauble(data, allocator))
+                .collect::<Result<_, _>>()?,
+            _ => Err(FullDeserializeError::new::<Self>(
+                span,
+                DeserializeError::WrongKind {
+                    expected: ValueKind::Array,
+                    found: value.kind(),
+                },
+            ))?,
+        })
+    }
+}
+
+impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for bool {
+    fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new("bool").unwrap().to_owned(),
+                ..Default::default()
+            },
+            kind: types::Primitive::Bool.into(),
+        }
+    }
 
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
         match_val!(
@@ -414,8 +831,16 @@ impl<'a, A: BaubleAllocator<'a>> FromBauble<'a, A> for bool {
     }
 }
 
-impl FromBauble<'_> for String {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Str);
+impl Bauble<'_> for String {
+    fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new("std::string::String").unwrap().to_owned(),
+                ..Default::default()
+            },
+            kind: types::Primitive::Str.into(),
+        }
+    }
 
     fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, FromBaubleError> {
         match_val!(
@@ -425,13 +850,45 @@ impl FromBauble<'_> for String {
     }
 }
 
-impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Option<T> {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Opt);
+impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, _>();
+
+        let generic_path = TypePath::new("std::option::Option").unwrap();
+        let generic = registry.get_or_register_generic_type(generic_path);
+
+        let kind = registry.build_enum([
+            (
+                TypePathElem::new("Some").unwrap(),
+                types::Fields::Unnamed(types::TupleType {
+                    required: vec![types::FieldType {
+                        id: inner,
+                        extra: IndexMap::new(),
+                    }],
+                    ..Default::default()
+                }),
+            ),
+            (TypePathElem::new("None").unwrap(), types::Fields::Unit),
+        ]);
+
+        types::Type {
+            meta: types::TypeMeta {
+                generic_base_type: Some(generic),
+                path: TypePath::new(format!(
+                    "{generic_path}<{}>",
+                    registry.key_type(inner).meta.path
+                ))
+                .unwrap(),
+                ..Default::default()
+            },
+            kind,
+        }
+    }
 
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Option<T>>, FromBaubleError> {
         match_val!(
             val,
-            (Opt(opt), _span) => {
+            (Struct(opt), _span) => {
                 let opt = opt
                 .map(|val| T::from_bauble(*val, allocator).and_then(|t| {
                     // SAFETY: We wrap this value again inside the option.
@@ -447,17 +904,6 @@ impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>> FromBauble<'a, A> for Opt
     }
 }
 
-impl FromBauble<'_> for () {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Unit);
-
-    fn from_bauble(val: Val, _: &DefaultAllocator) -> Result<Self, FromBaubleError> {
-        match_val!(
-            val,
-            (Unit, _span) => (),
-        )
-    }
-}
-
 macro_rules! impl_tuple {
     () => {};
     ($head:ident $($X:ident)*) => {
@@ -465,8 +911,36 @@ macro_rules! impl_tuple {
         impl_tuple!(~ $head $($X)*);
     };
     (~ $($ident:ident)+) => {
-        impl<'a, A: BaubleAllocator<'a>, $($ident: FromBauble<'a, A>),*> FromBauble<'a, A> for ($($ident),*,) {
-            const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Tuple);
+        impl<'a, A: BaubleAllocator<'a>, $($ident: Bauble<'a, A>),*> Bauble<'a, A> for ($($ident),*,) {
+            fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+                let mut inner_types = Vec::new();
+                let mut path = "(".to_string();
+                let mut _add_comma = false;
+                $(
+                    if _add_comma {
+                        path.push_str(", ");
+                    }
+                    let inner = registry.get_or_register_type::<$ident, _>();
+                    inner_types.push(types::FieldType {
+                        id: inner,
+                        extra: IndexMap::new(),
+                    });
+                    path.push_str(registry.key_type(inner).meta.path.as_str());
+                    _add_comma = true;
+                )*
+                path.push_str(")");
+                types::Type {
+                    meta: types::TypeMeta {
+                        path: TypePath::new(path).unwrap(),
+                        ..Default::default()
+                    },
+                    kind: types::TypeKind::Tuple(types::TupleType {
+                        required: inner_types,
+                        optional: vec![],
+                        allow_additional: None,
+                    }),
+                }
+            }
 
             fn from_bauble(
                 val: Val,
@@ -475,14 +949,7 @@ macro_rules! impl_tuple {
                 const LEN: usize = [$(stringify!($ident)),*].len();
                 match_val!(
                     val,
-                    (Tuple(name, seq), span) => {
-                        if let Some(name) = name {
-                            Err(DeserializeError::UnexpectedTypePath {
-                                ty: Self::INFO.to_owned(),
-                                path_span: name.span(),
-                            }.spanned(span.clone()))?
-                        }
-
+                    (Tuple(seq), span) => {
                         if seq.len() == LEN {
                             let mut seq = seq.into_iter();
                             let res = ($({
@@ -500,11 +967,10 @@ macro_rules! impl_tuple {
 
 
                         } else {
-                            return Err(Box::new(DeserializeError::WrongTupleLength {
+                            Err(DeserializeError::new::<Self>(span, DeserializeErrorKind::WrongTupleLength {
                                 expected: LEN,
                                 found: seq.len(),
-                                ty: Self::INFO.to_owned(),
-                            }.spanned(span)));
+                            }))?
                         }
                     }
                 )
@@ -515,10 +981,25 @@ macro_rules! impl_tuple {
 
 impl_tuple!(T0 T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14 T15);
 
-impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>, const N: usize> FromBauble<'a, A>
-    for [T; N]
-{
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
+impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A> for [T; N] {
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, _>();
+
+        types::Type {
+            meta: types::TypeMeta {
+                path: TypePath::new(format!("[{}; {N}]", registry.key_type(inner).meta.path))
+                    .unwrap(),
+                ..Default::default()
+            },
+            kind: crate::types::TypeKind::Array {
+                ty: types::FieldType {
+                    id: inner,
+                    extra: Default::default(),
+                },
+                len: Some(N),
+            },
+        }
+    }
 
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
         match_val!(
@@ -542,11 +1023,10 @@ impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>, const N: usize> FromBaubl
                     // SAFETY: The elements have been validated.
                     unsafe { allocator.wrap(res) }
                 } else {
-                    return Err(Box::new(DeserializeError::WrongArrayLength {
+                    Err(Box::new(FullDeserializeError::new::<Self>(span, DeserializeError::WrongArrayLength {
                         expected: N,
                         found: seq.len(),
-                        ty: Self::INFO.to_owned(),
-                    }.spanned(span)))
+                    })))?
                 }
             }
         )
@@ -554,12 +1034,33 @@ impl<'a, A: BaubleAllocator<'a>, T: FromBauble<'a, A>, const N: usize> FromBaubl
 }
 
 #[cfg(feature = "enumset")]
-impl<'a, A, T> FromBauble<'a, A> for enumset::EnumSet<T>
+impl<'a, A, T> Bauble<'a, A> for enumset::EnumSet<T>
 where
     A: BaubleAllocator<'a>,
-    T: FromBauble<'a, A> + enumset::EnumSetType,
+    T: Bauble<'a, A> + enumset::EnumSetType,
 {
-    const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Array);
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T>();
+
+        let generic_path = TypePath::new("enumset::EnumSet").unwrap();
+        let generic = registry.get_or_register_generic_type(generic_path);
+
+        types::Type {
+            meta: types::TypeMeta {
+                generic_base_type: Some(generic),
+                path: TypePath::new(format!(
+                    "{generic_path}<{}>",
+                    registry.key_type(inner).meta.path
+                ))
+                .unwrap(),
+                ..Default::default()
+            },
+            kind: crate::types::TypeKind::Array {
+                ty: inner,
+                len: None,
+            },
+        }
+    }
 
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
         match_val!(
@@ -601,10 +1102,39 @@ where
 
 macro_rules! impl_hash_map {
     ($($part:ident)::+) => {
-        impl<'a, K: FromBauble<'a> + Eq + std::hash::Hash, V: FromBauble<'a>> FromBauble<'a>
+        impl<'a, K: Bauble<'a> + Eq + std::hash::Hash, V: Bauble<'a>> Bauble<'a>
             for $($part)::+<K, V>
         {
-            const INFO: TypeInfo<'static> = TypeInfo::Kind(ValueKind::Map);
+            fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+                let key = registry.get_or_register_type::<K, _>();
+                let value = registry.get_or_register_type::<V, _>();
+
+                let generic_path = TypePath::new(stringify!($($part)::+)).unwrap();
+                let generic = registry.get_or_register_generic_type(generic_path);
+
+                types::Type {
+                    meta: types::TypeMeta {
+                        generic_base_type: Some(generic),
+                        path: TypePath::new(format!(
+                            "{generic_path}<{}, {}>",
+                            registry.key_type(key).meta.path,
+                            registry.key_type(value).meta.path
+                        )).unwrap(),
+                        ..Default::default()
+                    },
+                    kind: crate::types::TypeKind::Map {
+                        key: types::FieldType {
+                            id: key,
+                            extra: Default::default(),
+                        },
+                        value: types::FieldType {
+                            id: value,
+                            extra: Default::default(),
+                        },
+                        len: None,
+                    },
+                }
+            }
 
             fn from_bauble(
                 val: Val,
@@ -634,8 +1164,25 @@ impl_hash_map!(std::collections::HashMap);
 #[cfg(feature = "hashbrown")]
 impl_hash_map!(hashbrown::HashMap);
 
-impl<'a, T: FromBauble<'a>> FromBauble<'a> for Box<T> {
-    const INFO: TypeInfo<'static> = T::INFO;
+impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
+    fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, _>();
+
+        let generic_path = TypePath::new("std::box::Box").unwrap();
+        let generic = registry.get_or_register_generic_type(generic_path);
+        let ty = registry.key_type(inner);
+        types::Type {
+            meta: types::TypeMeta {
+                generic_base_type: Some(generic),
+                path: TypePath::new(format!("{generic_path}<{}>", ty.meta.path)).unwrap(),
+                // TODO: Do we want to pass traits to box? Maybe have a field on the trait data whether to do that.
+                traits: Vec::new(),
+                attributes: ty.meta.attributes.clone(),
+                extra: ty.meta.extra.clone(),
+            },
+            kind: types::TypeKind::Transparent(inner),
+        }
+    }
 
     fn from_bauble(
         val: Val,
@@ -644,3 +1191,24 @@ impl<'a, T: FromBauble<'a>> FromBauble<'a> for Box<T> {
         Ok(Box::new(T::from_bauble(val, allocator)?))
     }
 }
+*/
+
+impl Bauble<'_> for Val {
+    fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+        types::Type {
+            meta: types::TypeMeta {
+                attributes: types::NamedFields::any(),
+                ..Default::default()
+            },
+            kind: types::TypeKind::Any,
+        }
+    }
+
+    fn from_bauble<Ctx: AssetContext>(
+        data: Val,
+        _: FromBaubleCtx<'_, '_, DefaultAllocator, Ctx>,
+    ) -> Result<Self, FromBaubleError> {
+        Ok(data)
+    }
+}
+*/

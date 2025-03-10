@@ -1,9 +1,10 @@
-use std::{borrow::Cow, fmt::Debug, sync::Arc};
+use std::{borrow::Cow, fmt::Debug};
 
 use chumsky::{prelude::*, text::Char};
 use indexmap::IndexMap;
 
 use crate::{
+    bauble_context::FileId,
     parse::{
         Binding, Ident, Object,
         value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},
@@ -15,7 +16,7 @@ type Extra<'a> = extra::Err<Rich<'a, char, crate::Span>>;
 
 #[derive(Clone)]
 pub struct ParserSource<'a, A> {
-    pub path: &'a str,
+    pub file_id: FileId,
     pub ctx: &'a A,
 }
 
@@ -28,7 +29,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
 
     type Cursor = usize;
 
-    type Cache = (&'a str, Arc<str>);
+    type Cache = (&'a str, FileId);
 
     fn begin(self) -> (Self::Cursor, Self::Cache) {
         let (cursor, cache) = <&'a str as Input>::begin(
@@ -38,7 +39,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
                 .unwrap_or(""),
         );
 
-        (cursor, (cache, self.path.into()))
+        (cursor, (cache, self.file_id))
     }
 
     fn cursor_location(cursor: &Self::Cursor) -> usize {
@@ -59,7 +60,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
         (_, file): &mut Self::Cache,
         range: std::ops::Range<&Self::Cursor>,
     ) -> Self::Span {
-        crate::Span::new(file.clone(), *range.start..*range.end)
+        crate::Span::new(*file, *range.start..*range.end)
     }
 }
 
@@ -76,7 +77,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::ExactSizeInput<'a> for ParserSo
         cache: &mut Self::Cache,
         range: std::ops::RangeFrom<&Self::Cursor>,
     ) -> Self::Span {
-        crate::Span::new(cache.1.clone(), *range.start..cache.0.len())
+        crate::Span::new(cache.1, *range.start..cache.0.len())
     }
 }
 
