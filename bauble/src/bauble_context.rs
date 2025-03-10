@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 
 use crate::{
-    Bauble, BaubleAllocator,
+    Bauble, BaubleAllocator, BaubleErrors,
     path::{TypePath, TypePathElem},
     types::{TypeId, TypeRegistry},
 };
@@ -176,7 +176,6 @@ impl CtxNode {
         walk_find_inner(self, path, &mut visit)
     }
 
-    /*
     fn walk_mut<R>(
         &mut self,
         path: TypePath<&str>,
@@ -193,7 +192,28 @@ impl CtxNode {
                 .and_then(|node| node.walk_mut(rest, visit))
         }
     }
-    */
+
+    fn is_empty(&self) -> bool {
+        self.reference.ty.is_none()
+            && self.reference.module.is_none()
+            && self.reference.asset.is_none()
+            && self.children.is_empty()
+            && self.source.is_none()
+    }
+
+    fn clear_child_assets(&mut self) {
+        self.children.retain(|_, node| {
+            if node.source.is_some() {
+                return true;
+            }
+
+            node.clear_child_assets();
+
+            node.reference.asset = None;
+
+            !node.is_empty()
+        });
+    }
 
     /// Builds all path elements as modules
     fn build_modules(&mut self, mut path: TypePath, child_path: TypePath<&str>) -> &mut CtxNode {
@@ -254,17 +274,140 @@ pub struct BaubleContext {
 }
 
 impl BaubleContext {
-    pub fn register_file(&mut self, file: TypePath<&str>, source: impl Into<String>) {
-        let node = self.root_node.build_modules(TypePath::empty(), file);
+    pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) {
+        let node = self.root_node.build_modules(TypePath::empty(), path);
         let id = FileId(self.files.len());
         node.source = Some(id);
         self.files
-            .push((file.to_owned(), ariadne::Source::from(source.into())));
+            .push((path.to_owned(), ariadne::Source::from(source.into())));
     }
 
+    /// Registers an asset. This is done automatically for any objects in a file that gets registered.
+    ///
+    /// With this method you can expose assets that aren't in bauble.
     pub fn register_asset(&mut self, path: TypePath, ty: TypeId) {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
         self.root_node.build_asset(path, ref_ty);
+    }
+
+    fn file(&self, file: FileId) -> (TypePath<&str>, &Source) {
+        let (path, source) = &self.files[file.0];
+
+        (path.borrow(), source)
+    }
+
+    fn file_mut(&mut self, file: FileId) -> (TypePath<&str>, &mut Source) {
+        let (path, source) = &mut self.files[file.0];
+
+        (path.borrow(), source)
+    }
+
+    /// Loads all registered files.
+    pub fn load_all(&mut self) -> (Vec<crate::Object>, BaubleErrors) {
+        self.reload_files((0..self.files.len()).map(FileId))
+    }
+
+    /// Reload all paths, and registers any new files.
+    pub fn reload_paths<S0: AsRef<str>, S1: Into<String>>(
+        &mut self,
+        paths: impl IntoIterator<Item = (TypePath<S0>, S1)>,
+    ) -> (Vec<crate::Object>, BaubleErrors) {
+        let ids = paths
+            .into_iter()
+            .map(|(path, source)| match self.get_file_id(path.borrow()) {
+                Some(id) => {
+                    *self.file_mut(id).1 = Source::from(source.into());
+                    id
+                }
+                None => {
+                    self.register_file(path.borrow(), source);
+                    self.get_file_id(path.borrow())
+                        .expect("We just registered the file")
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.reload_files(ids)
+    }
+
+    /// This clears asset references in any of the file modules.
+    fn reload_files<I: IntoIterator<Item = FileId>>(
+        &mut self,
+        files: I,
+    ) -> (Vec<crate::Object>, BaubleErrors)
+    where
+        I::IntoIter: Clone + ExactSizeIterator,
+    {
+        let files = files.into_iter();
+        // Clear any previous assets that were loaded by these files.
+        for file in files.clone() {
+            // Need a partial borrow here.
+            let (path, _) = &self.files[file.0];
+            self.root_node
+                .walk_mut(path.borrow(), |node| node.clear_child_assets());
+        }
+
+        let mut file_values = Vec::with_capacity(files.len());
+
+        let mut skip = Vec::new();
+        // Parse values, and return any errors.
+        let mut errors = BaubleErrors::empty();
+        for file in files.clone() {
+            let values = match crate::parse(file, self) {
+                Ok(values) => values,
+                Err(err) => {
+                    skip.push(file);
+                    errors.extend(err);
+                    continue;
+                }
+            };
+
+            file_values.push(values);
+        }
+
+        let mut skip_iter = skip.iter().copied().peekable();
+        let mut new_skip = Vec::new();
+
+        for (file, values) in files.clone().zip(file_values.iter()).filter(|(file, _)| {
+            if skip_iter.peek() == Some(file) {
+                skip_iter.next();
+                false
+            } else {
+                true
+            }
+        }) {
+            // Need a partial borrow here.
+            let (path, _) = self.file(file);
+            let path = path.to_owned();
+            if let Err(e) = crate::value::register_assets(path.borrow(), self, [], values) {
+                // Skip files that errored on registering.
+                new_skip.push(file);
+                errors.extend(BaubleErrors::from(e));
+            }
+        }
+
+        let mut objects = Vec::new();
+        let mut skip_a = skip.into_iter().peekable();
+        let mut skip_b = new_skip.into_iter().peekable();
+
+        for (file, values) in files.zip(file_values).filter(|(file, _)| {
+            if skip_a.peek() == Some(file) {
+                skip_a.next();
+                false
+            } else if skip_b.peek() == Some(file) {
+                skip_b.next();
+                false
+            } else {
+                true
+            }
+        }) {
+            match crate::value::convert_values(file, values, &crate::value::Symbols::new(&*self)) {
+                Ok(o) => objects.extend(o),
+                Err(e) => errors.extend(e),
+            }
+        }
+
+        (objects, errors)
     }
 }
 

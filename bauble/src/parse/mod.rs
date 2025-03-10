@@ -14,7 +14,7 @@ use crate::{
     types::TypeRegistry,
 };
 
-impl BaubleError for Rich<'_, char, Span> {
+impl BaubleError for Rich<'static, char, Span> {
     fn msg_general(&self, _: &TypeRegistry) -> crate::error::ErrorMsg {
         Cow::Borrowed("Parser error").spanned(*self.span())
     }

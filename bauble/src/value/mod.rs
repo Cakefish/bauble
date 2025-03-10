@@ -500,7 +500,7 @@ impl<C: AssetContext> Symbols<C> {
     }
 }
 
-pub fn register_assets<C: AssetContext>(
+pub fn register_assets(
     path: TypePath<&str>,
     ctx: &mut crate::bauble_context::BaubleContext,
     default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
@@ -561,7 +561,7 @@ pub fn convert_values<C: AssetContext>(
     file: FileId,
     values: Values,
     default_symbols: &Symbols<C>,
-) -> std::result::Result<Vec<Object>, BaubleErrors<'static>> {
+) -> std::result::Result<Vec<Object>, BaubleErrors> {
     let mut use_symbols = Symbols::new(&default_symbols.ctx);
     let mut use_errors = Vec::new();
     for use_ in values.uses {

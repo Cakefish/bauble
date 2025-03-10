@@ -418,10 +418,7 @@ impl TypeRegistry {
 
         match (&target.kind, &input.kind) {
             (TypeKind::Primitive(Primitive::Any), _) => true,
-            (TypeKind::Trait(types), _) => types.contains(input_id),
-            (_, TypeKind::Generic(types)) => types.contains(output_id),
-            (TypeKind::Ref(a), TypeKind::Ref(b)) => *a == *b,
-            (TypeKind::Ref(t), _) => self.can_infer_from(*t, input_id),
+            (TypeKind::Transparent(id), _) => self.can_infer_from(*id, input_id),
             (
                 TypeKind::Enum {
                     flatten: true,
@@ -444,13 +441,17 @@ impl TypeRegistry {
                 TypeKind::EnumVariant { enum_type, .. },
             ) => *enum_type == output_id && variants.0.values().any(|id| *id == input_id),
 
+            (TypeKind::Trait(types), _) => types.contains(input_id),
+            (TypeKind::Ref(a), TypeKind::Ref(b)) => self.can_infer_from(*a, *b),
+            (TypeKind::Ref(t), _) => self.can_infer_from(*t, input_id),
+
             (TypeKind::BitFlags { .. }, TypeKind::EnumVariant { enum_type, .. }) => {
                 *enum_type == output_id
             }
 
-            (TypeKind::Transparent(id), _) => self.can_infer_from(*id, input_id),
-
             (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
+
+            (_, TypeKind::Generic(types)) => types.contains(output_id),
             _ => false,
         }
     }

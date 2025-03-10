@@ -26,16 +26,23 @@ pub mod private {
 
 use parse::Values;
 
-pub fn parse(file_id: FileId, ctx: &impl AssetContext) -> Result<Values, BaubleErrors<'_>> {
+pub fn parse(file_id: FileId, ctx: &impl AssetContext) -> Result<Values, BaubleErrors> {
     use chumsky::Parser;
 
     let parser = parse::parser();
     let result = parser.parse(parse::ParserSource { file_id, ctx });
 
-    result.into_result().map_err(BaubleErrors::from)
+    result.into_result().map_err(|errors| {
+        BaubleErrors::from(
+            errors
+                .into_iter()
+                .map(|e| e.into_owned())
+                .collect::<Vec<_>>(),
+        )
+    })
 }
 
-pub fn convert(file_id: FileId, ctx: &impl AssetContext) -> Result<Vec<Object>, BaubleErrors<'_>> {
+pub fn convert(file_id: FileId, ctx: &impl AssetContext) -> Result<Vec<Object>, BaubleErrors> {
     let values = parse(file_id, ctx)?;
 
     convert_values(file_id, values, &value::Symbols::new(ctx))
