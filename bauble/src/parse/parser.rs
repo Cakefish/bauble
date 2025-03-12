@@ -31,16 +31,14 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
     type Cache = (&'a str, Arc<str>);
 
     fn begin(self) -> (Self::Cursor, Self::Cache) {
-        (
-            0,
-            (
-                self.ctx
-                    .get_source(self.path)
-                    .map(|s| s.text())
-                    .unwrap_or(""),
-                self.path.into(),
-            ),
-        )
+        let (cursor, cache) = <&'a str as Input>::begin(
+            self.ctx
+                .get_source(self.path)
+                .map(|source| source.text())
+                .unwrap_or(""),
+        );
+
+        (cursor, (cache, self.path.into()))
     }
 
     fn cursor_location(cursor: &Self::Cursor) -> usize {
@@ -163,39 +161,11 @@ impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for S
 pub fn parser<'a, A: crate::AssetContext + 'a>()
 -> impl Parser<'a, ParserSource<'a, A>, Values, Extra<'a>> {
     let comment_end = just::<_, ParserSource<'a, A>, Extra<'a>>('\n').or(end().map(|_| '\0'));
-    let comments = just("/*")
-        .ignore_then(
-            recursive(move |more_comment| {
-                just("*/")
-                    .map_with(|_, e| {
-                        let state: &mut State<usize> = e.state();
-                        let res: Option<usize> = state.0.checked_sub(1);
-                        if let Some(new_state) = res {
-                            state.0 = new_state;
-                        }
-                        res
-                    })
-                    .filter(|d| d.is_none())
-                    .ignored()
-                    .or(just("/*")
-                        .map_with(|_, e| {
-                            let state: &mut State<usize> = e.state();
-
-                            state.0 += 1
-                        })
-                        .or_not()
-                        .then(more_comment.clone())
-                        .ignored())
-                    .or(any().ignore_then(more_comment).ignored())
-            })
-            .with_state(State(0usize)),
-        )
+    let comments = just("//")
+        .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
+            |more_comment| comment_end.or(any().ignore_then(more_comment)),
+        ))
         .ignored()
-        .or(just("//")
-            .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
-                |more_comment| comment_end.or(any().ignore_then(more_comment)),
-            ))
-            .ignored())
         .padded()
         .repeated()
         .padded(); // Have to pad again in case there are no repetitions
