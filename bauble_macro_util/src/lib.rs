@@ -1,10 +1,10 @@
 use indexmap::IndexMap;
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote, ToTokens};
+use quote::{ToTokens, format_ident, quote};
 use syn::{
-    AttrStyle, Data, DeriveInput, Error, Expr, Fields, ImplGenerics, Index, PathSegment, Token,
-    Type, WhereClause, WherePredicate, parenthesized, parse::Parse, parse2, punctuated::Punctuated,
-    spanned::Spanned, token::PathSep,
+    AttrStyle, Data, DeriveInput, Error, Expr, Fields, Index, Token, Type, WhereClause,
+    WherePredicate, parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned,
+    token::PathSep,
 };
 
 #[derive(Default, Clone)]
@@ -57,8 +57,6 @@ enum FieldTy<'a> {
         default: Option<TokenStream>,
         /// Whether the field is a `bauble` attribute, and if so which ident to use.
         attribute: Option<Ident>,
-        /// Index for a tuple that holds the values of deserializable fields
-        index: Index,
         extra: Extra,
         /// Type from which the field is deserialized
         ty: &'a Type,
@@ -75,8 +73,7 @@ enum FieldTy<'a> {
 impl FieldTy<'_> {
     fn get_type(&self) -> &Type {
         match self {
-            FieldTy::Val { ty, .. } |
-            FieldTy::AsDefault { ty, .. } => ty,
+            FieldTy::Val { ty, .. } | FieldTy::AsDefault { ty, .. } => ty,
         }
     }
 }
@@ -127,14 +124,27 @@ impl ContainerType {
 }
 
 impl ContainerAttrs {
-    fn parse(attributes: &[syn::Attribute], kind: ContainerType, flatten: bool) -> syn::Result<Self> {
+    fn parse(
+        attributes: &[syn::Attribute],
+        kind: ContainerType,
+        flatten: bool,
+    ) -> syn::Result<Self> {
         let mut this = Self {
             flatten,
             ..Default::default()
         };
 
         for attr in attributes {
-            if let syn::Meta::NameValue(syn::MetaNameValue { path, value: Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }), .. }) = &attr.meta {
+            if let syn::Meta::NameValue(syn::MetaNameValue {
+                path,
+                value:
+                    Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }),
+                ..
+            }) = &attr.meta
+            {
                 if path.is_ident("doc") {
                     this.extra.0.insert("doc".to_string(), s.value());
                 }
@@ -187,7 +197,7 @@ impl ContainerAttrs {
 
                         meta.input.parse::<Token![=]>()?;
 
-                        let  path = 
+                        let path =
                             Punctuated::<Ident, PathSep>::parse_separated_nonempty(meta.input)?;
 
                         if path.is_empty() {
@@ -229,7 +239,7 @@ impl ContainerAttrs {
                         }
                     }
 
-                "bounds" => {
+                    "bounds" => {
                         if !kind.is_type() {
                             Err(meta.error("The `bounds` attribute can only be used on types"))?
                         }
@@ -241,13 +251,14 @@ impl ContainerAttrs {
                         meta.input.parse::<Token![=]>()?;
                         let bounds_parse;
                         parenthesized!(bounds_parse in meta.input);
-                        this.bounds = Some(bounds_parse.parse_terminated(WherePredicate::parse, Token![,])?);
+                        this.bounds =
+                            Some(bounds_parse.parse_terminated(WherePredicate::parse, Token![,])?);
 
                         if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
                             Err(meta.error("Unexpected token after bounds attribute"))?
                         }
                     }
-                    
+
                     "tuple" => {
                         if !kind.is_container() {
                             Err(meta.error("The `tuple` attribute can only be used on containers"))?
@@ -291,24 +302,24 @@ fn parse_fields(
     // The struct or variant's fields
     fields: &Fields,
     tuple: bool,
-) -> Result<FieldsInfo, TokenStream> {
+) -> syn::Result<FieldsInfo> {
     let mut val_count = 0;
     let kind = match fields {
-            // Named fields in a type with the `tuple` attribute are treated as a tuple
-            Fields::Named(_) => Some(if tuple {
-                FieldsKind::Unnamed
-            } else {
-                FieldsKind::Named
-            }),
-            Fields::Unnamed(_) => Some(FieldsKind::Unnamed),
-            Fields::Unit => None,
-        };
-        let mut last = None;
+        // Named fields in a type with the `tuple` attribute are treated as a tuple
+        Fields::Named(_) => Some(if tuple {
+            FieldsKind::Unnamed
+        } else {
+            FieldsKind::Named
+        }),
+        Fields::Unnamed(_) => Some(FieldsKind::Unnamed),
+        Fields::Unit => None,
+    };
+    let mut last = None;
     Ok(FieldsInfo {
         fields: fields
             .iter()
             .enumerate()
-            .map(|(index, field)| -> Result<_, TokenStream> {
+            .map(|(index, field)| -> syn::Result<_> {
                 let mut default = None;
                 let mut as_default = None;
                 let mut attribute = None;
@@ -327,8 +338,7 @@ fn parse_fields(
 
                     if let AttrStyle::Inner(_) = attr.style {
                         Err(
-                            Error::new_spanned(attr, "inner attributes are not supported")
-                                .to_compile_error(),
+                            Error::new_spanned(attr, "inner attributes are not supported"),
                         )?
                     }
 
@@ -398,8 +408,7 @@ fn parse_fields(
                             }
                             ident => Err(meta.error(format!("unknown attribute `{ident}`"))),
                         }
-                    })
-                    .map_err(|err| err.to_compile_error())?;
+                    })?;
                 }
 
                 let field = FieldAttrs {
@@ -416,12 +425,12 @@ fn parse_fields(
                             field,
                             "field cannot be both `default` and `as_default`",
                         )
-                        .to_compile_error())?,
+                        )?,
                         (_, Some(_), Some(_)) => Err(Error::new_spanned(
                             field,
                             "field cannot be both `as_default` and `attribute`",
                         )
-                        .to_compile_error())?,
+                        )?,
                         (None, Some(as_default), None) => FieldTy::AsDefault {
                             default: as_default,
                             ty: &field.ty,
@@ -431,19 +440,16 @@ fn parse_fields(
                                 if default.is_some() {
                                     last = Some(field.span());
                                 } else if let Some(span) = last {
-                                    Err(Error::new(span, "Optional unnamed fields have to be at the end").to_compile_error())?
+                                    Err(Error::new(span, "Optional unnamed fields have to be at the end"))?
                                 }
                             }
-                            let index = Index::from(val_count);
                             if attribute.is_none() {
                                 val_count += 1;
-                                
                             }
 
                             FieldTy::Val {
                                 default,
                                 attribute,
-                                index,
                                 ty: &field.ty,
                                 extra,
                             }
@@ -453,7 +459,7 @@ fn parse_fields(
 
                 Ok(field)
             })
-            .collect::<Result<_, _>>()?,
+            .collect::<syn::Result<_>>()?,
         val_count,
         real_kind: match fields {
             Fields::Named(_) => Some(FieldsKind::Named),
@@ -465,14 +471,14 @@ fn parse_fields(
 }
 
 /// Related fields used by `derive_struct` and `derive_fields` containing type info
-struct TypeInfo<'a> {
+struct TypeInfo {
     span: Span,
     /// The struct or variant, used for construction
     ty: TokenStream,
-    /// The type's generics
-    impl_generics: &'a ImplGenerics<'a>,
-    has_generics: bool,
-    where_clause: &'a WhereClause,
+    // /// The type's generics
+    // impl_generics: &'a ImplGenerics<'a>,
+    // has_generics: bool,
+    // where_clause: &'a WhereClause,
 }
 
 fn from_bauble(v: impl ToTokens) -> TokenStream {
@@ -484,11 +490,26 @@ fn from_bauble(v: impl ToTokens) -> TokenStream {
     }
 }
 
-fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStream, flatten: bool) -> (Option<(TokenStream, TokenStream)>, TokenStream) {
+fn derive_fields(
+    ty_info: &TypeInfo,
+    fields: &FieldsInfo,
+    construct: &TokenStream,
+    flatten: bool,
+) -> (Option<(TokenStream, TokenStream)>, TokenStream) {
     match (fields.kind, flatten) {
         (_, true) if fields.val_count == 1 => {
-            let field = fields.fields.iter()
-                .find(|field| matches!(field.ty, FieldTy::Val { attribute: None, .. }))
+            let field = fields
+                .fields
+                .iter()
+                .find(|field| {
+                    matches!(
+                        field.ty,
+                        FieldTy::Val {
+                            attribute: None,
+                            ..
+                        }
+                    )
+                })
                 .expect("val_count is 1");
             let ty = field.ty.get_type();
             let ident = field.variable_ident();
@@ -499,37 +520,41 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
                         ::bauble::Value::Transparent(#ident)
                     },
                     quote! {
-                    {
-                        let #ident = #v?;
+                        {
+                            let #ident = #v?;
 
-                        #construct
-                    }
-                })),
+                            #construct
+                        }
+                    },
+                )),
                 quote! {
                     ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#ty, _>())
-                }
-            )
-        },
-        (None, true) => {
-            (
-                None,
-                quote! {
-                    ::bauble::types::TypeKind::Primitive(::bauble::types::Primitive::Unit)
-                }
+                },
             )
         }
-        (None, false) => {
-            (
-                None,
-                quote! { ::bauble::types::TypeKind::Struct(::bauble::types::Fields::Unit) }
-            )
-        }
+        (None, true) => (
+            None,
+            quote! {
+                ::bauble::types::TypeKind::Primitive(::bauble::types::Primitive::Unit)
+            },
+        ),
+        (None, false) => (
+            None,
+            quote! { ::bauble::types::TypeKind::Struct(::bauble::types::Fields::Unit) },
+        ),
         (Some(FieldsKind::Unnamed), flatten) => {
             let mut required_fields = Vec::new();
             let mut optional_fields = Vec::new();
             let mut field_constructors = Vec::new();
             for field in &fields.fields {
-                if let FieldTy::Val { default, attribute: None, extra, ty, .. } = &field.ty {
+                if let FieldTy::Val {
+                    default,
+                    attribute: None,
+                    extra,
+                    ty,
+                    ..
+                } = &field.ty
+                {
                     let extra = extra.convert();
                     let var = field.variable_ident();
                     let field = quote! {
@@ -538,7 +563,6 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
                             extra: #extra,
                         }
                     };
-
 
                     if let Some(default) = default {
                         optional_fields.push(field);
@@ -577,7 +601,7 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
                         .with_optional([#(#optional_fields),*])
                 };
             };
-            
+
             (
                 Some((
                     if flatten {
@@ -599,21 +623,28 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
 
                             #construct
                         }
-                    }
+                    },
                 )),
                 if flatten {
                     quote! { ::bauble::types::TypeKind::Tuple(#fields) }
                 } else {
                     quote! { ::bauble::types::TypeKind::Struct(::bauble::types::Fields::Unnamed(#fields)) }
-                }
+                },
             )
-        },
+        }
         (Some(FieldsKind::Named), false) => {
             let mut required_fields = Vec::new();
             let mut optional_fields = Vec::new();
             let mut field_constructors = Vec::new();
             for field in &fields.fields {
-                if let FieldTy::Val { default, attribute: None, extra, ty, .. } = &field.ty {
+                if let FieldTy::Val {
+                    default,
+                    attribute: None,
+                    extra,
+                    ty,
+                    ..
+                } = &field.ty
+                {
                     let extra = extra.convert();
                     let var = field.variable_ident();
                     let name = field.name.to_string();
@@ -626,7 +657,6 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
                             },
                         )
                     };
-
 
                     if let Some(default) = default {
                         optional_fields.push(field);
@@ -663,7 +693,7 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
                         .with_optional([#(#optional_fields),*])
                 };
             };
-            
+
             (
                 Some((
                     quote! {
@@ -675,21 +705,79 @@ fn derive_fields(ty_info: &TypeInfo, fields: &FieldsInfo, construct: &TokenStrea
 
                             #construct
                         }
-                    }
+                    },
                 )),
-                quote! { ::bauble::types::TypeKind::Struct(::bauble::types::Fields::Named(#fields)) }
+                quote! { ::bauble::types::TypeKind::Struct(::bauble::types::Fields::Named(#fields)) },
             )
-        },
-        (Some(FieldsKind::Named), true) => (None, Error::new(ty_info.span, "Flattening more than one named field isn't allowed.").into_compile_error()),
+        }
+        (Some(FieldsKind::Named), true) => (
+            None,
+            Error::new(
+                ty_info.span,
+                "Flattening more than one named field isn't allowed.",
+            )
+            .into_compile_error(),
+        ),
     }
 }
 
-// Generate code to deserialize a struct or variant. See `derive_fields` for more field docs.
+/// Generate code to deserialize a struct or variant.
 fn derive_struct(
     ty_info: TypeInfo,
     fields: &FieldsInfo,
     flatten: bool,
-) -> (TokenStream, TokenStream) {
+) -> (TokenStream, TokenStream, TokenStream) {
+    let type_attributes = {
+        let mut required = Vec::new();
+        let mut optional = Vec::new();
+
+        for field in &fields.fields {
+            if let FieldTy::Val {
+                attribute: Some(ident),
+                ty,
+                default,
+                extra,
+                ..
+            } = &field.ty
+            {
+                let ident = ident.to_string();
+                let extra = extra.convert();
+                let attribute_field = quote! {
+                    (#ident, ::bauble::types::FieldType {
+                        id: registry.get_or_register_type::<#ty, _>(),
+                        extra: #extra,
+                    })
+                };
+
+                if default.is_some() {
+                    optional.push(attribute_field);
+                } else {
+                    required.push(attribute_field);
+                }
+            }
+        }
+
+        let mut fields = quote! {
+            ::bauble::types::NamedFields::empty()
+        };
+
+        if !required.is_empty() {
+            fields = quote! {
+                #fields
+                    .with_required([#(#required),*])
+            };
+        };
+
+        if !optional.is_empty() {
+            fields = quote! {
+                #fields
+                    .with_optional([#(#optional),*])
+            };
+        };
+
+        fields
+    };
+
     let ty = &ty_info.ty;
     let construct = match fields.real_kind {
         Some(_) => {
@@ -698,7 +786,9 @@ fn derive_struct(
                 let ident = &field.name;
 
                 let construct = match &field.ty {
-                    FieldTy::Val { default, attribute, .. } => {
+                    FieldTy::Val {
+                        default, attribute, ..
+                    } => {
                         if let Some(attr) = attribute {
                             let ident = attr.to_string();
                             if let Some(default) = default {
@@ -718,7 +808,6 @@ fn derive_struct(
                                 quote! {
                                     #v?
                                 }
-                                
                             }
                         } else {
                             let var = field.variable_ident();
@@ -726,7 +815,7 @@ fn derive_struct(
                                 #var
                             }
                         }
-                    },
+                    }
                     FieldTy::AsDefault { default, .. } => default.clone(),
                 };
 
@@ -755,74 +844,116 @@ fn derive_struct(
                     _ => Err(Self::error(__span, ::bauble::DeserializeError::WrongType { found: __ty }))?,
                 }
             }
-        },
+        }
         None => construct,
     };
 
-    (type_data, construct)
+    (type_attributes, type_data, construct)
 }
 
-fn flattened_ty<'a, T: ToTokens>(span: T, fields: &'a FieldsInfo) -> Result<&'a Type, TokenStream> {
-    match fields
-        .fields
-        .iter()
-        .try_fold(None, |acc, field| match (acc, &field.ty) {
-            (
-                Some(_),
-                FieldTy::Val {
-                    attribute: None,
-                    ty,
-                    ..
-                },
-            ) => Err(Error::new_spanned(ty, "only one field may be flattened")),
-            (
-                acc @ Some(_),
-                FieldTy::Val {
-                    attribute: Some(_), ..
-                }
-                | FieldTy::AsDefault { .. },
-            ) => Ok(acc),
-            (
-                None,
-                FieldTy::Val {
-                    attribute: None,
-                    ty,
-                    ..
-                },
-            ) => Ok(Some(ty)),
-            (
-                None,
-                FieldTy::Val {
-                    attribute: Some(_), ..
-                }
-                | FieldTy::AsDefault { .. },
-            ) => Ok(None),
-        }) {
-        Ok(Some(ty)) => Ok(ty),
-        Ok(None) => {
-            Err(Error::new_spanned(span, "at least one field must be flattened").to_compile_error())
-        }
-        Err(err) => Err(err.to_compile_error()),
+fn derive_variants<'a>(
+    variants: impl IntoIterator<Item = &'a syn::Variant>,
+    flatten: bool,
+) -> syn::Result<(TokenStream, TokenStream, TokenStream)> {
+    let mut type_variants = Vec::new();
+    let mut match_construct = Vec::new();
+    for variant in variants.into_iter() {
+        let variant_attrs =
+            ContainerAttrs::parse(&variant.attrs, ContainerType::Container, flatten)?;
+
+        let ident = variant.ident.clone();
+        let name = variant_attrs
+            .rename
+            .map(|s| s.to_string())
+            .unwrap_or(ident.to_string());
+
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple)?;
+
+        let (type_attrs, type_kind, construct_variant) = derive_struct(
+            TypeInfo {
+                span: variant.span(),
+                ty: quote! { Self::#ident },
+            },
+            &fields,
+            variant_attrs.flatten,
+        );
+
+        let extra = variant_attrs.extra.convert();
+        type_variants.push(quote! {
+            ::bauble::types::Variant::flattened(::bauble::path::TypePathElem::new(#name).unwrap(), #type_kind)
+                .with_attributes(#type_attrs)
+                .with_extra(#extra)
+        });
+
+        match_construct.push(quote! {
+            #name => {
+                #construct_variant
+            }
+        });
     }
+
+    Ok((
+        // The outer enum doesn't have any attributes.
+        quote! { ::bauble::types::NamedFields::empty() },
+        quote! {
+            {
+                let variants = [#(#type_variants),*];
+                registry.build_enum(variants)
+            }
+        },
+        quote! {
+            match __value {
+                ::bauble::Value::Enum(__variant, __value) => {
+                    let ::bauble::Val {
+                        attributes: ::bauble::Spanned {
+                            value: ::bauble::Attributes(mut __attributes),
+                            span: __attributes_span,
+                        },
+                        value: ::bauble::Spanned { span: __span, value: __value },
+                        ty: __ty,
+                    } = *__value;
+
+                    match __variant.as_str() {
+                        #(
+                            #match_construct
+                        )*
+
+                        _ => Err(Self::error(__span, ::bauble::DeserializeError::UnknownVariant {
+                            variant: ::bauble::Spanned::new(__variant.span, ::std::borrow::ToOwned::to_owned(__variant.as_str())),
+                        }))?
+                    }
+                },
+                _ => Err(Self::error(__span, ::bauble::DeserializeError::WrongType {
+                    found: __ty,
+                }))?,
+            }
+        },
+    ))
 }
 
 pub fn derive_bauble_derive_input(
     ast: &DeriveInput,
-    mut allocator: Option<TokenStream>,
+    allocator: Option<TokenStream>,
 ) -> TokenStream {
-
-    let ty_attrs = match ContainerAttrs::parse(&ast.attrs, match ast.data {
-        Data::Struct(_) => ContainerType::Both,
-        Data::Enum(_) => ContainerType::Type,
-        Data::Union(_) => ContainerType::Both,
-    }, false) {
+    let ty_attrs = match ContainerAttrs::parse(
+        &ast.attrs,
+        match ast.data {
+            Data::Struct(_) => ContainerType::Both,
+            Data::Enum(_) => ContainerType::Type,
+            Data::Union(_) => ContainerType::Both,
+        },
+        false,
+    ) {
         Ok(a) => a,
         Err(e) => return e.into_compile_error(),
     };
 
-    let allocator = ty_attrs.allocator.unwrap_or_else(|| quote! { ::bauble::DefaultAllocator });
+    let allocator = ty_attrs
+        .allocator
+        .or(allocator)
+        .unwrap_or_else(|| quote! { ::bauble::DefaultAllocator });
 
-    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let (_, ty_generics, where_clause) = ast.generics.split_for_impl();
     let mut where_clause = where_clause.cloned().unwrap_or_else(|| WhereClause {
         where_token: Default::default(),
         predicates: Default::default(),
@@ -853,7 +984,8 @@ pub fn derive_bauble_derive_input(
     };
 
     let name_str = name.to_string();
-    let generic_path = quote! { ::bauble::path::TypePath::new(format!("{}::{}", #path, #name_str)).unwrap() };
+    let generic_path =
+        quote! { ::bauble::path::TypePath::new(format!("{}::{}", #path, #name_str)).unwrap() };
 
     let has_generics = generics.params.len() > 1;
 
@@ -863,18 +995,20 @@ pub fn derive_bauble_derive_input(
         quote! { None }
     };
 
-    let generic_types = generics.params.iter().filter_map(|generic| {
-        match generic {
+    let generic_types = generics
+        .params
+        .iter()
+        .filter_map(|generic| match generic {
             syn::GenericParam::Type(type_param) => {
                 let ident = &type_param.ident;
                 Some(quote! {
                     let __inner_ty = registry.get_or_register_type::<#ident, _>();
                     s.push_str(registry.key_type(__inner_ty).meta.path.as_str());
                 })
-            },
+            }
             _ => None,
-        }
-    }).reduce(|a, b| {
+        })
+        .reduce(|a, b| {
             quote! {
                 #a
                 s.push_str(", ");
@@ -894,282 +1028,41 @@ pub fn derive_bauble_derive_input(
         quote! { __generic_path }
     };
 
-    let mut field_attributes = Vec::new();
-
     // Generate code to deserialize this type
-    let (construct_type, match_value) = match &ast.data {
+    let (type_attributes, construct_type, construct_value) = match &ast.data {
         Data::Struct(data) => {
             let fields = match parse_fields(&data.fields, ty_attrs.tuple) {
                 Ok(fields) => fields,
-                Err(err) => return err,
+                Err(err) => return err.into_compile_error(),
             };
-
-            for field in &fields.fields {
-                if let FieldTy::Val {
-                    attribute: Some(ident),
-                    ty,
-                    default,
-                    extra,
-                    ..
-                } = &field.ty
-                {
-                    field_attributes.push((ident.clone(), (*ty).clone(), default.clone(), extra.clone()));
-                }
-            }
 
             let ty = quote! { Self };
             derive_struct(
                 TypeInfo {
                     span: data.fields.span(),
                     ty,
-                    impl_generics: &impl_generics,
-                    has_generics,
-                    where_clause: &where_clause,
                 },
                 &fields,
                 ty_attrs.flatten,
             )
         }
         Data::Enum(data) => {
-            /*
-            let (flattened_tys, variant_convert): (Vec<_>, Vec<_>) = data
-                .variants
-                .iter()
-                .filter_map(|variant| {
-                    let ident = &variant.ident;
-
-                    // Parse variant attributes
-                    let mut found = HashSet::<_>::default();
-                    let attributes = match variant
-                        .attrs
-                        .iter()
-                        .map(|attr| {
-                            let mut attributes = Vec::default();
-
-                            if !attr.path().is_ident("bauble") {
-                                return Ok(attributes);
-                            }
-
-                            if let AttrStyle::Inner(_) = attr.style {
-                                return Err(Error::new_spanned(
-                                    attr,
-                                    "inner attributes are not supported",
-                                ));
-                            }
-
-                            attr.parse_nested_meta(|meta| {
-                                let Some(ident) = meta.path.get_ident() else {
-                                    Err(meta.error("path must be an identifier"))?
-                                };
-
-                                if !found.insert(ident.to_string()) {
-                                    Err(meta.error("duplicate attribute"))?
-                                }
-
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("expected no arguments for attribute"))?
-                                }
-
-                                attributes.push(ident.clone());
-
-                                Ok(())
-                            })?;
-
-                            Ok(attributes)
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                    {
-                        Ok(attributes) => attributes,
-                        Err(err) => return Some((quote! {}, err.to_compile_error())),
-                    }
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<Ident>>();
-
-                    if attributes.iter().any(|attr| attr == "ignore") {
-                        return None;
-                    }
-
-                    let fields = match parse_fields(&variant.fields, attributes) {
-                        Ok(fields) => fields,
-                        Err(err) => return Some((quote! {}, err)),
-                    };
-                    for field in &fields.fields {
-                        if matches!(
-                            field.ty,
-                            FieldTy::Val {
-                                attribute: true,
-                                ..
-                            }
-                        ) {
-                            field_attributes.push(field.name.to_string());
-                        }
-                    }
-                    let ty = quote! { Self::#ident };
-                    if let Some(kind) = fields.kind {
-                        let derive = derive_struct(
-                            TypeInfo {
-                                ty,
-                                impl_generics: &impl_generics,
-                                has_generics: generics.params.len() > 1,
-                                where_clause: &where_clause,
-                            },
-                            &fields,
-                            kind,
-                            flatten,
-                        );
-
-                        match flatten {
-                            true => {
-                                let flattened_ty = match flattened_ty(variant, &fields) {
-                                    Ok(ty) => ty,
-                                    Err(err) => return Some((quote! {}, err)),
-                                };
-
-                                Some((
-                                    quote! { #flattened_ty },
-                                    quote! {
-                                        if <#flattened_ty as ::bauble::FromBauble<
-                                            #lifetime,
-                                            #allocator
-                                        >>::INFO.contains(&type_info) {
-                                            #derive
-                                        } else
-                                    },
-                                ))
-                            }
-                            false => Some((
-                                quote! {},
-                                quote! {
-                                    stringify!(#ident) => match fields {
-                                        #derive
-                                        _ => ::std::result::Result::Err(
-                                            ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnknownVariant {
-                                                variant: name,
-                                                kind: fields.variant_kind(),
-                                                ty: Self::INFO.to_owned(),
-                                            })
-                                        )?,
-                                    },
-                                },
-                            )),
-                        }
-                    } else {
-                       Some((
-                           quote! {
-
-                           },
-                           quote! { #ty },
-                       ))
-                    }
-                })
-                .unzip();
-
-            // Assemble the type's deserialization
-            match flatten {
-                true => (
-                    quote! {
-                        ::bauble::TypeInfo::Flatten {
-                            types: &[
-                                #(&<#flattened_tys as ::bauble::FromBauble<#lifetime, #allocator>>::INFO,)*
-                            ],
-                            module: #path,
-                            ident: stringify!(#name),
-                            always_ref: false,
-                        }
-                    },
-                    quote! {
-                        ::std::result::Result::Ok(
-                            // `if`-`else` chain because assoc consts can't be used in `match` arms :(
-                            // https://github.com/rust-lang/rust/issues/72602
-                            // TODO Perhaps this can be fixed by setting local `const`s
-                            #(#variant_convert)* {
-                                ::std::result::Result::Err(
-                                    ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnknownFlattenedVariant {
-                                        variant: type_info,
-                                        ty: Self::INFO.to_owned(),
-                                    })
-                                )?
-                            }
-                        )
-                    },
-                ),
-                false => (
-                    quote! { ::bauble::TypeInfo::new(#path, stringify!(#name)) },
-                    quote! {
-                        ::std::result::Result::Ok(match value {
-                            ::bauble::Value::Enum(type_info, name, fields) => {
-                                match name.as_str() {
-                                    #(#variant_convert)*
-                                    _ => ::std::result::Result::Err(
-                                        ::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::UnknownVariant {
-                                            variant: name,
-                                            kind: fields.variant_kind(),
-                                            ty: Self::INFO.to_owned(),
-                                        })
-                                    )?,
-                                }
-                            },
-                            v => {
-                                ::std::result::Result::Err(::bauble::Spanned::new(span.clone(), ::bauble::DeserializeError::WrongKind {
-                                    expected: ::bauble::ValueKind::Enum,
-                                    found: v.kind(),
-                                    ty: Self::INFO.to_owned(),
-                                }))?
-                            }
-                        })
-                    },
-                ),
+            if data.variants.is_empty() {
+                return Error::new(
+                    data.enum_token.span,
+                    "Can't derive `Bauble` on an empty enum",
+                )
+                .into_compile_error();
             }
-            */
-            todo!()
-        }
-        Data::Union(data) => (
-            quote! {},
-            Error::new_spanned(data.union_token, "unions are not supported").to_compile_error(),
-        ),
-    };
-
-    let attributes = {
-        let mut required = Vec::new();
-        let mut optional = Vec::new();
-
-        for (ident, ty, default, extra) in field_attributes {
-            let ident = ident.to_string();
-            let extra = extra.convert();
-            let attribute_field = quote! {
-                (#ident, ::bauble::types::FieldType {
-                    id: registry.get_or_register_type::<#ty, _>(),
-                    extra: #extra,
-                })
-            };
-
-            if default.is_some() {
-                optional.push(attribute_field);
-            } else {
-                required.push(attribute_field);
+            match derive_variants(&data.variants, ty_attrs.flatten) {
+                Ok(res) => res,
+                Err(e) => return e.into_compile_error(),
             }
         }
-
-        let mut fields = quote! {
-            ::bauble::types::NamedFields::empty()
-        };
-
-        if !required.is_empty() {
-            fields = quote! {
-                #fields
-                    .with_required([#(#required),*])
-            };
-        };
-
-        if !optional.is_empty() {
-            fields = quote! {
-                #fields
-                    .with_optional([#(#optional),*])
-            };
-        };
-
-        fields
+        Data::Union(data) => {
+            return Error::new_spanned(data.union_token, "unions are not supported")
+                .to_compile_error();
+        }
     };
 
     let extra = ty_attrs.extra.convert();
@@ -1190,7 +1083,7 @@ pub fn derive_bauble_derive_input(
                         path: __path,
                         generic_base_type: #generic_type,
                         extra: #extra,
-                        attributes: #attributes,
+                        attributes: #type_attributes,
                         ..::bauble::types::TypeMeta::default()
                     },
                     kind: #construct_type,
@@ -1211,7 +1104,7 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator<#lifetime>>::Out<Self>,
                 ::bauble::FromBaubleError,
             > {
-                let res = #match_value;
+                let res = #construct_value;
 
                 // SAFETY: We only use this allocator when  constructing values.
                 Ok(unsafe { ::bauble::BaubleAllocator::wrap(__allocator, res) })
