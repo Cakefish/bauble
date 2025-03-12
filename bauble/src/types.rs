@@ -87,6 +87,48 @@ pub struct TypeRegistry {
     primitive_types: [TypeId; 5],
 }
 
+pub enum VariantKind {
+    Flattened(TypeKind),
+    Explicit(Fields),
+}
+
+pub struct Variant {
+    pub ident: TypePathElem,
+    pub kind: VariantKind,
+    pub attributes: NamedFields,
+    pub extra: IndexMap<String, String>,
+}
+
+impl Variant {
+    pub fn explicit(ident: TypePathElem<impl AsRef<str>>, fields: Fields) -> Self {
+        Self {
+            ident: ident.to_owned(),
+            kind: VariantKind::Explicit(fields),
+            attributes: Default::default(),
+            extra: Default::default(),
+        }
+    }
+
+    pub fn flattened(ident: TypePathElem<impl AsRef<str>>, ty: TypeKind) -> Self {
+        Self {
+            ident: ident.to_owned(),
+            kind: VariantKind::Flattened(ty),
+            attributes: Default::default(),
+            extra: Default::default(),
+        }
+    }
+
+    pub fn with_attributes(mut self, attributes: NamedFields) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: IndexMap<String, String>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
 impl TypeRegistry {
     pub(crate) fn new() -> Self {
         let mut this = Self {
@@ -156,59 +198,38 @@ impl TypeRegistry {
         id
     }
 
-    pub fn build_flat_enum(
-        &mut self,
-        variants: impl IntoIterator<Item = (TypePathElem<impl AsRef<str>>, TypeKind, NamedFields)>,
-    ) -> TypeKind {
+    /// Build a `TypeKind::Enum`.
+    pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> TypeKind {
         TypeKind::Enum {
             variants: EnumVariants(
                 variants
                     .into_iter()
-                    .map(|(ident, ty, attributes)| {
+                    .map(|variant| {
                         let ty = self.register_type(|_this, _id| {
                             Type {
                                 meta: TypeMeta {
                                     // We assign this later.
                                     path: TypePath::empty(),
-                                    attributes,
+                                    attributes: variant.attributes,
+                                    extra: variant.extra,
                                     ..Default::default()
                                 },
-                                kind: ty,
+                                kind: match variant.kind {
+                                    VariantKind::Flattened(type_kind) => type_kind,
+                                    VariantKind::Explicit(fields) => TypeKind::EnumVariant {
+                                        variant: variant.ident.clone(),
+                                        // This gets assigned later.
+                                        enum_type: Self::any_type(),
+                                        fields,
+                                    },
+                                },
                             }
                         });
-                        (ident.to_owned(), ty)
+                        (variant.ident, ty)
                     })
                     .collect(),
             ),
-            flatten: true,
         }
-    }
-
-    /// Build a `TypeKind::Enum`.
-    ///
-    /// Variants are defined by (variant name, fields, attributes)
-    pub fn build_enum(
-        &mut self,
-        variants: impl IntoIterator<Item = (TypePathElem<impl AsRef<str>>, Fields, NamedFields)>,
-    ) -> TypeKind {
-        let mut e =
-            self.build_flat_enum(variants.into_iter().map(|(ident, fields, attributes)| {
-                let variant = TypeKind::EnumVariant {
-                    // We assign this later when the enum is registered.
-                    enum_type: Self::any_type(),
-                    fields,
-                    variant: ident.to_owned(),
-                };
-                (ident, variant, attributes)
-            }));
-
-        let TypeKind::Enum { flatten, .. } = &mut e else {
-            unreachable!()
-        };
-
-        *flatten = false;
-
-        e
     }
 
     pub(crate) fn get_or_register_asset_ref(&mut self, inner: TypeId) -> TypeId {
@@ -235,8 +256,7 @@ impl TypeRegistry {
                 this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
                 let ty = T::construct_type(this);
                 for tr in ty.meta.traits.iter() {
-                    let TypeKind::Trait(types) =
-                    &mut this.types[tr.0.0].kind else {
+                    let TypeKind::Trait(types) = &mut this.types[tr.0.0].kind else {
                         panic!("Invariant")
                     };
 
@@ -244,44 +264,41 @@ impl TypeRegistry {
                 }
 
                 match &ty.kind {
-                    TypeKind::Enum {
-                        variants,
-                        flatten,
-                    } => {
+                    TypeKind::Enum { variants } => {
                         for (variant, variant_ty) in &variants.0 {
                             this.types[variant_ty.0].meta = TypeMeta {
                                 path: ty.meta.path.combine(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                    this.get_or_register_generic_type(this.key_type(generic).meta.path.combine(variant))
+                                    this.get_or_register_generic_type(
+                                        this.key_type(generic).meta.path.combine(variant),
+                                    )
                                 }),
                                 ..ty.meta.clone()
                             };
-                            if *flatten {
-                                let TypeKind::EnumVariant { enum_type, .. } =
-                                    &mut this.types[variant_ty.0].kind
-                                else {
-                                    panic!(
-                                        "All non-flat enum variants should be `TypeKind::EnumVariant`"
-                                    );
-                                };
-
+                            if let TypeKind::EnumVariant { enum_type, .. } =
+                                &mut this.types[variant_ty.0].kind
+                            {
                                 *enum_type = id;
                             }
                         }
                     }
                     TypeKind::BitFlags(bitflag) => {
                         for variant in &bitflag.variants {
-                            this.register_type(|this, id| {
-                                Type {
-                                    meta: TypeMeta {
-                                        path: ty.meta.path.combine(variant),
-                                        generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                            this.get_or_register_generic_type(this.key_type(generic).meta.path.combine(variant))
-                                        }),
-                                        ..ty.meta.clone()
-                                    },
-                                    kind: TypeKind::EnumVariant { enum_type: id, fields: Fields::Unit, variant: variant.clone() },
-                                }
+                            this.register_type(|this, id| Type {
+                                meta: TypeMeta {
+                                    path: ty.meta.path.combine(variant),
+                                    generic_base_type: ty.meta.generic_base_type.map(|generic| {
+                                        this.get_or_register_generic_type(
+                                            this.key_type(generic).meta.path.combine(variant),
+                                        )
+                                    }),
+                                    ..ty.meta.clone()
+                                },
+                                kind: TypeKind::EnumVariant {
+                                    enum_type: id,
+                                    fields: Fields::Unit,
+                                    variant: variant.clone(),
+                                },
                             });
                         }
                     }
@@ -419,27 +436,16 @@ impl TypeRegistry {
         match (&target.kind, &input.kind) {
             (TypeKind::Primitive(Primitive::Any), _) => true,
             (TypeKind::Transparent(id), _) => self.can_infer_from(*id, input_id),
-            (
-                TypeKind::Enum {
-                    flatten: true,
-                    variants,
-                },
-                _,
-            ) => {
+            (TypeKind::Enum { variants }, TypeKind::EnumVariant { enum_type, .. }) => {
+                *enum_type == output_id && variants.0.values().any(|id| *id == input_id)
+            }
+            (TypeKind::Enum { variants }, _) => {
                 // Direct references to flattened types are allowed.
                 variants
                     .0
                     .values()
                     .any(|id| self.can_infer_from(*id, input_id))
             }
-
-            (
-                TypeKind::Enum {
-                    flatten: false,
-                    variants,
-                },
-                TypeKind::EnumVariant { enum_type, .. },
-            ) => *enum_type == output_id && variants.0.values().any(|id| *id == input_id),
 
             (TypeKind::Trait(types), _) => types.contains(input_id),
             (TypeKind::Ref(a), TypeKind::Ref(b)) => self.can_infer_from(*a, *b),
@@ -487,6 +493,38 @@ pub struct UnnamedFields {
     pub allow_additional: Option<FieldType>,
 }
 
+impl UnnamedFields {
+    pub fn get(&self, i: usize) -> Option<&FieldType> {
+        self.required
+            .get(i)
+            .or_else(|| self.optional.get(i - self.required.len()))
+            .or(self.allow_additional.as_ref())
+    }
+
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn with_required<F: Into<FieldType>>(mut self, iter: impl IntoIterator<Item = F>) -> Self {
+        self.required = iter.into_iter().map(|val| val.into()).collect();
+        self
+    }
+
+    pub fn with_optional<F: Into<FieldType>>(mut self, iter: impl IntoIterator<Item = F>) -> Self {
+        self.optional = iter.into_iter().map(|val| val.into()).collect();
+        self
+    }
+
+    pub fn any() -> Self {
+        Self {
+            allow_additional: Some(FieldType {
+                id: TypeRegistry::any_type(),
+                extra: Default::default(),
+            }),
+            ..Self::empty()
+        }
+    }
+}
 #[derive(Default, Clone)]
 pub struct NamedFields {
     pub required: IndexMap<String, FieldType>,
@@ -501,11 +539,31 @@ impl NamedFields {
             .or_else(|| self.optional.get(ident))
             .or(self.allow_additional.as_ref())
     }
-}
 
-impl NamedFields {
     pub fn empty() -> Self {
         Self::default()
+    }
+
+    pub fn with_required<S: Into<String>, F: Into<FieldType>>(
+        mut self,
+        iter: impl IntoIterator<Item = (S, F)>,
+    ) -> Self {
+        self.required = iter
+            .into_iter()
+            .map(|(key, val)| (key.into(), val.into()))
+            .collect();
+        self
+    }
+
+    pub fn with_optional<S: Into<String>, F: Into<FieldType>>(
+        mut self,
+        iter: impl IntoIterator<Item = (S, F)>,
+    ) -> Self {
+        self.optional = iter
+            .into_iter()
+            .map(|(key, val)| (key.into(), val.into()))
+            .collect();
+        self
     }
 
     pub fn any() -> Self {
@@ -568,7 +626,6 @@ pub enum TypeKind {
     /// Use `TypeRegistry::build_enum` to create this.
     Enum {
         variants: EnumVariants,
-        flatten: bool,
     },
     BitFlags(BitFlagsType),
     Ref(TypeId),

@@ -8,7 +8,7 @@ pub mod spanned;
 pub mod types;
 pub mod value;
 
-pub use bauble_macros::FromBauble;
+pub use bauble_macros::Bauble;
 
 pub use bauble_context::{AssetContext, FileId};
 pub use convert::{
