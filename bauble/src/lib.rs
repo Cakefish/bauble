@@ -10,7 +10,7 @@ pub mod value;
 
 pub use bauble_macros::Bauble;
 
-pub use bauble_context::{AssetContext, FileId};
+pub use bauble_context::{AssetContext, FileId, Source};
 pub use convert::{
     Bauble, BaubleAllocator, DefaultAllocator, DeserializeError, FromBaubleError,
     FullDeserializeError, VariantKind,
