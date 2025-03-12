@@ -215,13 +215,16 @@ impl TypeRegistry {
                                     ..Default::default()
                                 },
                                 kind: match variant.kind {
+                                    VariantKind::Explicit(fields)
+                                    | VariantKind::Flattened(TypeKind::Struct(fields)) => {
+                                        TypeKind::EnumVariant {
+                                            variant: variant.ident.clone(),
+                                            // This gets assigned later.
+                                            enum_type: Self::any_type(),
+                                            fields,
+                                        }
+                                    }
                                     VariantKind::Flattened(type_kind) => type_kind,
-                                    VariantKind::Explicit(fields) => TypeKind::EnumVariant {
-                                        variant: variant.ident.clone(),
-                                        // This gets assigned later.
-                                        enum_type: Self::any_type(),
-                                        fields,
-                                    },
                                 },
                             }
                         });
