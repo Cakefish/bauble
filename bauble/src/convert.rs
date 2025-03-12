@@ -509,6 +509,7 @@ pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static
     /// Constructs a reflection type that bauble uses to parse and resolve types.
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type;
 
+    /// Construct this type from a bauble value. This function doesn't do any type checking.
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError>;
 
     fn error(span: crate::Span, error: DeserializeError) -> FromBaubleError {
@@ -547,7 +548,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
         let generic = registry.get_or_register_generic_type(generic_path);
 
         let kind = registry.build_enum([
-            (
+            types::Variant::explicit(
                 TypePathElem::new("Some").unwrap(),
                 types::Fields::Unnamed(types::UnnamedFields {
                     required: vec![types::FieldType {
@@ -556,13 +557,8 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                     }],
                     ..Default::default()
                 }),
-                types::NamedFields::default(),
             ),
-            (
-                TypePathElem::new("None").unwrap(),
-                types::Fields::Unit,
-                types::NamedFields::default(),
-            ),
+            types::Variant::explicit(TypePathElem::new("None").unwrap(), types::Fields::Unit),
         ]);
 
         types::Type {
