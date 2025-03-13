@@ -1,61 +1,39 @@
-#![feature(iterator_try_collect)]
+#![feature(iterator_try_collect, let_chains)]
 
 pub mod convert;
+pub mod error;
 pub mod parse;
 pub mod spanned;
 pub mod value;
 
 pub use bauble_macros::FromBauble;
 
-pub use chumsky::span::SimpleSpan;
-pub use convert::{BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, VariantKind};
-pub use spanned::{SpanExt, Spanned};
+pub use convert::{
+    BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, FromBaubleError, VariantKind,
+};
+pub use error::{BaubleError, BaubleErrors, print_errors};
+pub use spanned::{Span, SpanExt, Spanned};
 pub use value::{
-    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, TypeInfo, Val,
-    Value, ValueKind, convert_values,
+    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, Source, TypeInfo,
+    Val, Value, ValueKind, convert_values,
 };
 
 use parse::Values;
-pub fn parse(src: &str) -> Option<Values> {
-    use ariadne::{Color, Label, Report, ReportKind, Source};
+
+pub fn parse<'a>(path: &'a str, ctx: &'a impl AssetContext) -> Result<Values, BaubleErrors<'a>> {
     use chumsky::Parser;
 
     let parser = parse::parser();
-    let result = parser.parse(src);
+    let result = parser.parse(parse::ParserSource { path, ctx });
 
-    result.errors().for_each(|e| {
-        Report::build(ReportKind::Error, e.span().into_range())
-            .with_message(e.to_string())
-            .with_label(
-                Label::new(e.span().into_range())
-                    .with_message(e.reason().to_string())
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint(Source::from(&src))
-            .unwrap();
-    });
-
-    result.into_output()
+    result.into_result().map_err(BaubleErrors::from)
 }
 
-/// Converts a source with no checks.
-pub fn simple_convert(src: &str) -> Result<Vec<Object>, Spanned<ConversionError>> {
-    let values =
-        parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
+pub fn convert<'a>(
+    path: &'a str,
+    ctx: &'a impl AssetContext,
+) -> Result<Vec<Object>, BaubleErrors<'a>> {
+    let values = parse(path, ctx)?;
 
-    let ctx = value::NoChecks;
-
-    convert_values("".to_string(), values, &value::Symbols::new(&ctx), src)
-}
-
-pub fn convert(
-    src: &str,
-    file_name: impl Into<String>,
-    ctx: &impl AssetContext,
-) -> Result<Vec<Object>, Spanned<ConversionError>> {
-    let values =
-        parse(src).ok_or(ConversionError::ParseError.spanned(SimpleSpan::new(0, src.len())))?;
-
-    convert_values(file_name.into(), values, &value::Symbols::new(&ctx), src)
+    convert_values(path, values, &value::Symbols::new(ctx))
 }

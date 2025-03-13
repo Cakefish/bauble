@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::spanned::{Span, SpanExt, Spanned};
+use crate::spanned::Spanned;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
@@ -105,8 +105,6 @@ pub enum Value {
     Array(Sequence),
     Or(Vec<Spanned<Path>>),
     Raw(String),
-
-    Error,
 }
 
 const TAB: &str = "    ";
@@ -199,8 +197,6 @@ impl Value {
                 }
                 write!(f, "{i}}}")
             }
-
-            Value::Error => write!(f, "Error"),
         }?;
         write!(f, " <{}>", self.ty())
     }
@@ -219,7 +215,14 @@ impl Value {
             Value::Array(_) => "arr",
             Value::Or(_) => "or",
             Value::Raw(_) => "raw",
-            Value::Error => "error",
+        }
+    }
+
+    pub fn type_path(&self) -> Option<&Spanned<Path>> {
+        match self {
+            Value::Path(name) => Some(name),
+            Value::Struct { name, .. } | Value::Tuple { name, .. } => name.as_ref(),
+            _ => None,
         }
     }
 }
@@ -299,13 +302,6 @@ pub struct Object {
 }
 
 impl Object {
-    pub fn error(span: Span) -> Self {
-        Self {
-            attributes: Attributes::default().empty(),
-            value: Value::Error.spanned(span),
-        }
-    }
-
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.attributes.indented_display(indent, f)?;
 
