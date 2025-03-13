@@ -32,12 +32,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
     type Cache = (&'a str, FileId);
 
     fn begin(self) -> (Self::Cursor, Self::Cache) {
-        let (cursor, cache) = <&'a str as Input>::begin(
-            self.ctx
-                .get_source(self.path)
-                .map(|source| source.text())
-                .unwrap_or(""),
-        );
+        let (cursor, cache) = <&'a str as Input>::begin(self.ctx.get_source(self.file_id).text());
 
         (cursor, (cache, self.file_id))
     }

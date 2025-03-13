@@ -148,7 +148,6 @@ impl BaubleError for FullDeserializeError {
     }
 
     fn msgs_specific(&self, types: &types::TypeRegistry) -> Vec<(ErrorMsg, Level)> {
-        use Level::*;
         let ty = match types.get_type_by_id(self.in_type) {
             Some(ty) => ty.meta.path.borrow(),
             None => TypePath::new("<unregistered type>").unwrap(),
