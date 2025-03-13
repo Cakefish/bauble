@@ -2376,9 +2376,16 @@ fn convert_value<'a, C: AssetContext>(
         types::TypeKind::Trait(_) | types::TypeKind::Generic(_) => Err(expected_err()),
     }?;
 
-    if !used_leftover_attributes && !leftover_attributes.0.is_empty() {
+    if !used_leftover_attributes
+        && let Some((ident, _)) = leftover_attributes.value.0.into_iter().next()
+    {
         // Unexpected attributes
-        return Err(expected_err());
+        return Err(ConversionError::UnexpectedField {
+            attribute: true,
+            field: ident,
+            ty: *ty_id,
+        }
+        .spanned(value.attributes.span));
     }
 
     Ok(Val {

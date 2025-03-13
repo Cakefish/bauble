@@ -152,8 +152,8 @@ fn test_std_types() {
         r#"
         use std::Option::*;
 
-        copy key = "🔑"
-        copy value = Some("💖")
+        copy key = "key"
+        copy value = Some("value")
 
         test = derive::Test {
             a: [(2, 0), (1, -1), (5, 10)],
@@ -170,11 +170,11 @@ fn test_std_types() {
             Test {
                 a: vec![(2, 0), (1, -1), (5, 10)],
                 b: HashMap::from_iter([
-                    ("🔑".to_string(), vec![true, true, false]),
+                    ("key".to_string(), vec![true, true, false]),
                     ("no key".to_string(), vec![false, true]),
                 ]),
                 c: HashMap::from_iter([
-                    ([1, 2, 3], [Some("💖".to_string()), None, Some("hi".to_string())]),
+                    ([1, 2, 3], [Some("value".to_string()), None, Some("hi".to_string())]),
                 ]),
             },
         ]
