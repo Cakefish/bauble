@@ -50,7 +50,8 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
         (text, _): &mut Self::Cache,
         cursor: &mut Self::Cursor,
     ) -> Option<Self::MaybeToken> {
-        // SAFETY: Requirements passed to caller.
+        // SAFETY: Requirements passed to caller since we used `<&str as Input>::begin` in our
+        // `begin` function.
         unsafe { <&'a str as Input>::next_maybe(text, cursor) }
     }
 
@@ -64,7 +65,8 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
 
 impl<'a, A: crate::AssetContext> chumsky::input::ValueInput<'a> for ParserSource<'a, A> {
     unsafe fn next(cache: &mut Self::Cache, cursor: &mut Self::Cursor) -> Option<Self::Token> {
-        // SAFETY: Requirements passed to caller.
+        // SAFETY: Requirements passed to caller since we used `<&str as Input>::begin` in our
+        // `begin` function.
         unsafe { Self::next_maybe(cache, cursor) }
     }
 }
@@ -89,7 +91,8 @@ impl<'a, A: crate::AssetContext> chumsky::input::SliceInput<'a> for ParserSource
         (text, _): &mut Self::Cache,
         range: std::ops::Range<&Self::Cursor>,
     ) -> Self::Slice {
-        // SAFETY: Requirements passed to caller.
+        // SAFETY: Requirements passed to caller since we used `<&str as Input>::begin` in our
+        // `begin` function.
         unsafe { <&'a str as chumsky::input::SliceInput<'a>>::slice(text, range) }
     }
 
@@ -97,7 +100,8 @@ impl<'a, A: crate::AssetContext> chumsky::input::SliceInput<'a> for ParserSource
         (text, _): &mut Self::Cache,
         from: std::ops::RangeFrom<&Self::Cursor>,
     ) -> Self::Slice {
-        // SAFETY: Requirements passed to caller.
+        // SAFETY: Requirements passed to caller since we used `<&str as Input>::begin` in our
+        // `begin` function.
         unsafe { <&'a str as chumsky::input::SliceInput<'a>>::slice_from(text, from) }
     }
 }
