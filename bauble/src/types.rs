@@ -190,9 +190,13 @@ impl TypeRegistry {
     fn register_type(&mut self, f: impl FnOnce(&mut Self, TypeId) -> Type) -> TypeId {
         let id = TypeId(self.types.len());
 
+        // Push a temporary to reserve id.
+        self.types.push(Type {
+            meta: TypeMeta::default(),
+            kind: TypeKind::Primitive(Primitive::Any),
+        });
         let ty = f(self, id);
-
-        self.types.push(ty);
+        self.types[id.0] = ty;
 
         id
     }
@@ -271,9 +275,18 @@ impl TypeRegistry {
                             this.types[variant_ty.0].meta = TypeMeta {
                                 path: ty.meta.path.combine(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                    this.get_or_register_generic_type(
+                                    let id = this.get_or_register_generic_type(
                                         this.key_type(generic).meta.path.combine(variant),
-                                    )
+                                    );
+                                    let TypeKind::Generic(types) = &mut this.types[id.0.0].kind else {
+                                        panic!(
+                                            "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
+                                        )
+                                    };
+
+                                    types.insert(*variant_ty);
+
+                                    id
                                 }),
                                 ..ty.meta.clone()
                             };
@@ -286,13 +299,23 @@ impl TypeRegistry {
                     }
                     TypeKind::BitFlags(bitflag) => {
                         for variant in &bitflag.variants {
-                            this.register_type(|this, id| Type {
+                            this.register_type(|this, variant_id| Type {
                                 meta: TypeMeta {
                                     path: ty.meta.path.combine(variant),
                                     generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                        this.get_or_register_generic_type(
+                                        let id = this.get_or_register_generic_type(
                                             this.key_type(generic).meta.path.combine(variant),
-                                        )
+                                        );
+                                        let TypeKind::Generic(types) = &mut this.types[id.0.0].kind else {
+                                            panic!(
+                                                "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
+                                            )
+                                        };
+
+                                        types.insert(variant_id);
+
+
+                                        id
                                     }),
                                     ..ty.meta.clone()
                                 },

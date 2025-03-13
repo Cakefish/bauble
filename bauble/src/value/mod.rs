@@ -204,12 +204,6 @@ pub enum ConversionError {
     },
 }
 
-impl ConversionError {
-    fn expected_ty(ty: Spanned<TypeId>, got: Option<TypeId>) -> Spanned<ConversionError> {
-        ty.map(|ty| ConversionError::ExpectedExactType { expected: ty, got })
-    }
-}
-
 impl From<crate::path::PathError> for ConversionError {
     fn from(value: crate::path::PathError) -> Self {
         Self::PathError(value)
@@ -318,7 +312,19 @@ impl BaubleError for Spanned<ConversionError> {
                     format!("an enum variant with {}", describe_fields(types, fields))
                 }
                 types::TypeKind::Trait(_) => "a trait".to_string(),
-                types::TypeKind::Generic(_) => "a generic type".to_string(),
+                types::TypeKind::Generic(set) => {
+                    let s = types
+                        .iter_type_set(set)
+                        .next()
+                        .map(|t| {
+                            let s = describe_type(types, t);
+
+                            s.split_once(' ').map(|(_, s)| s.to_string()).unwrap_or(s)
+                        })
+                        .unwrap_or("type".to_string());
+
+                    format!("a generic {s}")
+                }
             }
         }
 
@@ -800,6 +806,10 @@ impl<C: AssetContext> Symbols<C> {
                     .push_str(ident.as_str())
                     .map_err(|e| e.spanned(ident.span))?;
             }
+        } else if let PathEnd::Ident(ident) = &raw_path.last.value
+            && let Some(RefCopy::Ref(r)) = self.uses.get(ident.as_str())
+        {
+            return Ok(Cow::Borrowed(r));
         }
         match &raw_path.last.value {
             PathEnd::WithIdent(ident) => {
@@ -873,7 +883,17 @@ pub fn register_assets(
         .map(|(key, val)| (key, RefCopy::Ref(val)))
         .collect();
     let mut errors = Vec::new();
-    // TODO: Register these in a correct order...
+
+    let mut symbols = Symbols { ctx: &*ctx, uses };
+    for use_ in &values.uses {
+        if let Err(e) = symbols.add_use(use_) {
+            errors.push(e);
+        }
+    }
+
+    Symbols { uses, .. } = symbols;
+
+    // TODO: Register these in a correct order to allow for assets referencing assets.
     for (ident, binding) in &values.values {
         let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
         let path = path.combine(ident);
@@ -887,7 +907,7 @@ pub fn register_assets(
                 .unwrap_or(Err(
                     ConversionError::UnresolvedType.spanned(binding.object.value.span)
                 ))
-                .map(|t| t.value)
+                .map(|t| get_enum_type(&symbols, t.value).unwrap_or(t.value))
         };
 
         match ty {
@@ -1163,13 +1183,37 @@ impl<'a> From<&'a ParseObject> for BorrowedObject<'a> {
     }
 }
 
+fn get_enum_type<C: AssetContext>(symbols: &Symbols<C>, variant: TypeId) -> Option<TypeId> {
+    let types = symbols.ctx.type_registry();
+    let enum_type = match &types.key_type(variant).kind {
+        types::TypeKind::EnumVariant { enum_type, .. } => *enum_type,
+        types::TypeKind::Generic(set) => {
+            if let Some(t) = types.iter_type_set(set).next()
+                && let types::TypeKind::EnumVariant { enum_type, .. } = &types.key_type(t).kind
+            {
+                types
+                    .key_type(*enum_type)
+                    .meta
+                    .generic_base_type
+                    .expect("Invariant, if the EnumVariant is generic so is the enum type")
+                    .into()
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+
+    Some(enum_type)
+}
+
 fn value_type<'a, C: AssetContext>(
     value: impl Into<BorrowedObject<'a>>,
     symbols: &Symbols<C>,
 ) -> Result<Option<Spanned<TypeId>>> {
     let value: BorrowedObject<'a> = value.into();
     let types = symbols.ctx.type_registry();
-    let mut ty = match &value.value.value {
+    let ty = match &value.value.value {
         parse::Value::Unit => Some(
             types
                 .primitive_type(types::Primitive::Unit)
@@ -1282,27 +1326,6 @@ fn value_type<'a, C: AssetContext>(
         parse::Value::Raw(_) => None,
     };
 
-    if let Some(Spanned { value: ty, .. }) = &mut ty {
-        match &types.key_type(*ty).kind {
-            types::TypeKind::EnumVariant { enum_type, .. } => {
-                *ty = *enum_type;
-            }
-            types::TypeKind::Generic(set) => {
-                if let Some(t) = types.iter_type_set(set).next()
-                    && let types::TypeKind::EnumVariant { enum_type, .. } = &types.key_type(t).kind
-                {
-                    *ty = types
-                        .key_type(*enum_type)
-                        .meta
-                        .generic_base_type
-                        .expect("Invariant, if the EnumVariant is generic so is the enum type")
-                        .into();
-                }
-            }
-            _ => {}
-        }
-    }
-
     Ok(ty)
 }
 
@@ -1319,7 +1342,8 @@ fn convert_copy_value<'a, C: AssetContext>(
     if let Some(val_type) = val_type.as_ref()
         && types.key_type(val_type.value).kind.instanciable()
     {
-        convert_value(value, symbols, add_value, val_type.value, object_name).map(CopyVal::Resolved)
+        let val_type = get_enum_type(symbols, val_type.value).unwrap_or(val_type.value);
+        convert_value(value, symbols, add_value, val_type, object_name).map(CopyVal::Resolved)
     } else {
         let mut parse_attributes = || {
             value
@@ -1481,7 +1505,10 @@ fn convert_from_copy_value<'a, C: AssetContext>(
             let ty_id = if types.key_type(expected_type).kind.instanciable() {
                 expected_type
             } else {
-                val_ty.as_ref().map(|t| t.value).unwrap_or(expected_type)
+                val_ty
+                    .as_ref()
+                    .map(|t| get_enum_type(symbols, t.value).unwrap_or(t.value))
+                    .unwrap_or(expected_type)
             };
 
             let ty = types.key_type(expected_type);
@@ -1918,7 +1945,10 @@ fn convert_value<'a, C: AssetContext>(
 
         // If `expected_type` isn't instantiable, i.e is a trait, we go off of the value type.
         if !types.key_type(expected_type).kind.instanciable() {
-            val_type.unwrap_or(expected_type.spanned(value.value.span))
+            val_type
+                .and_then(|t| get_enum_type(symbols, *t).map(|s| s.spanned(t.span)))
+                .or(val_type)
+                .unwrap_or(expected_type.spanned(value.value.span))
         } else {
             expected_type.spanned(val_type.map(|s| s.span).unwrap_or(value.value.span))
         }
@@ -1927,7 +1957,11 @@ fn convert_value<'a, C: AssetContext>(
     let ty = types.key_type(ty_id.value);
 
     let expected_err = || {
-        ConversionError::expected_ty(expected_type.spanned(ty_id.span), val_type.map(|s| s.value))
+        ConversionError::ExpectedExactType {
+            expected: expected_type,
+            got: val_type.map(|s| s.value),
+        }
+        .spanned(ty_id.span)
     };
 
     macro_rules! parse_unnamed {
@@ -2141,10 +2175,25 @@ fn convert_value<'a, C: AssetContext>(
                 let variant = if let types::TypeKind::EnumVariant {
                     variant, enum_type, ..
                 } = &types.key_type(val_type.value).kind
+                    && *enum_type == ty_id.value
                 {
-                    debug_assert_eq!(*enum_type, ty_id.value);
                     debug_assert_eq!(variants.get(variant.borrow()), Some(val_type.value));
                     Some((variant.borrow(), *val_type))
+                } else if types.key_type(ty_id.value).meta.generic_base_type.is_some()
+                    && let types::TypeKind::Generic(generic) = &types.key_type(val_type.value).kind
+                    && let Some(instance) = types.iter_type_set(generic).next()
+                    && let types::TypeKind::EnumVariant { variant, .. } =
+                        &types.key_type(instance).kind
+                    && types.key_type(instance).meta.generic_base_type
+                        == types.key_type(ty_id.value).meta.generic_base_type
+                {
+                    Some((
+                        variant.borrow(),
+                        variants
+                            .get(variant.borrow())
+                            .expect("This will exist here")
+                            .spanned(val_type.span),
+                    ))
                 } else {
                     // First see if we have this exact type as a flattened type, then see if we can infer to any type.
                     variants

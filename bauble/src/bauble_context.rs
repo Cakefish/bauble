@@ -8,7 +8,7 @@ use crate::{
 
 pub type Source = ariadne::Source<String>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct PathReference {
     pub ty: Option<TypeId>,
     pub asset: Option<(TypeId, TypePath)>,
@@ -96,7 +96,7 @@ impl BaubleContextBuilder {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct CtxNode {
     reference: PathReference,
     source: Option<FileId>,
@@ -239,7 +239,9 @@ impl CtxNode {
         };
         let module = self.build_modules(TypePath::empty(), module);
         let node = module.children.entry(name.to_owned()).or_default();
-        if node.reference.ty.is_some() {
+        if let Some(ty) = node.reference.ty
+            && ty != id
+        {
             panic!("Multiple types with the same path");
         }
         node.reference.ty = Some(id);
@@ -274,6 +276,9 @@ pub struct BaubleContext {
 }
 
 impl BaubleContext {
+    pub fn debug_node(&self) {
+        // eprintln!("{:#?}", self.root_node);
+    }
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) {
         let node = self.root_node.build_modules(TypePath::empty(), path);
         let id = FileId(self.files.len());
@@ -287,6 +292,7 @@ impl BaubleContext {
     /// With this method you can expose assets that aren't in bauble.
     pub fn register_asset(&mut self, path: TypePath, ty: TypeId) {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
+        self.root_node.build_type(ref_ty, &self.registry);
         self.root_node.build_asset(path, ref_ty);
     }
 

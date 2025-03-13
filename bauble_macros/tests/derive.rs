@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bauble::{Bauble, bauble_context::BaubleContextBuilder, error::print_errors, path::TypePath};
 
 macro_rules! bauble_test {
@@ -6,9 +8,11 @@ macro_rules! bauble_test {
             let mut ctx = BaubleContextBuilder::new();
             $(ctx.register_type::<$ty, _>();)*
             let mut ctx = ctx.build();
-            ctx.register_file(TypePath::new("test.bbl").unwrap(), format!("\n{}\n", $source));
+            ctx.register_file(TypePath::new("test").unwrap(), format!("\n{}\n", $source));
 
             let (objects, errors) = ctx.load_all();
+
+            ctx.debug_node();
 
             if !errors.is_empty() {
                 print_errors(Err::<(), _>(errors), &ctx);
@@ -43,7 +47,9 @@ fn test_struct() {
 
     bauble_test!(
         [Test]
-        "test = derive::Test { x: -5, y: 5, z: std::Option::Some(true) }"
+        r#"
+        test = derive::Test { x: -5, y: 5, z: std::Option::Some(true) }
+        "#
         [Test {
             x: -5,
             y: 5,
@@ -128,6 +134,49 @@ fn test_flattened() {
                 count: 0,
                 name: "bar".to_string(),
             }
+        ]
+    );
+}
+
+#[test]
+fn test_std_types() {
+    #[derive(Bauble, PartialEq, Debug)]
+    struct Test {
+        a: Vec<(u32, i32)>,
+        b: HashMap<String, Vec<bool>>,
+        c: HashMap<[u32; 3], [Option<String>; 3]>,
+    }
+
+    bauble_test!(
+        [Test]
+        r#"
+        use std::Option::*;
+
+        copy key = "🔑"
+        copy value = Some("💖")
+
+        test = derive::Test {
+            a: [(2, 0), (1, -1), (5, 10)],
+            b: {
+                $key: [true, true, false],
+                "no key": [false, true],
+            },
+            c: {
+                [1, 2, 3]: [$value, None, Some("hi")],
+            },
+        }
+        "#
+        [
+            Test {
+                a: vec![(2, 0), (1, -1), (5, 10)],
+                b: HashMap::from_iter([
+                    ("🔑".to_string(), vec![true, true, false]),
+                    ("no key".to_string(), vec![false, true]),
+                ]),
+                c: HashMap::from_iter([
+                    ([1, 2, 3], [Some("💖".to_string()), None, Some("hi".to_string())]),
+                ]),
+            },
         ]
     );
 }
