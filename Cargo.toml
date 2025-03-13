@@ -3,5 +3,5 @@ resolver = "2"
 members = [
     "bauble",
     "bauble_macros",
-    "bauble_macro_util"
+    "bauble_macro_util",
 ]

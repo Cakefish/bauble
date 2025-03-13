@@ -1,17 +1,21 @@
-use bauble::FromBauble;
+use bauble::{FromBauble, Source, error::print_errors, value::NoChecks};
 
 fn simple_convert<'a, T: FromBauble<'a>>(
     src: &str,
     object_name: &str,
     alloc: &'a bauble::DefaultAllocator,
-) -> Result<T, Box<bauble::DeserializeError>> {
-    let objects = bauble::simple_convert(src).map_err(bauble::DeserializeError::Conversion)?;
+) -> Option<T> {
+    let ctx = NoChecks {
+        src: Source::from(src.to_string()),
+    };
+    let objects = print_errors(bauble::convert("test", &ctx), &ctx)?;
     for object in objects {
         if object.object_path.ends_with(object_name) {
-            return T::from_bauble(object.value, alloc);
+            return print_errors(T::from_bauble(object.value, alloc), &ctx);
         }
     }
-    panic!("`object` not found");
+
+    None
 }
 
 #[test]
@@ -23,7 +27,7 @@ fn test_struct() {
         z: Option<bool>,
     }
     assert_eq!(
-        Ok(Test {
+        Some(Test {
             x: -5,
             y: 5,
             z: Some(true)
@@ -41,7 +45,7 @@ fn test_tuple() {
     #[derive(FromBauble, PartialEq, Debug)]
     struct Test(i32, u32);
     assert_eq!(
-        Ok(Test(-5, 5)),
+        Some(Test(-5, 5)),
         simple_convert(
             "test = derive::Test(-5, 5)",
             "test",
@@ -91,11 +95,11 @@ fn test_flattened() {
         Bar { x: bool },
     }
     assert_eq!(
-        Ok(Test::Foo(-10)),
+        Some(Test::Foo(-10)),
         simple_convert("test = -10", "test", &bauble::DefaultAllocator)
     );
     assert_eq!(
-        Ok(Test::Bar { x: true }),
+        Some(Test::Bar { x: true }),
         simple_convert("test = true", "test", &bauble::DefaultAllocator)
     );
 
@@ -107,7 +111,7 @@ fn test_flattened() {
         name: String,
     }
     assert_eq!(
-        Ok(Test2 {
+        Some(Test2 {
             count: 10,
             name: "foo".to_string()
         }),
@@ -118,7 +122,7 @@ fn test_flattened() {
         )
     );
     assert_eq!(
-        Ok(Test2 {
+        Some(Test2 {
             count: 0,
             name: "bar".to_string()
         }),

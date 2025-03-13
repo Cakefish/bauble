@@ -3,12 +3,101 @@ use std::{
     error::Error,
     fmt::{Debug, Display},
     hash::Hash,
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
+    sync::Arc,
 };
 
-use chumsky::span::SimpleSpan;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+    path: Arc<str>,
+}
 
-pub type Span = SimpleSpan;
+impl std::fmt::Display for Span {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{}>:{}..{}", self.path, self.start, self.end)
+    }
+}
+
+impl From<Span> for Arc<str> {
+    fn from(value: Span) -> Self {
+        value.path
+    }
+}
+
+impl Span {
+    pub fn new(file: impl Into<Arc<str>>, range: Range<usize>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+            path: file.into(),
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            path: "".into(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.end - self.start
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    pub fn sub_span(&self, range: Range<usize>) -> Span {
+        Span {
+            path: self.path.clone(),
+            start: self.start + range.start,
+            end: self.end + range.end,
+        }
+    }
+}
+
+impl chumsky::span::Span for crate::Span {
+    type Context = Arc<str>;
+    type Offset = usize;
+
+    fn new(context: Self::Context, range: Range<Self::Offset>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+            path: context,
+        }
+    }
+    fn context(&self) -> Self::Context {
+        self.path.clone()
+    }
+    fn start(&self) -> Self::Offset {
+        self.start
+    }
+    fn end(&self) -> Self::Offset {
+        self.end
+    }
+}
+
+impl ariadne::Span for Span {
+    type SourceId = Arc<str>;
+
+    fn source(&self) -> &Self::SourceId {
+        &self.path
+    }
+
+    fn start(&self) -> usize {
+        self.start
+    }
+
+    fn end(&self) -> usize {
+        self.end
+    }
+}
 
 #[derive(Clone)]
 pub struct Spanned<T> {
@@ -66,7 +155,7 @@ impl<T> Spanned<T> {
         T: Default,
     {
         Self {
-            span: (0..0).into(),
+            span: Span::empty(),
             value: T::default(),
         }
     }
@@ -77,6 +166,10 @@ impl<T> Spanned<T> {
 
     pub fn to_inner(self) -> T {
         self.value
+    }
+
+    pub fn span(&self) -> Span {
+        self.span.clone()
     }
 }
 impl<T: Debug> Debug for Spanned<T> {
@@ -102,7 +195,7 @@ pub trait SpanExt: Sized {
     fn spanned(self, span: Span) -> Spanned<Self>;
 
     fn empty(self) -> Spanned<Self> {
-        Spanned::new((0..0).into(), self)
+        Spanned::new(Span::empty(), self)
     }
 }
 
