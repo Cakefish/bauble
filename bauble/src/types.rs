@@ -147,18 +147,17 @@ impl TypeRegistry {
 
         this.set_primitive_type(Primitive::Any, any_id);
 
-        // TODO: Implement from bauble for these.
-        // let float_id = this.get_or_register_type::<f32, crate::DefaultAllocator>();
-        // this.set_primitive_type(Primitive::Num, float_id);
+        let float_id = this.get_or_register_type::<f32, crate::DefaultAllocator>();
+        this.set_primitive_type(Primitive::Num, float_id);
 
-        // let string_id = this.get_or_register_type::<String, crate::DefaultAllocator>();
-        // this.set_primitive_type(Primitive::Str, string_id);
+        let string_id = this.get_or_register_type::<String, crate::DefaultAllocator>();
+        this.set_primitive_type(Primitive::Str, string_id);
 
-        // let bool_id = this.get_or_register_type::<bool, crate::DefaultAllocator>();
-        // this.set_primitive_type(Primitive::Bool, bool_id);
+        let bool_id = this.get_or_register_type::<bool, crate::DefaultAllocator>();
+        this.set_primitive_type(Primitive::Bool, bool_id);
 
-        // let unit_id = this.get_or_register_type::<(), crate::DefaultAllocator>();
-        // this.set_primitive_type(Primitive::Unit, unit_id);
+        let unit_id = this.get_or_register_type::<(), crate::DefaultAllocator>();
+        this.set_primitive_type(Primitive::Unit, unit_id);
 
         this
     }

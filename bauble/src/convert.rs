@@ -357,7 +357,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for bool {
                 path: TypePath::new("bool").unwrap().to_owned(),
                 ..Default::default()
             },
-            kind: types::TypeKind::Primitive(types::Primitive::Num),
+            kind: types::TypeKind::Primitive(types::Primitive::Bool),
         }
     }
 

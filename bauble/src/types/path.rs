@@ -196,7 +196,6 @@ fn path_len(path: &str) -> Result<usize> {
                 if PATH_SEPERATOR.starts_with(c) || is_empty {
                     return Err(PathError::EmptyElem(i));
                 }
-                is_empty = true;
             }
         }
         current_path_delim = PATH_SEPERATOR.chars();
@@ -259,6 +258,10 @@ impl<S: AsRef<str>> TypePath<S> {
         TypePathElem::try_from(self)
     }
 
+    pub fn into_inner(self) -> S {
+        self.0
+    }
+
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
     }
@@ -299,7 +302,7 @@ impl<S: AsRef<str>> TypePath<S> {
         if self.is_empty() {
             return None;
         }
-        let mut split = self.byte_len();
+        let mut split = None;
         let mut current_path_delim = PATH_SEPERATOR.chars();
         let mut path_iter = self.as_str().char_indices();
 
@@ -333,7 +336,7 @@ impl<S: AsRef<str>> TypePath<S> {
                     }
                 }
                 None => {
-                    split = i;
+                    split = Some(i);
                     break;
                 }
             }
@@ -342,15 +345,19 @@ impl<S: AsRef<str>> TypePath<S> {
             skip_delims(&mut path_iter, c);
         }
 
-        let root = &self.as_str()[..split - PATH_SEPERATOR.len()];
-        let rest = &self.as_str()[split..];
+        if let Some(split) = split {
+            let root = &self.as_str()[..split - PATH_SEPERATOR.len()];
+            let rest = &self.as_str()[split..];
 
-        debug_assert_eq!(
-            &self.as_str()[split - PATH_SEPERATOR.len()..split],
-            PATH_SEPERATOR
-        );
+            debug_assert_eq!(
+                &self.as_str()[split - PATH_SEPERATOR.len()..split],
+                PATH_SEPERATOR
+            );
 
-        Some((TypePathElem(TypePath(root)), TypePath(rest)))
+            Some((TypePathElem(TypePath(root)), TypePath(rest)))
+        } else {
+            Some((TypePathElem(self.borrow()), TypePath("")))
+        }
     }
 
     /// Returns (root, elem)
@@ -360,7 +367,7 @@ impl<S: AsRef<str>> TypePath<S> {
         if self.is_empty() {
             return None;
         }
-        let mut split = 0;
+        let mut split = None;
         let mut current_path_delim = PATH_SEPERATOR.chars().rev();
         let mut path_iter = self.as_str().char_indices().rev();
 
@@ -398,7 +405,7 @@ impl<S: AsRef<str>> TypePath<S> {
                     }
                 }
                 None => {
-                    split = i;
+                    split = Some(i);
                     break;
                 }
             }
@@ -407,14 +414,18 @@ impl<S: AsRef<str>> TypePath<S> {
             skip_delims(&mut path_iter, c);
         }
 
-        let root = &self.as_str()[..=split];
-        let elem = &self.as_str()[split + 1 + PATH_SEPERATOR.len()..];
-        debug_assert_eq!(
-            &self.as_str()[split + 1..split + 1 + PATH_SEPERATOR.len()],
-            PATH_SEPERATOR
-        );
+        if let Some(split) = split {
+            let root = &self.as_str()[..=split];
+            let elem = &self.as_str()[split + 1 + PATH_SEPERATOR.len()..];
+            debug_assert_eq!(
+                &self.as_str()[split + 1..split + 1 + PATH_SEPERATOR.len()],
+                PATH_SEPERATOR
+            );
 
-        Some((TypePath(root), TypePathElem(TypePath(elem))))
+            Some((TypePath(root), TypePathElem(TypePath(elem))))
+        } else {
+            Some((TypePath(""), TypePathElem(self.borrow())))
+        }
     }
 }
 

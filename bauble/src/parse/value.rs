@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::spanned::Spanned;
+use crate::{SpanExt, spanned::Spanned};
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
@@ -47,12 +47,16 @@ impl Path {
             }
     }
 
-    pub fn as_ident(&self) -> Option<&str> {
+    pub fn as_ident(&self) -> Option<Spanned<&str>> {
         if let (true, PathEnd::Ident(ident)) = (self.leading.is_empty(), &self.last.value) {
-            Some(ident.as_str())
+            Some(ident.as_str().spanned(ident.span))
         } else {
             None
         }
+    }
+
+    pub fn span(&self) -> crate::Span {
+        crate::Span::new(self.last.span, self.leading.span.start..self.last.span.end)
     }
 }
 

@@ -475,6 +475,7 @@ struct TypeInfo {
     span: Span,
     /// The struct or variant, used for construction
     ty: TokenStream,
+    allocator: TokenStream,
     // /// The type's generics
     // impl_generics: &'a ImplGenerics<'a>,
     // has_generics: bool,
@@ -496,6 +497,7 @@ fn derive_fields(
     construct: &TokenStream,
     flatten: bool,
 ) -> (Option<(TokenStream, TokenStream)>, TokenStream) {
+    let allocator = &ty_info.allocator;
     match (fields.kind, flatten) {
         (_, true) if fields.val_count == 1 => {
             let field = fields
@@ -528,7 +530,7 @@ fn derive_fields(
                     },
                 )),
                 quote! {
-                    ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#ty, _>())
+                    ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#ty, #allocator>())
                 },
             )
         }
@@ -559,7 +561,7 @@ fn derive_fields(
                     let var = field.variable_ident();
                     let field = quote! {
                         ::bauble::types::FieldType {
-                            id: registry.get_or_register_type::<#ty, _>(),
+                            id: registry.get_or_register_type::<#ty, #allocator>(),
                             extra: #extra,
                         }
                     };
@@ -652,7 +654,7 @@ fn derive_fields(
                         (
                             #name,
                             ::bauble::types::FieldType {
-                                id: registry.get_or_register_type::<#ty, _>(),
+                                id: registry.get_or_register_type::<#ty, #allocator>(),
                                 extra: #extra,
                             },
                         )
@@ -727,6 +729,7 @@ fn derive_struct(
     fields: &FieldsInfo,
     flatten: bool,
 ) -> (TokenStream, TokenStream, TokenStream) {
+    let allocator = &ty_info.allocator;
     let type_attributes = {
         let mut required = Vec::new();
         let mut optional = Vec::new();
@@ -744,7 +747,7 @@ fn derive_struct(
                 let extra = extra.convert();
                 let attribute_field = quote! {
                     (#ident, ::bauble::types::FieldType {
-                        id: registry.get_or_register_type::<#ty, _>(),
+                        id: registry.get_or_register_type::<#ty, #allocator>(),
                         extra: #extra,
                     })
                 };
@@ -854,6 +857,7 @@ fn derive_struct(
 fn derive_variants<'a>(
     variants: impl IntoIterator<Item = &'a syn::Variant>,
     flatten: bool,
+    allocator: TokenStream,
 ) -> syn::Result<(TokenStream, TokenStream, TokenStream)> {
     let mut type_variants = Vec::new();
     let mut match_construct = Vec::new();
@@ -873,6 +877,7 @@ fn derive_variants<'a>(
             TypeInfo {
                 span: variant.span(),
                 ty: quote! { Self::#ident },
+                allocator: allocator.clone(),
             },
             &fields,
             variant_attrs.flatten,
@@ -1002,7 +1007,7 @@ pub fn derive_bauble_derive_input(
             syn::GenericParam::Type(type_param) => {
                 let ident = &type_param.ident;
                 Some(quote! {
-                    let __inner_ty = registry.get_or_register_type::<#ident, _>();
+                    let __inner_ty = registry.get_or_register_type::<#ident, #allocator>();
                     s.push_str(registry.key_type(__inner_ty).meta.path.as_str());
                 })
             }
@@ -1041,6 +1046,7 @@ pub fn derive_bauble_derive_input(
                 TypeInfo {
                     span: data.fields.span(),
                     ty,
+                    allocator: allocator.clone(),
                 },
                 &fields,
                 ty_attrs.flatten,
@@ -1054,7 +1060,7 @@ pub fn derive_bauble_derive_input(
                 )
                 .into_compile_error();
             }
-            match derive_variants(&data.variants, ty_attrs.flatten) {
+            match derive_variants(&data.variants, ty_attrs.flatten, allocator.clone()) {
                 Ok(res) => res,
                 Err(e) => return e.into_compile_error(),
             }

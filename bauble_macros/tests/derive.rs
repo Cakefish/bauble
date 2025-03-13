@@ -6,7 +6,7 @@ macro_rules! bauble_test {
             let mut ctx = BaubleContextBuilder::new();
             $(ctx.register_type::<$ty, _>();)*
             let mut ctx = ctx.build();
-            ctx.register_file(TypePath::new("test.bbl").unwrap(), $source);
+            ctx.register_file(TypePath::new("test.bbl").unwrap(), format!("\n{}\n", $source));
 
             let (objects, errors) = ctx.load_all();
 
@@ -43,7 +43,7 @@ fn test_struct() {
 
     bauble_test!(
         [Test]
-        "test = derive::Test { x: -5, y: 5, z: Some(true) }"
+        "test = derive::Test { x: -5, y: 5, z: std::Option::Some(true) }"
         [Test {
             x: -5,
             y: 5,
@@ -59,7 +59,7 @@ fn test_tuple() {
 
     bauble_test!(
         [Test]
-        "test = derive::Test { x: -5, y: 5, z: Some(true) }"
+        "test = derive::Test(-5, 5)"
         [Test(-5, 5)]
     );
 }
@@ -75,11 +75,13 @@ fn test_enum() {
 
     bauble_test!(
         [Test]
-        "
-        a = derive::Test::Foo(-10, 2)
-        b = derive::Test::Bar { x: -5, y: 5 }
-        c = derive::Test::Baz
-        "
+        r#"
+        use derive::Test;
+
+        a = Test::Foo(-10, 2)
+        b = Test::Bar { x: -5, y: 5 }
+        c = Test::Baz
+        "#
         [
             Test::Foo(-10, 2),
             Test::Bar { x: -5, y: 5 },
@@ -108,10 +110,12 @@ fn test_flattened() {
     bauble_test!(
         [Test, Test2]
         r#"
-        a = -10
-        b = true
-        c = #[count = 10] "foo"
-        d = "bar"
+        use derive::{Test, Test2};
+
+        a: Test = -10
+        b: Test = true
+        c: Test2 = #[count = 10] "foo"
+        d: Test2 = "bar"
         "#
         [
             Test::Foo(-10),
