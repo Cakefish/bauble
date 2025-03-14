@@ -575,7 +575,7 @@ fn derive_fields(
                     } else {
                         required_fields.push(field);
                         let next = quote! { __seq.next().ok_or_else(|| {
-                            Self::error(__span, ::bauble::DeserializeError::WrongTupleLength {
+                            Self::error(__span, ::bauble::ToRustErrorKind::WrongTupleLength {
                                 found: __len,
                                 expected: __expected_len,
                             })
@@ -669,7 +669,7 @@ fn derive_fields(
                     } else {
                         required_fields.push(field);
                         let next = quote! { __fields.swap_remove(#name).ok_or_else(|| {
-                            Self::error(__span, ::bauble::DeserializeError::MissingField {
+                            Self::error(__span, ::bauble::ToRustErrorKind::MissingField {
                                 field: ::std::borrow::ToOwned::to_owned(#name),
                             })
                         })? };
@@ -802,7 +802,7 @@ fn derive_struct(
                             } else {
                                 let v = from_bauble(quote! {
                                     __attributes.swap_remove(#ident).ok_or_else(|| {
-                                        Self::error(__span, ::bauble::DeserializeError::MissingAttribute {
+                                        Self::error(__span, ::bauble::ToRustErrorKind::MissingAttribute {
                                             attribute: ::std::borrow::ToOwned::to_owned(#ident),
                                             attributes_span: __attributes_span,
                                         })
@@ -844,7 +844,7 @@ fn derive_struct(
             quote! {
                 match __value {
                     #pattern => #arm,
-                    _ => Err(Self::error(__span, ::bauble::DeserializeError::WrongType { found: __ty }))?,
+                    _ => Err(Self::error(__span, ::bauble::ToRustErrorKind::WrongType { found: __ty }))?,
                 }
             }
         }
@@ -923,12 +923,12 @@ fn derive_variants<'a>(
                             #match_construct
                         )*
 
-                        _ => Err(Self::error(__span, ::bauble::DeserializeError::UnknownVariant {
+                        _ => Err(Self::error(__span, ::bauble::ToRustErrorKind::UnknownVariant {
                             variant: ::bauble::Spanned::new(__variant.span, ::std::borrow::ToOwned::to_owned(__variant.as_str())),
                         }))?
                     }
                 },
-                _ => Err(Self::error(__span, ::bauble::DeserializeError::WrongType {
+                _ => Err(Self::error(__span, ::bauble::ToRustErrorKind::WrongType {
                     found: __ty,
                 }))?,
             }
@@ -1108,7 +1108,7 @@ pub fn derive_bauble_derive_input(
                 __allocator: &#allocator,
             ) -> ::std::result::Result<
                 <#allocator as ::bauble::BaubleAllocator<#lifetime>>::Out<Self>,
-                ::bauble::FromBaubleError,
+                ::bauble::ToRustError,
             > {
                 let res = #construct_value;
 

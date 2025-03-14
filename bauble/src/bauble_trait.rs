@@ -32,14 +32,17 @@ impl Display for VariantKind {
     }
 }
 
-pub struct FullDeserializeError {
+/// The error that `Bauble::from_bauble` returns.
+pub struct ToRustError(Box<InnerToRustError>);
+
+struct InnerToRustError {
     in_type: std::any::TypeId,
     value_span: Span,
-    kind: DeserializeError,
+    kind: ToRustErrorKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DeserializeError {
+pub enum ToRustErrorKind {
     MissingField {
         field: String,
     },
@@ -102,79 +105,80 @@ impl CustomError {
     }
 }
 
-impl BaubleError for FullDeserializeError {
+impl BaubleError for ToRustError {
     fn level(&self) -> Level {
-        match &self.kind {
-            DeserializeError::Custom(custom_error) => custom_error.level,
+        match &self.0.kind {
+            ToRustErrorKind::Custom(custom_error) => custom_error.level,
             _ => Level::Error,
         }
     }
     fn msg_general(&self, ctx: &BaubleContext) -> ErrorMsg {
         let types = ctx.type_registry();
-        let ty = match types.get_type_by_id(self.in_type) {
+        let ty = match types.get_type_by_id(self.0.in_type) {
             Some(ty) => ty.meta.path.borrow(),
             None => TypePath::new("<unregistered type>").unwrap(),
         };
 
-        let msg = match &self.kind {
-            DeserializeError::MissingField { .. } => {
+        let msg = match &self.0.kind {
+            ToRustErrorKind::MissingField { .. } => {
                 format!("Missing field for the type {ty}")
             }
-            DeserializeError::WrongTupleLength { .. } => {
+            ToRustErrorKind::WrongTupleLength { .. } => {
                 format!("Wrong tuple length for the type {ty}")
             }
-            DeserializeError::WrongArrayLength { .. } => {
+            ToRustErrorKind::WrongArrayLength { .. } => {
                 format!("Wrong array length for the type {ty}")
             }
-            DeserializeError::UnknownVariant { .. } => {
+            ToRustErrorKind::UnknownVariant { .. } => {
                 format!("Unknown variant for the type {ty}")
             }
-            DeserializeError::WrongType { .. } => {
+            ToRustErrorKind::WrongType { .. } => {
                 format!("Wrong kind for the type {ty}")
             }
-            DeserializeError::WrongVariantType { variant, .. } => {
+            ToRustErrorKind::WrongVariantType { variant, .. } => {
                 format!("Wrong kind for the variant {variant} of type {ty}")
             }
-            DeserializeError::MissingAttribute { .. } => {
+            ToRustErrorKind::MissingAttribute { .. } => {
                 format!("Missing attributy for the type {ty}")
             }
-            DeserializeError::InvalidIntLiteral { conv_error } => {
+            ToRustErrorKind::InvalidIntLiteral { conv_error } => {
                 format!("Invalid literal of type {ty}: {conv_error}")
             }
-            DeserializeError::Custom(custom) => {
+            ToRustErrorKind::Custom(custom) => {
                 format!("error for type {ty}: {}", custom.message)
             }
         };
 
-        Spanned::new(self.value_span, Cow::Owned(msg))
+        Spanned::new(self.0.value_span, Cow::Owned(msg))
     }
 
     fn msgs_specific(&self, ctx: &BaubleContext) -> Vec<(ErrorMsg, Level)> {
         let types = ctx.type_registry();
-        let ty = match types.get_type_by_id(self.in_type) {
+        let ty = match types.get_type_by_id(self.0.in_type) {
             Some(ty) => ty.meta.path.borrow(),
             None => TypePath::new("<unregistered type>").unwrap(),
         };
 
-        match &self.kind {
-            DeserializeError::MissingField { field, .. } => {
+        let value_span = self.0.value_span;
+        match &self.0.kind {
+            ToRustErrorKind::MissingField { field, .. } => {
                 vec![(
                     Spanned::new(
-                        self.value_span,
+                        self.0.value_span,
                         Cow::Owned(format!("Missing field the field {field}")),
                     ),
                     Level::Error,
                 )]
             }
-            DeserializeError::WrongTupleLength {
+            ToRustErrorKind::WrongTupleLength {
                 expected, found, ..
             }
-            | DeserializeError::WrongArrayLength {
+            | ToRustErrorKind::WrongArrayLength {
                 expected, found, ..
             } => {
                 vec![(
                     Spanned::new(
-                        self.value_span,
+                        value_span,
                         Cow::Owned(format!(
                             "Expected the length {expected}, found length {found}."
                         )),
@@ -182,16 +186,16 @@ impl BaubleError for FullDeserializeError {
                     Level::Error,
                 )]
             }
-            DeserializeError::UnknownVariant { variant, .. } => {
+            ToRustErrorKind::UnknownVariant { variant, .. } => {
                 vec![(
                     Spanned::new(variant.span, Cow::Borrowed("Unknown variant")),
                     Level::Error,
                 )]
             }
-            DeserializeError::WrongType { found } => {
+            ToRustErrorKind::WrongType { found } => {
                 vec![(
                     Spanned::new(
-                        self.value_span,
+                        value_span,
                         // TODO:
                         Cow::Owned(format!(
                             "Expected the kind {ty}, found {}",
@@ -201,10 +205,10 @@ impl BaubleError for FullDeserializeError {
                     Level::Error,
                 )]
             }
-            DeserializeError::WrongVariantType { variant, found } => {
+            ToRustErrorKind::WrongVariantType { variant, found } => {
                 vec![(
                     Spanned::new(
-                        self.value_span,
+                        value_span,
                         // TODO:
                         Cow::Owned(format!(
                             "Expected the variant {variant} of {ty}, found {}",
@@ -214,7 +218,7 @@ impl BaubleError for FullDeserializeError {
                     Level::Error,
                 )]
             }
-            DeserializeError::MissingAttribute {
+            ToRustErrorKind::MissingAttribute {
                 attribute,
                 attributes_span,
                 ..
@@ -227,21 +231,19 @@ impl BaubleError for FullDeserializeError {
                     Level::Error,
                 )]
             }
-            DeserializeError::InvalidIntLiteral { conv_error } => vec![(
+            ToRustErrorKind::InvalidIntLiteral { conv_error } => vec![(
                 Spanned::new(
-                    self.value_span,
+                    value_span,
                     Cow::Owned(format!(
                         "Expected a valid literal of type {ty}, but got invalid literal with error: {conv_error}"
                     )),
                 ),
                 Level::Error,
             )],
-            DeserializeError::Custom(custom_error) => custom_error.labels.clone(),
+            ToRustErrorKind::Custom(custom_error) => custom_error.labels.clone(),
         }
     }
 }
-
-pub type FromBaubleError = Box<FullDeserializeError>;
 
 // TODO Maybe `unsafe trait`?
 pub trait BaubleAllocator<'a> {
@@ -254,7 +256,7 @@ pub trait BaubleAllocator<'a> {
     unsafe fn wrap<T>(&self, value: T) -> Self::Out<T>;
     /// # Safety
     /// If validated an item must be placed within the same allocator.
-    unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, FromBaubleError>;
+    unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, ToRustError>;
 }
 
 pub struct DefaultAllocator;
@@ -266,7 +268,7 @@ impl BaubleAllocator<'_> for DefaultAllocator {
         value
     }
 
-    unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, FromBaubleError> {
+    unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, ToRustError> {
         Ok(value)
     }
 }
@@ -278,14 +280,14 @@ pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type;
 
     /// Construct this type from a bauble value. This function doesn't do any type checking.
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError>;
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError>;
 
-    fn error(span: crate::Span, error: DeserializeError) -> FromBaubleError {
-        Box::new(FullDeserializeError {
+    fn error(span: crate::Span, error: ToRustErrorKind) -> ToRustError {
+        ToRustError(Box::new(InnerToRustError {
             in_type: std::any::TypeId::of::<Self>(),
             value_span: span,
             kind: error,
-        })
+        }))
     }
 }
 
@@ -301,7 +303,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
         }
     }
 
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError> {
         // SAFETY: no allocations are made in this method
         Ok(unsafe { allocator.wrap(val) })
     }
@@ -324,24 +326,16 @@ macro_rules! impl_nums {
                 fn from_bauble(
                     val: Val,
                     allocator: &A,
-                ) -> Result<A::Out<Self>, FromBaubleError> {
+                ) -> Result<A::Out<Self>, ToRustError> {
                     if let Value::Primitive(PrimitiveValue::Num(num)) = val.value.value {
                         num.trunc().try_into().map_err(|e| {
-                            Box::new(FullDeserializeError {
-                                in_type: std::any::TypeId::of::<Self>(),
-                                value_span: val.span(),
-                                kind: DeserializeError::InvalidIntLiteral { conv_error: e },
-                            })
+                            <Self as Bauble<'a, A>>::error(val.span(), ToRustErrorKind::InvalidIntLiteral { conv_error: e })
                         }).map(|value|
                             // SAFETY: no allocations are made in this method
                             unsafe { allocator.wrap(value) }
                         )
                     } else {
-                        Err(Box::new(FullDeserializeError {
-                            in_type: std::any::TypeId::of::<Self>(),
-                            value_span: val.span(),
-                            kind: DeserializeError::WrongType { found: val.ty },
-                        }))
+                        Err(<Self as Bauble<'a, A>>::error(val.span(), ToRustErrorKind::WrongType { found: val.ty }))
                     }
                 }
             }
@@ -366,16 +360,15 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for bool {
         }
     }
 
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError> {
         if let Value::Primitive(PrimitiveValue::Bool(b)) = val.value.value {
             // SAFETY: no allocations are made in this method
             Ok(unsafe { allocator.wrap(b) })
         } else {
-            Err(Box::new(FullDeserializeError {
-                in_type: std::any::TypeId::of::<bool>(),
-                value_span: val.span(),
-                kind: DeserializeError::WrongType { found: val.ty },
-            }))
+            Err(<Self as Bauble<'a, A>>::error(
+                val.span(),
+                ToRustErrorKind::WrongType { found: val.ty },
+            ))
         }
     }
 }
@@ -394,13 +387,13 @@ impl Bauble<'_> for String {
     fn from_bauble(
         val: Val,
         _: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, FromBaubleError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
         if let Value::Primitive(PrimitiveValue::Str(str)) = val.value.value {
             Ok(str)
         } else {
             Err(Self::error(
                 val.span(),
-                DeserializeError::WrongType { found: val.ty },
+                ToRustErrorKind::WrongType { found: val.ty },
             ))
         }
     }
@@ -417,16 +410,15 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for () {
         }
     }
 
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError> {
         if matches!(val.value.value, Value::Primitive(PrimitiveValue::Unit)) {
             // SAFETY: no allocations are made in this method
             Ok(unsafe { allocator.wrap(()) })
         } else {
-            Err(Box::new(FullDeserializeError {
-                in_type: std::any::TypeId::of::<Self>(),
-                value_span: val.span(),
-                kind: DeserializeError::WrongType { found: val.ty },
-            }))
+            Err(<Self as Bauble<'a, A>>::error(
+                val.span(),
+                ToRustErrorKind::WrongType { found: val.ty },
+            ))
         }
     }
 }
@@ -463,20 +455,17 @@ macro_rules! impl_tuple {
             fn from_bauble(
                 val: Val,
                 allocator: &A,
-            ) -> Result<A::Out<Self>, FromBaubleError> {
+            ) -> Result<A::Out<Self>, ToRustError> {
                 const LEN: usize = [$(stringify!($ident)),+].len();
 
                 let span = val.span();
                 if let Value::Tuple(mut seq) = val.value.value {
                     if seq.len() != LEN {
-                        return Err(Box::new(FullDeserializeError {
-                            in_type: std::any::TypeId::of::<Self>(),
-                            value_span: span,
-                            kind: DeserializeError::WrongTupleLength {
+                        return Err(Self::error(span, ToRustErrorKind::WrongTupleLength {
                                 expected: LEN,
                                 found: seq.len(),
                             },
-                        }))
+                        ))
                     }
                     let mut drain = seq.drain(..);
                     // SAFETY: allocator is passed to `from_bauble` so validating each element of the tuple will only have
@@ -485,7 +474,7 @@ macro_rules! impl_tuple {
                         allocator.wrap(($(allocator.validate($ident::from_bauble(drain.next().unwrap(), allocator)?)?),+))
                     })
                 } else {
-                    Err(Self::error(val.span(), DeserializeError::WrongType { found: val.ty }))
+                    Err(Self::error(val.span(), ToRustErrorKind::WrongType { found: val.ty }))
                 }
             }
         }
@@ -522,18 +511,17 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A>
         }
     }
 
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError> {
         let span = val.span();
         if let Value::Array(array) = val.value.value {
             if array.len() != N {
-                return Err(Box::new(FullDeserializeError {
-                    in_type: std::any::TypeId::of::<Self>(),
-                    value_span: span,
-                    kind: DeserializeError::WrongArrayLength {
+                return Err(Self::error(
+                    span,
+                    ToRustErrorKind::WrongArrayLength {
                         expected: N,
                         found: array.len(),
                     },
-                }));
+                ));
             }
 
             array
@@ -553,7 +541,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A>
         } else {
             Err(Self::error(
                 val.span(),
-                DeserializeError::WrongType { found: val.ty },
+                ToRustErrorKind::WrongType { found: val.ty },
             ))
         }
     }
@@ -594,12 +582,12 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
         }
     }
 
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError> {
         let span = val.value.span;
         let Value::Enum(variant, val) = val.value.value else {
             return Err(Self::error(
                 span,
-                DeserializeError::WrongType { found: val.ty },
+                ToRustErrorKind::WrongType { found: val.ty },
             ));
         };
 
@@ -618,7 +606,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                 }
                 _ => Err(Self::error(
                     val.value.span,
-                    DeserializeError::WrongVariantType {
+                    ToRustErrorKind::WrongVariantType {
                         variant: variant.value,
                         found: val.ty,
                     },
@@ -630,7 +618,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
             }
             _ => Err(Self::error(
                 span,
-                DeserializeError::UnknownVariant {
+                ToRustErrorKind::UnknownVariant {
                     variant: variant.map(|s| s.to_string()),
                 },
             )),
@@ -661,7 +649,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
     fn from_bauble(
         val: Val,
         allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, FromBaubleError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
         if let Value::Array(items) = val.value.value {
             items
                 .into_iter()
@@ -670,7 +658,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
         } else {
             Err(Self::error(
                 val.span(),
-                DeserializeError::WrongType { found: val.ty },
+                ToRustErrorKind::WrongType { found: val.ty },
             ))
         }
     }
@@ -699,7 +687,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
     fn from_bauble(
         val: Val,
         allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, FromBaubleError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
         T::from_bauble(val, allocator).map(Box::new)
     }
 }
@@ -739,7 +727,7 @@ macro_rules! impl_map {
             fn from_bauble(
                 val: Val,
                 allocator: &DefaultAllocator,
-            ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, FromBaubleError> {
+            ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
                 if let Value::Map(map) = val.value.value {
                     map.into_iter()
                         .map(|(k, v)| {
@@ -749,7 +737,7 @@ macro_rules! impl_map {
                 } else {
                     Err(Self::error(
                         val.span(),
-                        DeserializeError::WrongType { found: val.ty },
+                        ToRustErrorKind::WrongType { found: val.ty },
                     ))
                 }
             }
@@ -782,7 +770,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A> + enumset::EnumSetType> Bauble
         }
     }
 
-    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, FromBaubleError> {
+    fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError> {
         if let Value::Array(bitflags) = val.value.value {
             let res = bitflags
                 .into_iter()
@@ -797,11 +785,10 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A> + enumset::EnumSetType> Bauble
             // SAFETY: the elements were wrapped with the same allocator
             Ok(unsafe { allocator.wrap(res) })
         } else {
-            Err(Box::new(FullDeserializeError {
-                in_type: std::any::TypeId::of::<Self>(),
-                value_span: val.span(),
-                kind: DeserializeError::WrongType { found: val.ty },
-            }))
+            Err(Self::error(
+                val.span(),
+                ToRustErrorKind::WrongType { found: val.ty },
+            ))
         }
     }
 }

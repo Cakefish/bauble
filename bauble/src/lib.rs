@@ -11,8 +11,7 @@ pub mod value;
 pub use bauble_macros::Bauble;
 
 pub use bauble_trait::{
-    Bauble, BaubleAllocator, DefaultAllocator, DeserializeError, FromBaubleError,
-    FullDeserializeError, VariantKind,
+    Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
 };
 pub use context::{BaubleContext, FileId, Source};
 pub use error::{BaubleError, BaubleErrors, print_errors};

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, bauble_context::BaubleContextBuilder, error::print_errors, path::TypePath};
+use bauble::{Bauble, context::BaubleContextBuilder, error::print_errors, path::TypePath};
 
 macro_rules! bauble_test {
     ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
