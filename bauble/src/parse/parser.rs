@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 
 use crate::{
     BaubleContext,
-    bauble_context::FileId,
+    context::FileId,
     parse::{
         Binding, Ident, Object,
         value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},

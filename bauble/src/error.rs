@@ -4,7 +4,7 @@ use ariadne::Report;
 
 use crate::{
     Span, Spanned,
-    bauble_context::{BaubleContext, BaubleContextCache},
+    context::{BaubleContext, BaubleContextCache},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

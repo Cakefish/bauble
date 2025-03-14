@@ -6,7 +6,7 @@ use std::{
     ops::{Deref, DerefMut, Range},
 };
 
-use crate::bauble_context::FileId;
+use crate::context::FileId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {

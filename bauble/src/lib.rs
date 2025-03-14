@@ -1,7 +1,7 @@
 #![feature(iterator_try_collect, let_chains, ptr_metadata)]
 
-pub mod bauble_context;
-pub mod convert;
+pub mod bauble_trait;
+pub mod context;
 pub mod error;
 pub mod parse;
 pub mod spanned;
@@ -10,11 +10,11 @@ pub mod value;
 
 pub use bauble_macros::Bauble;
 
-pub use bauble_context::{BaubleContext, FileId, Source};
-pub use convert::{
+pub use bauble_trait::{
     Bauble, BaubleAllocator, DefaultAllocator, DeserializeError, FromBaubleError,
     FullDeserializeError, VariantKind,
 };
+pub use context::{BaubleContext, FileId, Source};
 pub use error::{BaubleError, BaubleErrors, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use types::path;

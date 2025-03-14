@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 
 use crate::{
     Val, Value,
-    bauble_context::BaubleContext,
+    context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
     parse::Ident,
     path::{TypePath, TypePathElem},

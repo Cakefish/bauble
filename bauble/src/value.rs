@@ -8,7 +8,7 @@ use rust_decimal::Decimal;
 
 use crate::{
     BaubleContext, BaubleError, BaubleErrors, FileId, VariantKind,
-    bauble_context::PathReference,
+    context::PathReference,
     error::Level,
     parse::{self, Object as ParseObject, Path, PathEnd, PathTreeEnd, Use, Values},
     path::{TypePath, TypePathElem},
@@ -1084,7 +1084,7 @@ impl<'a> Symbols<'a> {
 
 pub fn register_assets(
     path: TypePath<&str>,
-    ctx: &mut crate::bauble_context::BaubleContext,
+    ctx: &mut crate::context::BaubleContext,
     default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
     values: &Values,
 ) -> std::result::Result<(), Vec<Spanned<ConversionError>>> {
