@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::{SpanExt, spanned::Spanned};
+use crate::{SpanExt, spanned::Spanned, types};
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
@@ -109,6 +109,19 @@ pub enum Value {
     Array(Sequence),
     Or(Vec<Spanned<Path>>),
     Raw(String),
+}
+
+impl Value {
+    pub fn primitive_type(&self) -> Option<types::Primitive> {
+        match self {
+            Value::Unit => Some(types::Primitive::Unit),
+            Value::Num(_) => Some(types::Primitive::Num),
+            Value::Bool(_) => Some(types::Primitive::Bool),
+            Value::Str(_) => Some(types::Primitive::Str),
+            Value::Raw(_) => Some(types::Primitive::Raw),
+            _ => None,
+        }
+    }
 }
 
 const TAB: &str = "    ";

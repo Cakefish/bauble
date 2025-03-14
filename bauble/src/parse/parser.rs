@@ -4,6 +4,7 @@ use chumsky::{prelude::*, text::Char};
 use indexmap::IndexMap;
 
 use crate::{
+    BaubleContext,
     bauble_context::FileId,
     parse::{
         Binding, Ident, Object,
@@ -15,12 +16,12 @@ use crate::{
 type Extra<'a> = extra::Err<Rich<'a, char, crate::Span>>;
 
 #[derive(Clone)]
-pub struct ParserSource<'a, A> {
+pub struct ParserSource<'a> {
     pub file_id: FileId,
-    pub ctx: &'a A,
+    pub ctx: &'a BaubleContext,
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::Input<'a> for ParserSource<'a> {
     type Span = crate::Span;
 
     type Token = char;
@@ -59,7 +60,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
     }
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::ValueInput<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::ValueInput<'a> for ParserSource<'a> {
     unsafe fn next(cache: &mut Self::Cache, cursor: &mut Self::Cursor) -> Option<Self::Token> {
         // SAFETY: Requirements passed to caller since we used `<&str as Input>::begin` in our
         // `begin` function.
@@ -67,7 +68,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::ValueInput<'a> for ParserSource
     }
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::ExactSizeInput<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::ExactSizeInput<'a> for ParserSource<'a> {
     unsafe fn span_from(
         cache: &mut Self::Cache,
         range: std::ops::RangeFrom<&Self::Cursor>,
@@ -76,7 +77,7 @@ impl<'a, A: crate::AssetContext> chumsky::input::ExactSizeInput<'a> for ParserSo
     }
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::SliceInput<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::SliceInput<'a> for ParserSource<'a> {
     type Slice = &'a str;
 
     fn full_slice(cache: &mut Self::Cache) -> Self::Slice {
@@ -158,11 +159,10 @@ impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for S
 }
 
 // TODO Re-add error recovery
-pub fn parser<'a, A: crate::AssetContext + 'a>()
--> impl Parser<'a, ParserSource<'a, A>, Values, Extra<'a>> {
-    let comment_end = just::<_, ParserSource<'a, A>, Extra<'a>>('\n').or(end().map(|_| '\0'));
+pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
+    let comment_end = just::<_, ParserSource<'a>, Extra<'a>>('\n').or(end().map(|_| '\0'));
     let comments = just("//")
-        .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
+        .ignore_then(recursive::<'_, '_, ParserSource<'a>, char, _, _, _>(
             |more_comment| comment_end.or(any().ignore_then(more_comment)),
         ))
         .ignored()
@@ -177,7 +177,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 Ok(c)
             } else {
                 Err(
-                    chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                    chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                         [TextExpected::IdentifierPart],
                         Some(chumsky::util::MaybeRef::Val(c)),
                         span,
@@ -192,7 +192,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                         Ok(c)
                     } else {
                         Err(
-                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                            chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                 [TextExpected::IdentifierPart],
                                 Some(chumsky::util::MaybeRef::Val(c)),
                                 span,
@@ -219,7 +219,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         .ignore_then(recursive::<
             '_,
             '_,
-            ParserSource<'a, A>,
+            ParserSource<'a>,
             Spanned<PathTreeNode>,
             _,
             _,
@@ -259,7 +259,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         .collect();
 
     let object = recursive(
-        |object: Recursive<dyn Parser<'a, ParserSource<'a, A>, Object, Extra<'a>>>| {
+        |object: Recursive<dyn Parser<'a, ParserSource<'a>, Object, Extra<'a>>>| {
             let attribute = just('#').ignore_then(
                 ident
                     .padded()
@@ -292,7 +292,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                         Ok(c)
                     } else {
                         Err(
-                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                            chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                 [TextExpected::Digit(1..10)],
                                 Some(chumsky::util::MaybeRef::Val(c)),
                                 span,
@@ -306,7 +306,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                             if c.is_ascii_digit() {
                                 Ok(())
                             } else {
-                                Err(chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                                Err(chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                     [TextExpected::Digit(0..10)],
                                     Some(chumsky::util::MaybeRef::Val(c)),
                                     span,
@@ -325,7 +325,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                         Ok(c)
                     } else {
                         Err(
-                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                            chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                 [TextExpected::Digit(0..10)],
                                 Some(chumsky::util::MaybeRef::Val(c)),
                                 span,
@@ -564,12 +564,12 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         },
     );
 
-    fn binding<'a, V: 'a + Debug, A: crate::AssetContext + 'a>(
-        ident: impl 'a + Parser<'a, ParserSource<'a, A>, Ident, Extra<'a>>,
-        value: impl 'a + Parser<'a, ParserSource<'a, A>, V, Extra<'a>>,
-        path: impl 'a + Parser<'a, ParserSource<'a, A>, Spanned<Path>, Extra<'a>> + Clone,
-        comments: impl 'a + Clone + Parser<'a, ParserSource<'a, A>, (), Extra<'a>>,
-    ) -> impl Parser<'a, ParserSource<'a, A>, (Ident, Option<Spanned<Path>>, V), Extra<'a>> {
+    fn binding<'a, V: 'a + Debug>(
+        ident: impl 'a + Parser<'a, ParserSource<'a>, Ident, Extra<'a>>,
+        value: impl 'a + Parser<'a, ParserSource<'a>, V, Extra<'a>>,
+        path: impl 'a + Parser<'a, ParserSource<'a>, Spanned<Path>, Extra<'a>> + Clone,
+        comments: impl 'a + Clone + Parser<'a, ParserSource<'a>, (), Extra<'a>>,
+    ) -> impl Parser<'a, ParserSource<'a>, (Ident, Option<Spanned<Path>>, V), Extra<'a>> {
         ident
             .padded_by(comments.clone())
             .padded()

@@ -42,14 +42,14 @@ pub struct GenericTypeId(TypeId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TraitId(TypeId);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum SealedTypeSet {
     #[expect(dead_code)]
     All,
     Certain(HashSet<TypeId>),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TypeSet(SealedTypeSet);
 
 impl TypeSet {
@@ -201,8 +201,10 @@ impl TypeRegistry {
         id
     }
 
+    #[must_use]
     /// Build a `TypeKind::Enum`.
     pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> TypeKind {
+        println!("{}", std::backtrace::Backtrace::capture());
         TypeKind::Enum {
             variants: EnumVariants(
                 variants
@@ -275,10 +277,10 @@ impl TypeRegistry {
                             this.types[variant_ty.0].meta = TypeMeta {
                                 path: ty.meta.path.combine(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                    let id = this.get_or_register_generic_type(
+                                    let generic_id = this.get_or_register_generic_type(
                                         this.key_type(generic).meta.path.combine(variant),
                                     );
-                                    let TypeKind::Generic(types) = &mut this.types[id.0.0].kind else {
+                                    let TypeKind::Generic(types) = &mut this.types[generic_id.0.0].kind else {
                                         panic!(
                                             "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
                                         )
@@ -286,14 +288,15 @@ impl TypeRegistry {
 
                                     types.insert(*variant_ty);
 
-                                    id
+                                    generic_id
                                 }),
                                 ..ty.meta.clone()
                             };
-                            if let TypeKind::EnumVariant { enum_type, .. } =
+                            if let TypeKind::EnumVariant { enum_type, variant: v, .. } =
                                 &mut this.types[variant_ty.0].kind
                             {
                                 *enum_type = id;
+                                *v = variant.clone();
                             }
                         }
                     }
@@ -499,7 +502,7 @@ pub struct TypeMeta {
     pub extra: IndexMap<String, String>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct FieldType {
     pub id: TypeId,
     pub extra: IndexMap<String, String>,
@@ -511,7 +514,7 @@ pub struct Type {
     pub kind: TypeKind,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct UnnamedFields {
     pub required: Vec<FieldType>,
     pub optional: Vec<FieldType>,
@@ -550,7 +553,7 @@ impl UnnamedFields {
         }
     }
 }
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct NamedFields {
     pub required: IndexMap<String, FieldType>,
     pub optional: IndexMap<String, FieldType>,
@@ -602,14 +605,14 @@ impl NamedFields {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Fields {
     Unit,
     Unnamed(UnnamedFields),
     Named(NamedFields),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EnumVariants(IndexMap<TypePathElem, TypeId>);
 
 impl EnumVariants {
@@ -622,14 +625,14 @@ impl EnumVariants {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ArrayType {
     pub ty: FieldType,
     /// None means any size.
     pub len: Option<usize>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MapType {
     pub key: FieldType,
     pub value: FieldType,
@@ -637,12 +640,12 @@ pub struct MapType {
     pub len: Option<usize>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct BitFlagsType {
     pub variants: Vec<TypePathElem>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum TypeKind {
     Tuple(UnnamedFields),
     Array(ArrayType),
@@ -668,7 +671,7 @@ pub enum TypeKind {
     Generic(TypeSet),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(usize)]
 pub enum Primitive {
     Any,

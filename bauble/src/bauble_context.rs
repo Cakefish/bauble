@@ -8,6 +8,12 @@ use crate::{
 
 pub type Source = ariadne::Source<String>;
 
+#[derive(Default, Clone, Copy, Debug)]
+struct InnerReference {
+    ty: Option<TypeId>,
+    asset: Option<TypeId>,
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
     pub ty: Option<TypeId>,
@@ -16,6 +22,13 @@ pub struct PathReference {
 }
 
 impl PathReference {
+    pub fn empty() -> Self {
+        Self {
+            ty: None,
+            asset: None,
+            module: None,
+        }
+    }
     pub fn any(path: TypePath) -> Self {
         Self {
             ty: Some(TypeRegistry::any_type()),
@@ -83,9 +96,11 @@ impl BaubleContextBuilder {
     }
 
     pub fn build(self) -> BaubleContext {
-        let mut root_node = CtxNode::default();
+        let mut root_node = CtxNode::new(TypePath::empty());
         for id in self.registry.type_ids() {
-            root_node.build_type(id, &self.registry);
+            if self.registry.key_type(id).meta.path.is_writable() {
+                root_node.build_type(id, &self.registry);
+            }
         }
 
         BaubleContext {
@@ -96,14 +111,58 @@ impl BaubleContextBuilder {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct CtxNode {
-    reference: PathReference,
+    reference: InnerReference,
+    path: TypePath,
     source: Option<FileId>,
     children: IndexMap<TypePathElem, CtxNode>,
 }
 
 impl CtxNode {
+    fn new(path: TypePath) -> Self {
+        Self {
+            path,
+            reference: Default::default(),
+            source: Default::default(),
+            children: Default::default(),
+        }
+    }
+    fn reference(&self) -> PathReference {
+        PathReference {
+            ty: self.reference.ty,
+            asset: self.reference.asset.map(|ty| (ty, self.path.clone())),
+            module: (!self.children.is_empty()).then(|| self.path.clone()),
+        }
+    }
+
+    fn filter<'a>(
+        &'a self,
+        filter: impl Fn(&CtxNode) -> bool + Copy,
+        max_depth: Option<usize>,
+    ) -> impl Iterator<Item = TypePath<&'a str>> + Clone {
+        let mut stack: Vec<(usize, indexmap::map::Values<'a, TypePathElem, CtxNode>)> = Vec::new();
+        stack.push((0, self.children.values()));
+        std::iter::from_fn(move || {
+            while let Some((depth, iter)) = stack.last_mut() {
+                let Some(inner) = iter.next() else {
+                    stack.pop();
+                    continue;
+                };
+
+                if max_depth.is_none_or(|d| *depth < d) {
+                    let new_depth = *depth + 1;
+                    stack.push((new_depth, inner.children.values()));
+                }
+
+                if filter(inner) {
+                    return Some(inner.path.borrow());
+                }
+            }
+
+            None
+        })
+    }
     fn find<R>(&self, ident: TypePathElem<&str>, visit: impl FnOnce(&CtxNode) -> R) -> Option<R> {
         fn find_inner<R, F: FnOnce(&CtxNode) -> R>(
             node: &CtxNode,
@@ -126,7 +185,11 @@ impl CtxNode {
 
         find_inner(self, ident, visit).ok()
     }
-    fn walk<R>(&self, path: TypePath<&str>, visit: impl FnOnce(&CtxNode) -> R) -> Option<R> {
+    fn walk<'a, R>(
+        &'a self,
+        path: TypePath<&str>,
+        visit: impl FnOnce(&'a CtxNode) -> R,
+    ) -> Option<R> {
         if path.is_empty() {
             Some(visit(self))
         } else {
@@ -195,7 +258,6 @@ impl CtxNode {
 
     fn is_empty(&self) -> bool {
         self.reference.ty.is_none()
-            && self.reference.module.is_none()
             && self.reference.asset.is_none()
             && self.children.is_empty()
             && self.source.is_none()
@@ -216,15 +278,17 @@ impl CtxNode {
     }
 
     /// Builds all path elements as modules
-    fn build_modules(&mut self, mut path: TypePath, child_path: TypePath<&str>) -> &mut CtxNode {
-        self.reference.module = Some(path.clone());
+    fn build_nodes(&mut self, child_path: TypePath<&str>) -> &mut CtxNode {
         let Some((child, rest)) = child_path.split_start() else {
             return self;
         };
-        path.push(child.into());
-        let child = self.children.entry(child.to_owned()).or_default();
+        self.add_node(child).build_nodes(rest)
+    }
 
-        child.build_modules(path, rest)
+    fn add_node(&mut self, child: TypePathElem<&str>) -> &mut Self {
+        self.children
+            .entry(child.to_owned())
+            .or_insert_with(|| CtxNode::new(self.path.combine(&child)))
     }
 
     /// # Panics
@@ -233,12 +297,7 @@ impl CtxNode {
     fn build_type(&mut self, id: TypeId, type_registry: &TypeRegistry) {
         let ty = type_registry.key_type(id);
 
-        let Some((module, name)) = ty.meta.path.split_end() else {
-            // Types with empty paths aren't added here.
-            return;
-        };
-        let module = self.build_modules(TypePath::empty(), module);
-        let node = module.children.entry(name.to_owned()).or_default();
+        let node = self.build_nodes(ty.meta.path.borrow());
         if let Some(ty) = node.reference.ty
             && ty != id
         {
@@ -247,18 +306,12 @@ impl CtxNode {
         node.reference.ty = Some(id);
     }
 
-    fn build_asset(&mut self, path: TypePath, ty: TypeId) {
-        let Some((module, name)) = path.split_end() else {
-            // Types with empty paths aren't added here.
-            return;
-        };
-
-        let module = self.build_modules(TypePath::empty(), module);
-        let node = module.children.entry(name.to_owned()).or_default();
+    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
+        let node = self.build_nodes(path);
         if node.reference.asset.is_some() {
             panic!("Multiple types with the same path");
         }
-        node.reference.asset = Some((ty, path));
+        node.reference.asset = Some(ty);
     }
 
     fn find_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
@@ -276,11 +329,8 @@ pub struct BaubleContext {
 }
 
 impl BaubleContext {
-    pub fn debug_node(&self) {
-        // eprintln!("{:#?}", self.root_node);
-    }
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) {
-        let node = self.root_node.build_modules(TypePath::empty(), path);
+        let node = self.root_node.build_nodes(path);
         let id = FileId(self.files.len());
         node.source = Some(id);
         self.files
@@ -290,7 +340,7 @@ impl BaubleContext {
     /// Registers an asset. This is done automatically for any objects in a file that gets registered.
     ///
     /// With this method you can expose assets that aren't in bauble.
-    pub fn register_asset(&mut self, path: TypePath, ty: TypeId) {
+    pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
         self.root_node.build_type(ref_ty, &self.registry);
         self.root_node.build_asset(path, ref_ty);
@@ -415,32 +465,115 @@ impl BaubleContext {
 
         (objects, errors)
     }
+
+    pub fn type_registry(&self) -> &TypeRegistry {
+        &self.registry
+    }
+
+    pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
+        self.root_node.walk(path, |node| node.reference())
+    }
+
+    pub fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
+        self.root_node.walk(path, |node| {
+            node.children
+                .iter()
+                .map(|(key, child_node)| (key.to_owned(), child_node.reference()))
+                .collect()
+        })
+    }
+
+    pub fn ref_with_ident(
+        &self,
+        path: TypePath<&str>,
+        ident: TypePathElem<&str>,
+    ) -> Option<PathReference> {
+        self.root_node
+            .walk(path, |node| node.find(ident, |node| node.reference()))
+            .flatten()
+    }
+
+    pub fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
+        self.root_node.find_file_id(path)
+    }
+
+    pub fn get_file_path(&self, file: FileId) -> TypePath<&str> {
+        self.files
+            .get(file.0)
+            .expect("FileId was invalid")
+            .0
+            .borrow()
+    }
+
+    pub fn get_source(&self, file: FileId) -> &Source {
+        &self.files.get(file.0).expect("FileId was invalid").1
+    }
+
+    pub fn assets(
+        &self,
+        path: TypePath<&str>,
+        max_depth: Option<usize>,
+    ) -> impl Iterator<Item = TypePath<&str>> {
+        self.root_node
+            .walk(path, |node| {
+                node.filter(|node| node.reference.asset.is_some(), max_depth)
+            })
+            .into_iter()
+            .flatten()
+    }
+
+    pub fn types(
+        &self,
+        path: TypePath<&str>,
+        max_depth: Option<usize>,
+    ) -> impl Iterator<Item = TypePath<&str>> {
+        self.root_node
+            .walk(path, |node| {
+                node.filter(|node| node.reference.ty.is_some(), max_depth)
+            })
+            .into_iter()
+            .flatten()
+    }
+
+    pub fn modules(
+        &self,
+        path: TypePath<&str>,
+        max_depth: Option<usize>,
+    ) -> impl Iterator<Item = TypePath<&str>> {
+        self.root_node
+            .walk(path, |node| {
+                node.filter(|node| !node.children.is_empty(), max_depth)
+            })
+            .into_iter()
+            .flatten()
+    }
+
+    pub fn ref_kinds(
+        &self,
+        path: TypePath<&str>,
+        kind: crate::value::RefKind,
+        max_depth: Option<usize>,
+    ) -> impl Iterator<Item = TypePath<&str>> + Clone {
+        self.root_node
+            .walk(path, move |node| {
+                node.filter(
+                    move |node| match kind {
+                        crate::value::RefKind::Module => !node.children.is_empty(),
+                        crate::value::RefKind::Asset => node.reference.asset.is_some(),
+                        crate::value::RefKind::Type => node.reference.ty.is_some(),
+                        crate::value::RefKind::Any => true,
+                    },
+                    max_depth,
+                )
+            })
+            .into_iter()
+            .flatten()
+    }
 }
 
-pub trait AssetContext: Sized {
-    fn type_registry(&self) -> &TypeRegistry;
+pub struct BaubleContextCache<'a>(pub &'a BaubleContext);
 
-    /// Get a reference from `path`.
-    fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference>;
-
-    /// Get all the direct child references of `path`.
-    fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>>;
-
-    /// If there is only one valid `Reference` with the identifier `ident`
-    /// somewhere in a child path of `path`, return that.
-    fn with_ident(&self, path: TypePath<&str>, ident: TypePathElem<&str>) -> Option<PathReference>;
-
-    /// Get the source associated with a path.
-    fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId>;
-
-    fn get_file_path(&self, file: FileId) -> TypePath<&str>;
-
-    fn get_source(&self, type_id: FileId) -> &Source;
-}
-
-pub struct AssetContextCache<A>(pub A);
-
-impl<'a, A: AssetContext + 'a> ariadne::Cache<FileId> for AssetContextCache<&'a A> {
+impl ariadne::Cache<FileId> for BaubleContextCache<'_> {
     type Storage = String;
 
     fn fetch(
@@ -454,119 +587,3 @@ impl<'a, A: AssetContext + 'a> ariadne::Cache<FileId> for AssetContextCache<&'a 
         Some(Box::new(self.0.get_file_path(*id).to_string()))
     }
 }
-
-impl<T: AssetContext> AssetContext for &T {
-    fn type_registry(&self) -> &TypeRegistry {
-        AssetContext::type_registry(*self)
-    }
-
-    fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
-        AssetContext::get_ref(*self, path)
-    }
-
-    fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
-        AssetContext::all_in(*self, path)
-    }
-
-    fn with_ident(&self, path: TypePath<&str>, ident: TypePathElem<&str>) -> Option<PathReference> {
-        AssetContext::with_ident(*self, path, ident)
-    }
-
-    fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
-        AssetContext::get_file_id(*self, path)
-    }
-
-    fn get_file_path(&self, file: FileId) -> TypePath<&str> {
-        AssetContext::get_file_path(*self, file)
-    }
-
-    fn get_source(&self, file: FileId) -> &Source {
-        AssetContext::get_source(*self, file)
-    }
-}
-
-impl AssetContext for BaubleContext {
-    fn type_registry(&self) -> &TypeRegistry {
-        &self.registry
-    }
-
-    fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
-        self.root_node.walk(path, |node| node.reference.clone())
-    }
-
-    fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
-        self.root_node.walk(path, |node| {
-            node.children
-                .iter()
-                .map(|(key, child_node)| (key.to_owned(), child_node.reference.clone()))
-                .collect()
-        })
-    }
-
-    fn with_ident(&self, path: TypePath<&str>, ident: TypePathElem<&str>) -> Option<PathReference> {
-        self.root_node
-            .walk(path, |node| node.find(ident, |node| node.reference.clone()))
-            .flatten()
-    }
-
-    fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
-        self.root_node.find_file_id(path)
-    }
-
-    fn get_file_path(&self, file: FileId) -> TypePath<&str> {
-        self.files
-            .get(file.0)
-            .expect("FileId was invalid")
-            .0
-            .borrow()
-    }
-
-    fn get_source(&self, file: FileId) -> &Source {
-        &self.files.get(file.0).expect("FileId was invalid").1
-    }
-}
-
-/*
-#[derive(Clone)]
-pub struct AllowAnyPath {
-    pub src: Source,
-}
-
-impl AssetContext for AllowAnyPath {
-    fn type_id<T: for<'a> Bauble<'a> + std::any::Any>(&self) -> Option<TypeId> {
-        None
-    }
-
-    fn key_type(&self, id: TypeId) -> &Type {
-        todo!()
-    }
-
-    fn trait_id<T: for<'a> Bauble<'a> + std::any::Any>(&self) -> Option<TraitId> {
-        todo!()
-    }
-
-    fn key_trait(&self, id: TraitId) -> &Trait {
-        todo!()
-    }
-
-    fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
-        Some(PathReference::any(path.to_owned()))
-    }
-
-    fn all_in(&self, _path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
-        None
-    }
-
-    fn with_ident(
-        &self,
-        _path: TypePath<&str>,
-        ident: TypePathElem<&str>,
-    ) -> Option<PathReference> {
-        None
-    }
-
-    fn get_source(&self, _path: TypePath<&str>) -> Option<&Source> {
-        Some(&self.src)
-    }
-}
-*/

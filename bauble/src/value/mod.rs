@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
 use crate::{
-    AssetContext, BaubleError, BaubleErrors, FileId, VariantKind,
+    BaubleContext, BaubleError, BaubleErrors, FileId, VariantKind,
     bauble_context::PathReference,
     error::Level,
     parse::{self, Object as ParseObject, Path, PathEnd, PathTreeEnd, Use, Values},
@@ -27,7 +27,7 @@ pub struct Val {
     pub attributes: Spanned<Attributes>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum CopyVal {
     Copy {
         ty: Option<Spanned<TypeId>>,
@@ -139,31 +139,36 @@ pub enum Value<Inner = Val> {
     Enum(Spanned<TypePathElem>, Box<Inner>),
 }
 
+impl<T> Value<T> {
+    pub fn primitive_type(&self) -> Option<types::Primitive> {
+        match self {
+            Self::Primitive(p) => Some(match p {
+                PrimitiveValue::Num(_) => types::Primitive::Num,
+                PrimitiveValue::Str(_) => types::Primitive::Str,
+                PrimitiveValue::Bool(_) => types::Primitive::Bool,
+                PrimitiveValue::Unit => types::Primitive::Unit,
+                PrimitiveValue::Raw(_) => types::Primitive::Raw,
+            }),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Object {
     pub object_path: TypePath,
     pub value: Val,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum ConversionError {
     UnregisteredAsset,
     UnresolvedType,
-    ModuleNotFound {
-        module: TypePath,
-    },
     AmbiguousUse {
         ident: TypePathElem,
     },
     ExpectedBitfield {
         got: TypeId,
-    },
-    UnresolvedReference {
-        path: TypePath,
-    },
-    UnresolvedWithReference {
-        path: TypePath,
-        ident: TypePathElem,
     },
     WrongTupleLength {
         got: usize,
@@ -179,19 +184,16 @@ pub enum ConversionError {
         field: Ident,
         ty: TypeId,
     },
+    DuplicateAttribute {
+        first: Ident,
+        second: Ident,
+    },
     WrongFieldKind(TypeId),
     UnknownVariant {
         variant: Spanned<TypePathElem>,
         ty: TypeId,
     },
-    ExpectedAssetRef {
-        module: bool,
-        ty: bool,
-    },
-    ExpectedTypeRef {
-        module: bool,
-        asset: bool,
-    },
+    RefError(Box<RefError>),
     ExpectedExactType {
         expected: TypeId,
         got: Option<TypeId>,
@@ -204,6 +206,53 @@ pub enum ConversionError {
     },
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum RefKind {
+    Module,
+    Asset,
+    Type,
+    Any,
+}
+
+#[derive(Clone, Debug)]
+enum PathKind {
+    Direct(TypePath),
+    /// TypePath::*::TypePathElem
+    Indirect(TypePath, TypePathElem),
+}
+
+impl TryFrom<&Path> for PathKind {
+    type Error = Spanned<crate::path::PathError>;
+
+    fn try_from(value: &Path) -> std::result::Result<Self, Self::Error> {
+        let mut leading =
+            TypePath::new(value.leading.join("::")).map_err(|e| e.spanned(value.span()))?;
+
+        match &value.last.value {
+            PathEnd::WithIdent(ident) => Ok(PathKind::Indirect(
+                leading,
+                TypePathElem::new(ident.as_str())
+                    .map_err(|e| e.spanned(ident.span))?
+                    .to_owned(),
+            )),
+            PathEnd::Ident(ident) => {
+                leading
+                    .push_str(ident.as_str())
+                    .map_err(|e| e.spanned(ident.span))?;
+                Ok(PathKind::Direct(leading))
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RefError {
+    uses: Option<HashMap<TypePathElem, RefCopy>>,
+    path: PathKind,
+    path_ref: PathReference,
+    kind: RefKind,
+}
+
 impl From<crate::path::PathError> for ConversionError {
     fn from(value: crate::path::PathError) -> Self {
         Self::PathError(value)
@@ -211,18 +260,14 @@ impl From<crate::path::PathError> for ConversionError {
 }
 
 impl BaubleError for Spanned<ConversionError> {
-    fn msg_general(&self, types: &types::TypeRegistry) -> crate::error::ErrorMsg {
+    fn msg_general(&self, ctx: &BaubleContext) -> crate::error::ErrorMsg {
+        let types = ctx.type_registry();
         let msg = match &self.value {
             ConversionError::CopyCycle(_) => Cow::Borrowed("A copy cycle was found"),
             ConversionError::PathError(_) => Cow::Borrowed("Path error"),
-            ConversionError::ModuleNotFound { .. } => Cow::Borrowed("Module not found"),
             ConversionError::AmbiguousUse { .. } => Cow::Borrowed("Ambiguous use"),
             ConversionError::ExpectedBitfield { .. } => Cow::Borrowed("Expected bitfield"),
-            ConversionError::UnresolvedReference { .. } => Cow::Borrowed("Unresolved reference"),
             ConversionError::UnresolvedType => Cow::Borrowed("Unresolved type"),
-            ConversionError::UnresolvedWithReference { .. } => {
-                Cow::Borrowed("Unresolved with ident reference")
-            }
             ConversionError::WrongTupleLength { tuple_ty, .. } => Cow::Owned(format!(
                 "Wrong amount of fields for `{}`",
                 types.key_type(*tuple_ty).meta.path
@@ -237,6 +282,7 @@ impl BaubleError for Spanned<ConversionError> {
                 if *attribute { "attribute" } else { "field" },
                 types.key_type(*ty).meta.path
             )),
+            ConversionError::DuplicateAttribute { .. } => Cow::Borrowed("Duplicate attribute"),
             ConversionError::WrongFieldKind(ty) => Cow::Owned(format!(
                 "Wrong kind of fields for `{}`",
                 types.key_type(*ty).meta.path
@@ -245,13 +291,17 @@ impl BaubleError for Spanned<ConversionError> {
                 "Unknown variant for `{}`",
                 types.key_type(*ty).meta.path
             )),
-            ConversionError::ExpectedAssetRef { .. } => Cow::Borrowed("Expected asset"),
-            ConversionError::ExpectedTypeRef { .. } => Cow::Borrowed("Expected defined type"),
+            ConversionError::RefError(ref_err) => Cow::Borrowed(match ref_err.kind {
+                RefKind::Module => "Failed to resolve module",
+                RefKind::Asset => "Failed to resolve asset",
+                RefKind::Type => "Failed to resolve type",
+                RefKind::Any => "Failed to resolve path",
+            }),
             ConversionError::ExpectedExactType { expected, .. } => Cow::Owned(format!(
                 "Expected the type `{}`",
                 types.key_type(*expected).meta.path
             )),
-            ConversionError::ErrorInCopy { error, .. } => return error.msg_general(types),
+            ConversionError::ErrorInCopy { error, .. } => return error.msg_general(ctx),
             ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
         };
 
@@ -260,7 +310,7 @@ impl BaubleError for Spanned<ConversionError> {
 
     fn msgs_specific(
         &self,
-        types: &types::TypeRegistry,
+        ctx: &BaubleContext,
     ) -> Vec<(crate::error::ErrorMsg, crate::error::Level)> {
         fn describe_fields(_types: &types::TypeRegistry, fields: &types::Fields) -> &'static str {
             match fields {
@@ -328,32 +378,47 @@ impl BaubleError for Spanned<ConversionError> {
             }
         }
 
-        fn get_suggestions<'a>(
-            options: impl IntoIterator<Item = &'a str>,
+        fn get_suggestions<S: std::borrow::Borrow<str> + Clone + std::fmt::Display>(
+            options: impl IntoIterator<Item = S>,
             input: &str,
         ) -> Option<String> {
+            const MAX_EDIT_DISTANCE: usize = 3;
             let mut options = options
                 .into_iter()
-                .map(|s| (edit_distance::edit_distance(s, input), s))
+                .map(|s| (edit_distance::edit_distance(s.borrow(), input), s))
                 .collect::<Vec<_>>();
             options.sort_by_key(|(d, _)| *d);
 
             let mut suggestions = options
                 .iter()
-                .filter(|(distance, ident)| *distance <= 3 || ident.contains(input))
-                .map(|f| f.1)
+                .filter(|(distance, ident)| *distance <= 2 || ident.borrow().contains(input))
+                .map(|f| f.1.clone())
                 .collect::<Vec<_>>();
             if suggestions.is_empty()
-                && let Some(closest) = options.iter().min_by_key(|(d, _)| *d)
+                && let Some(closest) = options
+                    .iter()
+                    .min_by_key(|(d, _)| *d)
+                    .filter(|(d, _)| *d <= MAX_EDIT_DISTANCE)
             {
-                suggestions.push(closest.1);
+                suggestions.push(closest.1.clone());
             }
-            match suggestions.as_slice() {
+            match suggestions
+                .into_iter()
+                .map(|s| format!("`{s}`"))
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
                 [] => None,
-                [field] => Some(format!("Did you mean `{field}`?")),
-                fields => Some(format!("Did you mean any of {}?", fields.join(", "))),
+                [option] => Some(format!("Did you mean {option}?")),
+                [options @ .., option] => Some(format!(
+                    "Did you mean any of {} or {option}?",
+                    // Show at most 5 suggestions.
+                    options[..options.len().min(5)].join(", ")
+                )),
             }
         }
+
+        let types = ctx.type_registry();
 
         let msg: Cow<'_, str> = match &self.value {
             ConversionError::UnresolvedType => Cow::Borrowed(
@@ -416,9 +481,6 @@ impl BaubleError for Spanned<ConversionError> {
                     })
                     .collect();
             }
-            ConversionError::ModuleNotFound { module } => {
-                Cow::Owned(format!("The module {module} wasn't found"))
-            }
             ConversionError::AmbiguousUse { ident } => Cow::Owned(format!(
                 "The identifier `{ident}` has been imported multiple times"
             )),
@@ -427,12 +489,6 @@ impl BaubleError for Spanned<ConversionError> {
                 types.key_type(*got).meta.path,
                 describe_type(types, *got)
             )),
-            ConversionError::UnresolvedReference { path } => {
-                Cow::Owned(format!("Couldn't resolve `{path}`"))
-            }
-            ConversionError::UnresolvedWithReference { path, ident } => {
-                Cow::Owned(format!("Couldn't find `{ident}` in `{path}`"))
-            }
             ConversionError::WrongTupleLength { got, tuple_ty } => {
                 if let types::TypeKind::Tuple(fields)
                 | types::TypeKind::Struct(types::Fields::Unnamed(fields))
@@ -524,6 +580,21 @@ impl BaubleError for Spanned<ConversionError> {
 
                 return errs;
             }
+            ConversionError::DuplicateAttribute { first, second } => {
+                return vec![
+                    (
+                        Spanned::new(
+                            second.span,
+                            Cow::Owned(format!("Duplicate attribute `{second}`")),
+                        ),
+                        Level::Error,
+                    ),
+                    (
+                        Spanned::new(first.span, Cow::Borrowed("First used here")),
+                        Level::Info,
+                    ),
+                ];
+            }
             ConversionError::WrongFieldKind(ty) => {
                 if let types::TypeKind::Struct(fields)
                 | types::TypeKind::EnumVariant { fields, .. } = &types.key_type(*ty).kind
@@ -563,31 +634,87 @@ impl BaubleError for Spanned<ConversionError> {
 
                 return errs;
             }
-            ConversionError::ExpectedAssetRef { module, ty } => Cow::Borrowed(match (module, ty) {
-                (true, true) => {
-                    "Expected this to reference an asset, but it references a module and a type"
+            ConversionError::RefError(ref_err) => {
+                let inner = match (
+                    &ref_err.path_ref.module,
+                    &ref_err.path_ref.asset,
+                    &ref_err.path_ref.ty,
+                ) {
+                    (None, None, None) => "",
+                    (None, None, Some(_)) => ", but it refers to a type",
+                    (None, Some(_), None) => ", but it refers to an asset",
+                    (None, Some(_), Some(_)) => ", but it refers to an asset and a type",
+                    (Some(_), None, None) => ", but it refers to a module",
+                    (Some(_), None, Some(_)) => ", but it refers to a module and a type",
+                    (Some(_), Some(_), None) => ", but it refers to a module and an asset",
+                    (Some(_), Some(_), Some(_)) => "",
+                };
+                let mut errs = vec![(
+                    Spanned::new(
+                        self.span,
+                        Cow::Owned(format!(
+                            "Expected this path to refer to {}{inner}",
+                            match ref_err.kind {
+                                RefKind::Module => "a module",
+                                RefKind::Asset => "an asset",
+                                RefKind::Type => "a type",
+                                RefKind::Any => "a valid reference",
+                            }
+                        )),
+                    ),
+                    Level::Error,
+                )];
+                match &ref_err.path {
+                    PathKind::Direct(path) => {
+                        let options = ctx
+                            .ref_kinds(TypePath::empty(), ref_err.kind, None)
+                            .map(|p| p.into_inner());
+                        if path.len() == 1
+                            && let Some(uses) = &ref_err.uses
+                        {
+                            if let Some(suggestions) = get_suggestions(
+                                uses.iter()
+                                    .filter(|(_, p)| match p {
+                                        RefCopy::Unresolved => false,
+                                        RefCopy::Resolved(_) => false,
+                                        RefCopy::Ref(path_reference) => {
+                                            path_reference.asset.is_some()
+                                        }
+                                    })
+                                    .map(|(ident, _)| ident.as_str())
+                                    .chain(options),
+                                path.as_str(),
+                            ) {
+                                errs.push((
+                                    Spanned::new(self.span, Cow::Owned(suggestions)),
+                                    Level::Info,
+                                ));
+                            }
+                        } else if let Some(suggestions) = get_suggestions(options, path.as_str()) {
+                            errs.push((
+                                Spanned::new(self.span, Cow::Owned(suggestions)),
+                                Level::Info,
+                            ));
+                        }
+                    }
+                    PathKind::Indirect(module, ident) => {
+                        if let Some(suggestions) = get_suggestions(
+                            ctx.ref_kinds(module.borrow(), ref_err.kind, None)
+                                .filter_map(|s| {
+                                    s.split_end()
+                                        .map(|(_, ident)| format!("{module}::*::{ident}"))
+                                }),
+                            &format!("{module}::*::{ident}"),
+                        ) {
+                            errs.push((
+                                Spanned::new(self.span, Cow::Owned(suggestions)),
+                                Level::Info,
+                            ));
+                        }
+                    }
                 }
-                (true, false) => "Expected this to reference an asset, but it references a module",
-                (false, true) => "Expected this to reference an asset, but it references a type",
-                (false, false) => {
-                    "Expected this to reference an asset, but doesn't reference anything"
-                }
-            }),
-            ConversionError::ExpectedTypeRef { module, asset } => {
-                Cow::Borrowed(match (module, asset) {
-                    (true, true) => {
-                        "Expected this to reference a type, but it references a module and an asset"
-                    }
-                    (true, false) => {
-                        "Expected this to reference a type, but it references a module"
-                    }
-                    (false, true) => {
-                        "Expected this to reference a type, but it references an asset"
-                    }
-                    (false, false) => {
-                        "Expected this to reference a type, but doesn't reference anything"
-                    }
-                })
+
+                return errs;
             }
             ConversionError::ExpectedExactType { expected, got } => {
                 let s = if let Some(got) = got {
@@ -609,7 +736,7 @@ impl BaubleError for Spanned<ConversionError> {
                 Cow::Owned(s)
             }
             ConversionError::ErrorInCopy { copy, error } => {
-                let mut v = error.msgs_specific(types);
+                let mut v = error.msgs_specific(ctx);
 
                 v.push((
                     Spanned::new(copy.span, Cow::Borrowed("In this copy value")),
@@ -629,6 +756,31 @@ impl BaubleError for Spanned<ConversionError> {
 
         vec![(msg.spanned(self.span), Level::Error)]
     }
+
+    fn help(&self, ctx: &BaubleContext) -> Option<Cow<'static, str>> {
+        if let ConversionError::RefError(ref_err) = &self.value
+            && ref_err.uses.is_some()
+            && let PathKind::Direct(ident) = &ref_err.path
+            && ident.len() == 1
+        {
+            let suggestions = ctx
+                .ref_kinds(TypePath::empty(), ref_err.kind, None)
+                .filter(|path| path.ends_with(ident.borrow()))
+                .map(|path| format!("`{path}`"))
+                .collect::<Vec<_>>();
+
+            return Some(Cow::Owned(match suggestions.as_slice() {
+                [] => return None,
+                [option] => format!("Maybe you meant to use {option}?"),
+                [rest @ .., option] => format!(
+                    "Maybe you meant to use one of {} or {option}?",
+                    rest.join(", ")
+                ),
+            }));
+        }
+
+        None
+    }
 }
 
 type Result<T> = std::result::Result<T, Spanned<ConversionError>>;
@@ -639,7 +791,7 @@ impl From<Spanned<crate::path::PathError>> for Spanned<ConversionError> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum RefCopy {
     Unresolved,
     Resolved(CopyVal),
@@ -670,23 +822,17 @@ impl RefCopy {
     }
 }
 
-#[derive(Default, Clone)]
-pub struct Symbols<C: AssetContext> {
-    ctx: C,
+#[derive(Clone)]
+pub struct Symbols<'a> {
+    ctx: &'a BaubleContext,
     uses: HashMap<TypePathElem, RefCopy>,
 }
 
-impl<C: AssetContext> Symbols<C> {
-    pub fn new(ctx: C) -> Self {
+impl<'a> Symbols<'a> {
+    pub fn new(ctx: &'a BaubleContext) -> Self {
         Self {
             ctx,
             uses: HashMap::default(),
-        }
-    }
-    pub fn cloned(&self) -> Symbols<&C> {
-        Symbols {
-            ctx: &self.ctx,
-            uses: self.uses.clone(),
         }
     }
 
@@ -705,13 +851,13 @@ impl<C: AssetContext> Symbols<C> {
         Ok(())
     }
 
-    fn add<U: AssetContext>(&mut self, symbols: Symbols<U>) {
+    fn add(&mut self, symbols: Symbols) {
         self.uses.extend(symbols.uses)
     }
 
     fn add_use(&mut self, use_: &Use) -> Result<()> {
-        fn add_use_inner<C: AssetContext>(
-            this: &mut Symbols<C>,
+        fn add_use_inner(
+            this: &mut Symbols,
             leading: TypePath,
             end: &Spanned<PathTreeEnd>,
         ) -> Result<()> {
@@ -721,6 +867,15 @@ impl<C: AssetContext> Symbols<C> {
                         let mut leading = leading.clone();
                         for s in &node.leading.value {
                             leading.push_str(&s.value).map_err(|e| e.spanned(s.span))?;
+                            if this.ctx.get_ref(leading.borrow()).is_none() {
+                                return Err(ConversionError::RefError(Box::new(RefError {
+                                    uses: None,
+                                    path: PathKind::Direct(leading),
+                                    path_ref: PathReference::empty(),
+                                    kind: RefKind::Module,
+                                }))
+                                .spanned(s.span));
+                            }
                         }
                         add_use_inner(this, leading, &node.end)?;
                     }
@@ -732,9 +887,13 @@ impl<C: AssetContext> Symbols<C> {
                                 .map_err(|e| e.spanned(end.span))?;
                         }
                     } else {
-                        return Err(
-                            ConversionError::ModuleNotFound { module: leading }.spanned(end.span)
-                        );
+                        return Err(ConversionError::RefError(Box::new(RefError {
+                            uses: None,
+                            path: PathKind::Direct(leading),
+                            path_ref: PathReference::empty(),
+                            kind: RefKind::Module,
+                        }))
+                        .spanned(end.span));
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::Ident(ident)) => {
@@ -745,20 +904,28 @@ impl<C: AssetContext> Symbols<C> {
                         this.add_ref(path_end.to_owned(), reference)
                             .map_err(|e| e.spanned(ident.span))?;
                     } else {
-                        return Err(ConversionError::UnresolvedReference { path }.spanned(end.span));
+                        return Err(ConversionError::RefError(Box::new(RefError {
+                            uses: None,
+                            path: PathKind::Direct(path),
+                            path_ref: PathReference::empty(),
+                            kind: RefKind::Any,
+                        }))
+                        .spanned(end.span));
                     }
                 }
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
                     let path_end =
                         TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                    if let Some(reference) = this.ctx.with_ident(leading.borrow(), path_end) {
+                    if let Some(reference) = this.ctx.ref_with_ident(leading.borrow(), path_end) {
                         this.add_ref(path_end.to_owned(), reference)
                             .map_err(|e| e.spanned(ident.span))?;
                     } else {
-                        return Err(ConversionError::UnresolvedWithReference {
-                            path: leading,
-                            ident: path_end.to_owned(),
-                        }
+                        return Err(ConversionError::RefError(Box::new(RefError {
+                            uses: None,
+                            path: PathKind::Indirect(leading, path_end.to_owned()),
+                            path_ref: PathReference::empty(),
+                            kind: RefKind::Any,
+                        }))
                         .spanned(end.span));
                     }
                 }
@@ -769,14 +936,23 @@ impl<C: AssetContext> Symbols<C> {
         let mut leading = TypePath::empty();
         for l in use_.leading.iter() {
             leading.push_str(l).map_err(|e| e.spanned(l.span))?;
+            if self.ctx.get_ref(leading.borrow()).is_none() {
+                return Err(ConversionError::RefError(Box::new(RefError {
+                    uses: None,
+                    path: PathKind::Direct(leading),
+                    path_ref: PathReference::empty(),
+                    kind: RefKind::Module,
+                }))
+                .spanned(l.span));
+            }
         }
         add_use_inner(self, leading, &use_.end)
     }
 
-    fn try_resolve_copy<'a>(
-        &'a self,
+    fn try_resolve_copy<'b>(
+        &'b self,
         ident: &str,
-    ) -> Option<(TypePathElem<&'a str>, Option<&'a CopyVal>)> {
+    ) -> Option<(TypePathElem<&'b str>, Option<&'b CopyVal>)> {
         let (key, value) = self.uses.get_key_value(ident)?;
         match value {
             RefCopy::Unresolved => Some((key.borrow(), None)),
@@ -791,7 +967,7 @@ impl<C: AssetContext> Symbols<C> {
             .and_then(|reference| reference.unwrap_ref().module.clone())
     }
 
-    fn resolve_item(&self, raw_path: &Path) -> Result<Cow<PathReference>> {
+    fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<PathReference>> {
         let mut leading = TypePath::empty();
         let mut path_iter = raw_path.leading.iter();
         if let Some(first) = path_iter.next() {
@@ -801,10 +977,30 @@ impl<C: AssetContext> Symbols<C> {
                     .to_owned(),
             );
 
+            if self.ctx.get_ref(leading.borrow()).is_none() {
+                return Err(ConversionError::RefError(Box::new(RefError {
+                    uses: None,
+                    path: PathKind::Direct(leading),
+                    path_ref: PathReference::empty(),
+                    kind: RefKind::Module,
+                }))
+                .spanned(first.span));
+            }
+
             for ident in path_iter {
                 leading
                     .push_str(ident.as_str())
                     .map_err(|e| e.spanned(ident.span))?;
+
+                if self.ctx.get_ref(leading.borrow()).is_none() {
+                    return Err(ConversionError::RefError(Box::new(RefError {
+                        uses: None,
+                        path: PathKind::Direct(leading),
+                        path_ref: PathReference::empty(),
+                        kind: RefKind::Module,
+                    }))
+                    .spanned(ident.span));
+                }
             }
         } else if let PathEnd::Ident(ident) = &raw_path.last.value
             && let Some(RefCopy::Ref(r)) = self.uses.get(ident.as_str())
@@ -814,13 +1010,17 @@ impl<C: AssetContext> Symbols<C> {
         match &raw_path.last.value {
             PathEnd::WithIdent(ident) => {
                 let ident = TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                self.ctx.with_ident(leading.borrow(), ident).ok_or(
-                    ConversionError::UnresolvedWithReference {
-                        path: leading,
-                        ident: ident.to_owned(),
-                    }
-                    .spanned(raw_path.span()),
-                )
+                self.ctx
+                    .ref_with_ident(leading.borrow(), ident)
+                    .ok_or_else(|| {
+                        ConversionError::RefError(Box::new(RefError {
+                            uses: Some(self.uses.clone()),
+                            path: PathKind::Indirect(leading, ident.to_owned()),
+                            path_ref: PathReference::empty(),
+                            kind: ref_kind,
+                        }))
+                        .spanned(raw_path.span())
+                    })
             }
             PathEnd::Ident(ident) => {
                 let span = ident.span;
@@ -840,7 +1040,13 @@ impl<C: AssetContext> Symbols<C> {
                         }
                         .spanned(raw_path.span());
                     }
-                    ConversionError::UnresolvedReference { path }.spanned(raw_path.span())
+                    ConversionError::RefError(Box::new(RefError {
+                        uses: Some(self.uses.clone()),
+                        path: PathKind::Direct(path),
+                        path_ref: PathReference::empty(),
+                        kind: ref_kind,
+                    }))
+                    .spanned(raw_path.span())
                 })
             }
         }
@@ -848,25 +1054,29 @@ impl<C: AssetContext> Symbols<C> {
     }
 
     fn resolve_asset(&self, path: &Spanned<Path>) -> Result<(TypeId, TypePath)> {
-        let item = self.resolve_item(path)?;
+        let item = self.resolve_item(path, RefKind::Asset)?;
 
         item.asset.clone().ok_or(
-            ConversionError::ExpectedAssetRef {
-                module: item.module.is_some(),
-                ty: item.ty.is_some(),
-            }
+            ConversionError::RefError(Box::new(RefError {
+                uses: Some(self.uses.clone()),
+                path: PathKind::try_from(&path.value)?,
+                path_ref: item.into_owned(),
+                kind: RefKind::Asset,
+            }))
             .spanned(path.span),
         )
     }
 
     fn resolve_type(&self, path: &Spanned<Path>) -> Result<TypeId> {
-        let item = self.resolve_item(path)?;
+        let item = self.resolve_item(path, RefKind::Type)?;
 
         item.ty.ok_or(
-            ConversionError::ExpectedTypeRef {
-                module: item.module.is_some(),
-                asset: item.asset.is_some(),
-            }
+            ConversionError::RefError(Box::new(RefError {
+                uses: Some(self.uses.clone()),
+                path: PathKind::try_from(&path.value)?,
+                path_ref: item.into_owned(),
+                kind: RefKind::Type,
+            }))
             .spanned(path.span),
         )
     }
@@ -903,11 +1113,20 @@ pub fn register_assets(
             symbols.resolve_type(ty)
         } else {
             value_type(&binding.object, &symbols)
+                .map(|v| {
+                    default_value_type(&symbols, binding.object.value.value.primitive_type(), v)
+                })
                 .transpose()
                 .unwrap_or(Err(
                     ConversionError::UnresolvedType.spanned(binding.object.value.span)
                 ))
-                .map(|t| get_enum_type(&symbols, t.value).unwrap_or(t.value))
+                .and_then(|v| {
+                    if ctx.type_registry().key_type(v).kind.instanciable() {
+                        Ok(v)
+                    } else {
+                        Err(ConversionError::UnresolvedType.spanned(binding.object.value.span))
+                    }
+                })
         };
 
         match ty {
@@ -923,7 +1142,7 @@ pub fn register_assets(
                     errors.push(e.spanned(binding.object.value.span));
                 }
                 Symbols { uses, .. } = symbols;
-                ctx.register_asset(path, ty);
+                ctx.register_asset(path.borrow(), ty);
             }
             Err(err) => {
                 Symbols { uses, .. } = symbols;
@@ -939,12 +1158,12 @@ pub fn register_assets(
     }
 }
 
-pub fn convert_values<C: AssetContext>(
+pub fn convert_values(
     file: FileId,
     values: Values,
-    default_symbols: &Symbols<C>,
+    default_symbols: &Symbols,
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
-    let mut use_symbols = Symbols::new(&default_symbols.ctx);
+    let mut use_symbols = Symbols::new(default_symbols.ctx);
     let mut use_errors = Vec::new();
     for use_ in values.uses {
         if let Err(e) = use_symbols.add_use(&use_) {
@@ -952,7 +1171,7 @@ pub fn convert_values<C: AssetContext>(
         }
     }
 
-    let mut symbols = default_symbols.cloned();
+    let mut symbols = default_symbols.clone();
 
     let path = symbols.ctx.get_file_path(file);
 
@@ -1131,9 +1350,9 @@ pub fn convert_values<C: AssetContext>(
     }
 }
 
-fn find_copy_refs<'a, C: AssetContext>(
+fn find_copy_refs<'a>(
     object: &ParseObject,
-    symbols: &'a Symbols<C>,
+    symbols: &'a Symbols,
     found: &mut impl FnMut(Spanned<TypePathElem<&'a str>>),
 ) {
     for obj in object.attributes.0.values() {
@@ -1183,57 +1402,49 @@ impl<'a> From<&'a ParseObject> for BorrowedObject<'a> {
     }
 }
 
-fn get_enum_type<C: AssetContext>(symbols: &Symbols<C>, variant: TypeId) -> Option<TypeId> {
+fn default_value_type(
+    symbols: &Symbols,
+    primitive: Option<types::Primitive>,
+    value_type: Option<Spanned<TypeId>>,
+) -> Option<TypeId> {
     let types = symbols.ctx.type_registry();
-    let enum_type = match &types.key_type(variant).kind {
-        types::TypeKind::EnumVariant { enum_type, .. } => *enum_type,
-        types::TypeKind::Generic(set) => {
-            if let Some(t) = types.iter_type_set(set).next()
-                && let types::TypeKind::EnumVariant { enum_type, .. } = &types.key_type(t).kind
-            {
-                types
-                    .key_type(*enum_type)
-                    .meta
-                    .generic_base_type
-                    .expect("Invariant, if the EnumVariant is generic so is the enum type")
-                    .into()
-            } else {
-                return None;
+    if let Some(value_type) = value_type {
+        let enum_type = match &types.key_type(value_type.value).kind {
+            types::TypeKind::EnumVariant { enum_type, .. } => *enum_type,
+            types::TypeKind::Generic(set) => {
+                if let Some(t) = types.iter_type_set(set).next()
+                    && let types::TypeKind::EnumVariant { enum_type, .. } = &types.key_type(t).kind
+                {
+                    types
+                        .key_type(*enum_type)
+                        .meta
+                        .generic_base_type
+                        .expect("Invariant, if the EnumVariant is generic so is the enum type")
+                        .into()
+                } else {
+                    return Some(value_type.value);
+                }
             }
-        }
-        _ => return None,
-    };
+            _ => return Some(value_type.value),
+        };
 
-    Some(enum_type)
+        Some(enum_type)
+    } else {
+        primitive.map(|primitive| types.primitive_type(primitive))
+    }
 }
 
-fn value_type<'a, C: AssetContext>(
+fn value_type<'a>(
     value: impl Into<BorrowedObject<'a>>,
-    symbols: &Symbols<C>,
+    symbols: &Symbols,
 ) -> Result<Option<Spanned<TypeId>>> {
     let value: BorrowedObject<'a> = value.into();
     let types = symbols.ctx.type_registry();
     let ty = match &value.value.value {
-        parse::Value::Unit => Some(
-            types
-                .primitive_type(types::Primitive::Unit)
-                .spanned(value.value.span),
-        ),
-        parse::Value::Num(_) => Some(
-            types
-                .primitive_type(types::Primitive::Num)
-                .spanned(value.value.span),
-        ),
-        parse::Value::Bool(_) => Some(
-            types
-                .primitive_type(types::Primitive::Bool)
-                .spanned(value.value.span),
-        ),
-        parse::Value::Str(_) => Some(
-            types
-                .primitive_type(types::Primitive::Str)
-                .spanned(value.value.span),
-        ),
+        parse::Value::Unit => None,
+        parse::Value::Num(_) => None,
+        parse::Value::Bool(_) => None,
+        parse::Value::Str(_) => None,
         parse::Value::Ref(path) => {
             if let Some(ident) = path.as_ident()
                 && let Some((_, Some(copy))) = symbols.try_resolve_copy(&ident)
@@ -1329,9 +1540,45 @@ fn value_type<'a, C: AssetContext>(
     Ok(ty)
 }
 
-fn convert_copy_value<'a, C: AssetContext>(
+fn set_attributes(
+    mut val: Val,
+    attributes: &Spanned<parse::Attributes>,
+    symbols: &Symbols,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    object_name: TypePathElem<&str>,
+) -> Result<Val> {
+    let types = symbols.ctx.type_registry();
+    let ty = types.key_type(val.ty);
+
+    for (ident, value) in attributes.0.iter() {
+        let Some(ty) = ty.meta.attributes.get(ident.as_str()) else {
+            return Err(ConversionError::UnexpectedField {
+                attribute: true,
+                field: ident.clone(),
+                ty: val.ty,
+            }
+            .spanned(ident.span));
+        };
+
+        if let Some((first, _)) = value.attributes.0.get_key_value(ident.as_str()) {
+            return Err(ConversionError::DuplicateAttribute {
+                first: first.clone(),
+                second: ident.clone(),
+            }
+            .spanned(ident.span));
+        }
+
+        let value = convert_value(value, symbols, add_value, ty.id, object_name)?;
+
+        val.attributes.0.insert(ident.clone(), value);
+    }
+
+    Ok(val)
+}
+
+fn convert_copy_value<'a>(
     value: impl Into<BorrowedObject<'a>>,
-    symbols: &Symbols<C>,
+    symbols: &Symbols,
     add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
     object_name: TypePathElem<&str>,
 ) -> Result<CopyVal> {
@@ -1342,7 +1589,8 @@ fn convert_copy_value<'a, C: AssetContext>(
     if let Some(val_type) = val_type.as_ref()
         && types.key_type(val_type.value).kind.instanciable()
     {
-        let val_type = get_enum_type(symbols, val_type.value).unwrap_or(val_type.value);
+        let val_type = default_value_type(symbols, value.value.primitive_type(), Some(*val_type))
+            .unwrap_or(val_type.value);
         convert_value(value, symbols, add_value, val_type, object_name).map(CopyVal::Resolved)
     } else {
         let mut parse_attributes = || {
@@ -1356,13 +1604,13 @@ fn convert_copy_value<'a, C: AssetContext>(
                         convert_copy_value(value, symbols, add_value, object_name)?,
                     ))
                 })
-                .try_collect()
+                .try_collect::<IndexMap<_, _>>()
         };
 
         // Resolve copy references.
         if let parse::Value::Ref(r) = &value.value.value
             && let Some(ident) = r.as_ident()
-            && let Some((_, Some(val))) = symbols.try_resolve_copy(ident.value)
+            && let Some((copy, Some(val))) = symbols.try_resolve_copy(ident.value)
         {
             return match val {
                 CopyVal::Copy {
@@ -1371,7 +1619,17 @@ fn convert_copy_value<'a, C: AssetContext>(
                     attributes,
                 } => {
                     let mut attributes = attributes.clone();
-                    attributes.0.extend(parse_attributes()?);
+                    for (attribute, value) in parse_attributes()? {
+                        if let Some((first, _)) = attributes.0.get_key_value(attribute.as_str()) {
+                            return Err(ConversionError::DuplicateAttribute {
+                                first: first.clone(),
+                                second: attribute.clone(),
+                            }
+                            .spanned(attribute.span));
+                        }
+
+                        attributes.0.insert(attribute, value);
+                    }
 
                     Ok(CopyVal::Copy {
                         ty: *ty,
@@ -1389,7 +1647,7 @@ fn convert_copy_value<'a, C: AssetContext>(
                     )
                     .map_err(|err| {
                         ConversionError::ErrorInCopy {
-                            copy: ident.map(|s| TypePathElem::new(s).unwrap().to_owned()),
+                            copy: copy.to_owned().spanned(val.span()),
                             error: Box::new(err),
                         }
                         .spanned(value.value.span)
@@ -1411,7 +1669,7 @@ fn convert_copy_value<'a, C: AssetContext>(
                     .map(|p| {
                         let variant_ty = symbols.resolve_type(p)?;
                         let ty = types.key_type(variant_ty);
-                        let (_, variant) = ty.meta.path.split_end().ok_or(
+                        let (_, variant) = ty.meta.path.get_end().ok_or(
                             ConversionError::PathError(crate::path::PathError::EmptyElem(0))
                                 .spanned(p.span),
                         )?;
@@ -1479,12 +1737,30 @@ fn convert_copy_value<'a, C: AssetContext>(
     }
 }
 
-fn convert_from_copy_value<'a, C: AssetContext>(
+fn convert_from_copy<'a>(
     copy_value: impl Into<BorrowCopyVal<'a>>,
-    symbols: &Symbols<C>,
+    symbols: &Symbols,
     add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
     expected_type: TypeId,
     object_name: TypePathElem<&str>,
+) -> Result<Val> {
+    convert_from_copy_with_attributes(
+        copy_value,
+        symbols,
+        add_value,
+        expected_type,
+        object_name,
+        None,
+    )
+}
+
+fn convert_from_copy_with_attributes<'a>(
+    copy_value: impl Into<BorrowCopyVal<'a>>,
+    symbols: &Symbols,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    expected_type: TypeId,
+    object_name: TypePathElem<&str>,
+    extra_attributes: Option<&Spanned<parse::Attributes>>,
 ) -> Result<Val> {
     let types = symbols.ctx.type_registry();
     match copy_value.into() {
@@ -1505,9 +1781,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
             let ty_id = if types.key_type(expected_type).kind.instanciable() {
                 expected_type
             } else {
-                val_ty
-                    .as_ref()
-                    .map(|t| get_enum_type(symbols, t.value).unwrap_or(t.value))
+                default_value_type(symbols, value.primitive_type(), *val_ty)
                     .unwrap_or(expected_type)
             };
 
@@ -1516,7 +1790,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
             let span = value.span;
             let attribute_span = attributes.span;
 
-            macro_rules! parse_unnamed {
+            macro_rules! parse_unnamed_copy {
                 ($fields:expr, $values:expr $(,)?) => {{
                     let fields = $fields;
                     let values = $values;
@@ -1546,7 +1820,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                             .spanned(value.span())
                         })?;
 
-                        seq.push(convert_from_copy_value(
+                        seq.push(convert_from_copy(
                             value,
                             symbols,
                             add_value,
@@ -1559,7 +1833,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                 }};
             }
 
-            macro_rules! parse_named {
+            macro_rules! parse_named_copy {
                 ($named_fields:expr, $fields:expr, $object_name:expr, $attribute:literal $(,)?) => {{
                     let named_fields = $named_fields;
                     let fields = $fields;
@@ -1592,7 +1866,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                         };
                         new_fields.insert(
                             field.clone(),
-                            convert_from_copy_value(value, symbols, add_value, ty.id, object_name)?,
+                            convert_from_copy(value, symbols, add_value, ty.id, object_name)?,
                         );
                     }
                     new_fields
@@ -1602,19 +1876,70 @@ fn convert_from_copy_value<'a, C: AssetContext>(
             let (attributes, leftover_attributes) = {
                 let object_name =
                     TypePathElem::new(format!("{object_name}#")).expect("No :: were added");
-                let new_attributes = parse_named!(
-                    &ty.meta.attributes,
-                    &attributes.0,
-                    object_name.borrow(),
-                    true
-                );
 
-                let leftovers = attributes
-                    .0
-                    .iter()
-                    .filter(|(ident, _)| !new_attributes.contains_key(ident.as_str()))
-                    .map(|(ident, value)| (ident.clone(), value.clone()))
-                    .collect();
+                let mut leftovers = Fields::new();
+
+                let mut new_attributes = Fields::with_capacity(attributes.0.len());
+                if let Some(extra) = extra_attributes {
+                    for (field, value) in &extra.0 {
+                        let ty = match ty.meta.attributes.get(field.as_str()) {
+                            Some(ty) => ty,
+                            None => {
+                                leftovers.insert(
+                                    field.clone(),
+                                    convert_copy_value(
+                                        value,
+                                        symbols,
+                                        add_value,
+                                        object_name.borrow(),
+                                    )?,
+                                );
+                                continue;
+                            }
+                        };
+
+                        new_attributes.insert(
+                            field.clone(),
+                            convert_value(value, symbols, add_value, ty.id, object_name.borrow())?,
+                        );
+                    }
+                }
+                for (field, value) in &attributes.0 {
+                    let ty = match (
+                        ty.meta.attributes.get(field.as_str()),
+                        new_attributes.contains_key(field.as_str()),
+                    ) {
+                        (Some(ty), false) => ty,
+                        _ => {
+                            if let Some((first, _)) = leftovers.get_key_value(field.as_str()) {
+                                return Err(ConversionError::DuplicateAttribute {
+                                    first: first.clone(),
+                                    second: field.clone(),
+                                }
+                                .spanned(field.span));
+                            }
+                            leftovers.insert(field.clone(), value.clone());
+
+                            continue;
+                        }
+                    };
+                    // We checked that `new_attributes` didn't contain this field.
+                    new_attributes.insert(
+                        field.clone(),
+                        convert_from_copy(value, symbols, add_value, ty.id, object_name.borrow())?,
+                    );
+                }
+
+                for (attr, _) in ty.meta.attributes.required.iter() {
+                    if !new_attributes.contains_key(attr.as_str()) {
+                        return Err(ConversionError::MissingField {
+                            attribute: true,
+                            field: attr.clone(),
+                            ty: ty_id,
+                        }
+                        .spanned(attribute_span));
+                    }
+                }
 
                 (
                     Attributes(new_attributes),
@@ -1635,7 +1960,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
             let value = match &ty.kind {
                 types::TypeKind::Tuple(fields) => {
                     if let Value::Tuple(values) = &value.value {
-                        Ok(Value::Tuple(parse_unnamed!(fields, values)))
+                        Ok(Value::Tuple(parse_unnamed_copy!(fields, values)))
                     } else {
                         Err(expected_err())
                     }
@@ -1645,7 +1970,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                         let mut seq = Vec::with_capacity(arr.len());
 
                         for value in arr {
-                            seq.push(convert_from_copy_value(
+                            seq.push(convert_from_copy(
                                 value,
                                 symbols,
                                 add_value,
@@ -1665,14 +1990,14 @@ fn convert_from_copy_value<'a, C: AssetContext>(
 
                         for (key, value) in map {
                             seq.push((
-                                convert_from_copy_value(
+                                convert_from_copy(
                                     key,
                                     symbols,
                                     add_value,
                                     map_type.key.id,
                                     object_name,
                                 )?,
-                                convert_from_copy_value(
+                                convert_from_copy(
                                     value,
                                     symbols,
                                     add_value,
@@ -1692,7 +2017,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                         types::Fields::Unit => Ok(Value::Struct(FieldsKind::Unit)),
                         types::Fields::Unnamed(unnamed_fields) => {
                             if let Value::Struct(FieldsKind::Unnamed(fields)) = &value.value {
-                                Ok(Value::Struct(FieldsKind::Unnamed(parse_unnamed!(
+                                Ok(Value::Struct(FieldsKind::Unnamed(parse_unnamed_copy!(
                                     unnamed_fields,
                                     fields,
                                 ))))
@@ -1703,7 +2028,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                         }
                         types::Fields::Named(named_fields) => {
                             if let Value::Struct(FieldsKind::Named(fields)) = &value.value {
-                                Ok(Value::Struct(FieldsKind::Named(parse_named!(
+                                Ok(Value::Struct(FieldsKind::Named(parse_named_copy!(
                                     named_fields,
                                     fields,
                                     object_name,
@@ -1728,7 +2053,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                                     .is_some_and(|gt| t.value == gt.into())
                         })
                     }) {
-                        let variant_val = convert_from_copy_value(
+                        let variant_val = convert_from_copy(
                             BorrowCopyVal::Copy {
                                 ty: val_ty,
                                 value,
@@ -1748,7 +2073,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                         variants
                             .iter()
                             .find_map(|(variant, variant_ty)| {
-                                let variant_val = convert_from_copy_value(
+                                let variant_val = convert_from_copy(
                                     BorrowCopyVal::Copy {
                                         ty: val_ty,
                                         value,
@@ -1802,7 +2127,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                                 .expect("This should be valid.");
 
                         used_leftover_attributes = true;
-                        let val = convert_from_copy_value(
+                        let val = convert_from_copy(
                             BorrowCopyVal::Copy {
                                 ty: val_ty,
                                 value,
@@ -1821,7 +2146,7 @@ fn convert_from_copy_value<'a, C: AssetContext>(
                 }
                 types::TypeKind::Transparent(type_id) => {
                     used_leftover_attributes = true;
-                    let inner = convert_from_copy_value(
+                    let inner = convert_from_copy(
                         BorrowCopyVal::Copy {
                             ty: val_ty,
                             value,
@@ -1859,7 +2184,11 @@ fn convert_from_copy_value<'a, C: AssetContext>(
         }
         BorrowCopyVal::Resolved(val) => {
             if types.can_infer_from(expected_type, val.ty) {
-                Ok(val.clone())
+                let mut val = val.clone();
+                if let Some(extra) = extra_attributes {
+                    val = set_attributes(val, extra, symbols, add_value, object_name)?;
+                }
+                Ok(val)
             } else {
                 // Got wrong type in copy.
                 Err(ConversionError::ExpectedExactType {
@@ -1872,37 +2201,9 @@ fn convert_from_copy_value<'a, C: AssetContext>(
     }
 }
 
-fn set_attributes<C: AssetContext>(
-    mut val: Val,
-    attributes: &Spanned<parse::Attributes>,
-    symbols: &Symbols<C>,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
-    object_name: TypePathElem<&str>,
-) -> Result<Val> {
-    let types = symbols.ctx.type_registry();
-    let ty = types.key_type(val.ty);
-
-    for (ident, value) in attributes.0.iter() {
-        let Some(ty) = ty.meta.attributes.get(ident.as_str()) else {
-            return Err(ConversionError::UnexpectedField {
-                attribute: true,
-                field: ident.clone(),
-                ty: val.ty,
-            }
-            .spanned(ident.span));
-        };
-
-        let value = convert_value(value, symbols, add_value, ty.id, object_name)?;
-
-        val.attributes.0.insert(ident.clone(), value);
-    }
-
-    Ok(val)
-}
-
-fn convert_value<'a, C: AssetContext>(
+fn convert_value<'a>(
     value: impl Into<BorrowedObject<'a>>,
-    symbols: &Symbols<C>,
+    symbols: &Symbols,
     add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
     expected_type: TypeId,
     object_name: TypePathElem<&str>,
@@ -1912,21 +2213,23 @@ fn convert_value<'a, C: AssetContext>(
     // Convert from copy values, and add any attributes the ref had.
     if let parse::Value::Ref(r) = &value.value.value
         && let Some(ident) = r.as_ident()
-        && let Some((_, Some(val))) = symbols.try_resolve_copy(ident.value)
+        && let Some((copy, Some(val))) = symbols.try_resolve_copy(ident.value)
     {
-        let res = convert_from_copy_value(val, symbols, add_value, expected_type, object_name)?;
-
-        return if !value.attributes.0.is_empty() {
-            set_attributes(res, value.attributes, symbols, add_value, object_name).map_err(|err| {
-                ConversionError::ErrorInCopy {
-                    copy: ident.map(|s| TypePathElem::new(s).unwrap().to_owned()),
-                    error: Box::new(err),
-                }
-                .spanned(value.value.span)
-            })
-        } else {
-            Ok(res)
-        };
+        return convert_from_copy_with_attributes(
+            val,
+            symbols,
+            add_value,
+            expected_type,
+            object_name,
+            Some(value.attributes),
+        )
+        .map_err(|err| {
+            ConversionError::ErrorInCopy {
+                copy: copy.to_owned().spanned(val.span()),
+                error: Box::new(err),
+            }
+            .spanned(value.value.span)
+        });
     }
 
     let types = symbols.ctx.type_registry();
@@ -1945,10 +2248,9 @@ fn convert_value<'a, C: AssetContext>(
 
         // If `expected_type` isn't instantiable, i.e is a trait, we go off of the value type.
         if !types.key_type(expected_type).kind.instanciable() {
-            val_type
-                .and_then(|t| get_enum_type(symbols, *t).map(|s| s.spanned(t.span)))
-                .or(val_type)
-                .unwrap_or(expected_type.spanned(value.value.span))
+            default_value_type(symbols, value.value.primitive_type(), val_type)
+                .unwrap_or(expected_type)
+                .spanned(val_type.map_or(value.value.span, |s| s.span))
         } else {
             expected_type.spanned(val_type.map(|s| s.span).unwrap_or(value.value.span))
         }
@@ -2396,11 +2698,11 @@ fn convert_value<'a, C: AssetContext>(
 }
 
 /// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
-fn convert_object<C: AssetContext>(
+fn convert_object(
     path: TypePath<&str>,
     name: TypePathElem<&str>,
     value: &ParseObject,
-    symbols: &Symbols<C>,
+    symbols: &Symbols,
     expected_type: TypeId,
     add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
 ) -> Result<Object> {

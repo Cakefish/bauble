@@ -10,7 +10,7 @@ pub mod value;
 
 pub use bauble_macros::Bauble;
 
-pub use bauble_context::{AssetContext, FileId, Source};
+pub use bauble_context::{BaubleContext, FileId, Source};
 pub use convert::{
     Bauble, BaubleAllocator, DefaultAllocator, DeserializeError, FromBaubleError,
     FullDeserializeError, VariantKind,
@@ -26,7 +26,7 @@ pub mod private {
 
 use parse::Values;
 
-pub fn parse(file_id: FileId, ctx: &impl AssetContext) -> Result<Values, BaubleErrors> {
+pub fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<Values, BaubleErrors> {
     use chumsky::Parser;
 
     let parser = parse::parser();
@@ -42,7 +42,7 @@ pub fn parse(file_id: FileId, ctx: &impl AssetContext) -> Result<Values, BaubleE
     })
 }
 
-pub fn convert(file_id: FileId, ctx: &impl AssetContext) -> Result<Vec<Object>, BaubleErrors> {
+pub fn convert(file_id: FileId, ctx: &BaubleContext) -> Result<Vec<Object>, BaubleErrors> {
     let values = parse(file_id, ctx)?;
 
     convert_values(file_id, values, &value::Symbols::new(ctx))

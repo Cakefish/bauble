@@ -1,5 +1,7 @@
 use std::ops::Deref;
 
+use chumsky::text::Char;
+
 const PATH_DELIMS: &[(char, char)] = &[('<', '>'), ('[', ']'), ('{', '}'), ('(', ')')];
 const PATH_SEPERATOR: &str = "::";
 
@@ -289,16 +291,61 @@ impl<S: AsRef<str>> TypePath<S> {
     pub fn combine<T: AsRef<str>>(&self, other: &TypePath<T>) -> TypePath {
         match (self.is_empty(), other.is_empty()) {
             (true, true) => TypePath::empty(),
-            (true, false) => self.to_owned(),
-            (false, true) => other.to_owned(),
+            (false, true) => self.to_owned(),
+            (true, false) => other.to_owned(),
             (false, false) => TypePath(format!("{self}{PATH_SEPERATOR}{other}")),
         }
     }
 
+    pub fn get_start(&self) -> Option<(TypePathElem<&str>, TypePath<&str>)> {
+        self.borrow().split_start()
+    }
+
+    pub fn get_end(&self) -> Option<(TypePath<&str>, TypePathElem<&str>)> {
+        self.borrow().split_end()
+    }
+
+    pub fn iter(&self) -> PathIter {
+        PathIter {
+            path: self.borrow(),
+        }
+    }
+
+    pub fn ends_with(&self, other: TypePath<&str>) -> bool {
+        self.as_str().ends_with(other.as_str())
+            && (self.byte_len() == other.byte_len()
+                || (self.byte_len() - other.byte_len())
+                    .checked_sub(PATH_SEPERATOR.len())
+                    .is_some_and(|i| &self.as_str()[i..i + PATH_SEPERATOR.len()] == PATH_SEPERATOR))
+    }
+
+    pub fn starts_with(&self, other: TypePath<&str>) -> bool {
+        self.as_str().starts_with(other.as_str())
+            && (self.byte_len() == other.byte_len()
+                || self
+                    .as_str()
+                    .get(other.byte_len()..other.byte_len() + PATH_SEPERATOR.len())
+                    == Some(PATH_SEPERATOR))
+    }
+
+    pub fn is_writable(&self) -> bool {
+        !self.is_empty()
+            && self.iter().all(|part| {
+                let mut s = part.as_str().chars();
+
+                s.next()
+                    .expect("Invariant, path parts aren't empty.")
+                    .is_ident_start()
+                    && s.all(|c| c.is_ident_continue())
+            })
+    }
+}
+
+impl<'a> TypePath<&'a str> {
     /// Returns (root, rest)
     ///
     /// Returns `None` if self is empty
-    pub fn split_start(&self) -> Option<(TypePathElem<&str>, TypePath<&str>)> {
+    pub fn split_start(&self) -> Option<(TypePathElem<&'a str>, TypePath<&'a str>)> {
         if self.is_empty() {
             return None;
         }
@@ -346,8 +393,8 @@ impl<S: AsRef<str>> TypePath<S> {
         }
 
         if let Some(split) = split {
-            let root = &self.as_str()[..split - PATH_SEPERATOR.len()];
-            let rest = &self.as_str()[split..];
+            let root = &self.0[..split - PATH_SEPERATOR.len()];
+            let rest = &self.0[split..];
 
             debug_assert_eq!(
                 &self.as_str()[split - PATH_SEPERATOR.len()..split],
@@ -356,14 +403,14 @@ impl<S: AsRef<str>> TypePath<S> {
 
             Some((TypePathElem(TypePath(root)), TypePath(rest)))
         } else {
-            Some((TypePathElem(self.borrow()), TypePath("")))
+            Some((TypePathElem(*self), TypePath("")))
         }
     }
 
     /// Returns (root, elem)
     ///
     /// Returns `None` if self is empty
-    pub fn split_end(&self) -> Option<(TypePath<&str>, TypePathElem<&str>)> {
+    pub fn split_end(&self) -> Option<(TypePath<&'a str>, TypePathElem<&'a str>)> {
         if self.is_empty() {
             return None;
         }
@@ -415,8 +462,8 @@ impl<S: AsRef<str>> TypePath<S> {
         }
 
         if let Some(split) = split {
-            let root = &self.as_str()[..=split];
-            let elem = &self.as_str()[split + 1 + PATH_SEPERATOR.len()..];
+            let root = &self.0[..=split];
+            let elem = &self.0[split + 1 + PATH_SEPERATOR.len()..];
             debug_assert_eq!(
                 &self.as_str()[split + 1..split + 1 + PATH_SEPERATOR.len()],
                 PATH_SEPERATOR
@@ -424,8 +471,34 @@ impl<S: AsRef<str>> TypePath<S> {
 
             Some((TypePath(root), TypePathElem(TypePath(elem))))
         } else {
-            Some((TypePath(""), TypePathElem(self.borrow())))
+            Some((TypePath(""), TypePathElem(*self)))
         }
+    }
+}
+
+pub struct PathIter<'a> {
+    path: TypePath<&'a str>,
+}
+
+impl<'a> Iterator for PathIter<'a> {
+    type Item = TypePathElem<&'a str>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (item, rest) = self.path.split_start()?;
+
+        self.path = rest;
+
+        Some(item)
+    }
+}
+
+impl DoubleEndedIterator for PathIter<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let (rest, item) = self.path.split_end()?;
+
+        self.path = rest;
+
+        Some(item)
     }
 }
 

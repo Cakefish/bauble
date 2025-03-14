@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 
 use crate::{
     Val, Value,
+    bauble_context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
     parse::Ident,
     path::{TypePath, TypePathElem},
@@ -108,7 +109,8 @@ impl BaubleError for FullDeserializeError {
             _ => Level::Error,
         }
     }
-    fn msg_general(&self, types: &types::TypeRegistry) -> ErrorMsg {
+    fn msg_general(&self, ctx: &BaubleContext) -> ErrorMsg {
+        let types = ctx.type_registry();
         let ty = match types.get_type_by_id(self.in_type) {
             Some(ty) => ty.meta.path.borrow(),
             None => TypePath::new("<unregistered type>").unwrap(),
@@ -147,7 +149,8 @@ impl BaubleError for FullDeserializeError {
         Spanned::new(self.value_span, Cow::Owned(msg))
     }
 
-    fn msgs_specific(&self, types: &types::TypeRegistry) -> Vec<(ErrorMsg, Level)> {
+    fn msgs_specific(&self, ctx: &BaubleContext) -> Vec<(ErrorMsg, Level)> {
+        let types = ctx.type_registry();
         let ty = match types.get_type_by_id(self.in_type) {
             Some(ty) => ty.meta.path.borrow(),
             None => TypePath::new("<unregistered type>").unwrap(),
@@ -269,6 +272,8 @@ impl BaubleAllocator<'_> for DefaultAllocator {
 }
 
 pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static {
+    /// DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
+    ///
     /// Constructs a reflection type that bauble uses to parse and resolve types.
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type;
 
@@ -289,6 +294,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
         types::Type {
             meta: types::TypeMeta {
                 path: TypePath::new("bauble::Val").unwrap().to_owned(),
+                attributes: types::NamedFields::any(),
                 ..Default::default()
             },
             kind: types::TypeKind::Primitive(types::Primitive::Any),
@@ -432,12 +438,9 @@ macro_rules! impl_tuple {
         impl<'a, A: BaubleAllocator<'a>, $($ident: Bauble<'a, A>),+> Bauble<'a, A> for ($($ident),+) {
             fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
                 let inner = [$($ident::construct_type(registry)),+];
-                let mut inner_string = inner.iter().map(|ty| ty.meta.path.as_str()).fold(
-                    "".to_string(),
-                    |acc, add| format!("{acc}{add},")
-                );
-                // remove trailing comma;
-                inner_string.pop();
+                let inner_string = inner.iter().map(|ty| ty.meta.path.to_string()).reduce(
+                    |a, b| format!("{a}, {b}")
+                ).unwrap_or(",".to_string());
                 let inner_string = format!("({inner_string})");
                 types::Type {
                     meta: types::TypeMeta {
@@ -497,12 +500,13 @@ impl_tuple!(T0 T1 T2 T3 T4 T5 T6 T7 T8 T9 T10 T11 T12 T13 T14 T15);
 
 impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A> for [T; N] {
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
+        let inner = registry.get_or_register_type::<T, A>();
+
         types::Type {
             meta: types::TypeMeta {
                 path: TypePath::new(&format!(
-                    "[{}; {}]",
-                    T::construct_type(registry).meta.path.as_str(),
-                    N
+                    "[{}; {N}]",
+                    registry.key_type(inner).meta.path.as_str(),
                 ))
                 .unwrap()
                 .to_owned(),
@@ -510,7 +514,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A>
             },
             kind: types::TypeKind::Array(types::ArrayType {
                 ty: FieldType {
-                    id: registry.get_or_register_type::<T, A>(),
+                    id: inner,
                     extra: IndexMap::new(),
                 },
                 len: Some(N),
@@ -638,17 +642,10 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
         let inner = registry.get_or_register_type::<T, _>();
 
-        let generic_path = TypePath::new("std::Vec").unwrap();
-        let generic = registry.get_or_register_generic_type(generic_path);
-
         types::Type {
             meta: types::TypeMeta {
-                path: TypePath::new(format!(
-                    "{generic_path}<{}>",
-                    registry.key_type(inner).meta.path
-                ))
-                .unwrap(),
-                generic_base_type: Some(generic),
+                path: TypePath::new(format!("std::Vec<{}>", registry.key_type(inner).meta.path))
+                    .unwrap(),
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
@@ -683,17 +680,10 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
         let inner = registry.get_or_register_type::<T, _>();
 
-        let generic_path = TypePath::new("std::Box").unwrap();
-        let generic = registry.get_or_register_generic_type(generic_path);
-
         types::Type {
             meta: types::TypeMeta {
-                path: TypePath::new(format!(
-                    "{generic_path}<{}>",
-                    registry.key_type(inner).meta.path
-                ))
-                .unwrap(),
-                generic_base_type: Some(generic),
+                path: TypePath::new(format!("std::Box<{}>", registry.key_type(inner).meta.path))
+                    .unwrap(),
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
@@ -721,18 +711,15 @@ macro_rules! impl_map {
                 let key = registry.get_or_register_type::<K, _>();
                 let value = registry.get_or_register_type::<V, _>();
 
-                let generic_path = TypePath::new($path).unwrap();
-                let generic = registry.get_or_register_generic_type(generic_path);
-
                 types::Type {
                     meta: types::TypeMeta {
                         path: TypePath::new(format!(
-                            "{generic_path}<{}, {}>",
+                            "{}<{}, {}>",
+                            $path,
                             registry.key_type(key).meta.path,
                             registry.key_type(value).meta.path
                         ))
                         .unwrap(),
-                        generic_base_type: Some(generic),
                         ..Default::default()
                     },
                     kind: types::TypeKind::Map(types::MapType {

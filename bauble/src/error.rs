@@ -2,7 +2,10 @@ use std::borrow::Cow;
 
 use ariadne::Report;
 
-use crate::{AssetContext, Span, Spanned, bauble_context::AssetContextCache, types::TypeRegistry};
+use crate::{
+    Span, Spanned,
+    bauble_context::{BaubleContext, BaubleContextCache},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
@@ -40,24 +43,24 @@ pub trait BaubleError: 'static {
         !matches!(self.level(), Level::Error)
     }
 
-    fn msg_general(&self, types: &TypeRegistry) -> ErrorMsg;
+    fn msg_general(&self, ctx: &BaubleContext) -> ErrorMsg;
 
-    fn msgs_specific(&self, types: &TypeRegistry) -> Vec<(ErrorMsg, Level)>;
+    fn msgs_specific(&self, ctx: &BaubleContext) -> Vec<(ErrorMsg, Level)>;
 
-    fn help(&self) -> Option<Cow<'static, str>> {
+    fn help(&self, _ctx: &BaubleContext) -> Option<Cow<'static, str>> {
         None
     }
 
-    fn report(&self, types: &TypeRegistry) -> Report<'_, Span> {
-        let msg = self.msg_general(types);
+    fn report(&self, ctx: &BaubleContext) -> Report<'_, Span> {
+        let msg = self.msg_general(ctx);
         let mut report =
             Report::build(self.level().report_kind(), msg.span).with_message(msg.value);
 
-        if let Some(help) = self.help() {
+        if let Some(help) = self.help(ctx) {
             report.set_help(help);
         }
 
-        for (msg, level) in self.msgs_specific(types) {
+        for (msg, level) in self.msgs_specific(ctx) {
             report.add_label(
                 ariadne::Label::new(msg.span)
                     .with_message(msg.value.clone())
@@ -66,18 +69,18 @@ pub trait BaubleError: 'static {
         }
 
         report
-            .with_config(ariadne::Config::new().with_compact(true))
+            .with_config(ariadne::Config::new().with_index_type(ariadne::IndexType::Byte))
             .finish()
     }
 }
 
 impl<B: BaubleError> BaubleError for Box<B> {
-    fn msg_general(&self, registry: &TypeRegistry) -> ErrorMsg {
-        B::msg_general(self, registry)
+    fn msg_general(&self, ctx: &BaubleContext) -> ErrorMsg {
+        B::msg_general(self, ctx)
     }
 
-    fn msgs_specific(&self, registry: &TypeRegistry) -> Vec<(ErrorMsg, Level)> {
-        B::msgs_specific(self, registry)
+    fn msgs_specific(&self, ctx: &BaubleContext) -> Vec<(ErrorMsg, Level)> {
+        B::msgs_specific(self, ctx)
     }
 
     fn level(&self) -> Level {
@@ -88,12 +91,12 @@ impl<B: BaubleError> BaubleError for Box<B> {
         B::can_ignore(self)
     }
 
-    fn help(&self) -> Option<Cow<'static, str>> {
-        B::help(self)
+    fn help(&self, ctx: &BaubleContext) -> Option<Cow<'static, str>> {
+        B::help(self, ctx)
     }
 
-    fn report(&self, registry: &TypeRegistry) -> Report<'_, Span> {
-        B::report(self, registry)
+    fn report(&self, ctx: &BaubleContext) -> Report<'_, Span> {
+        B::report(self, ctx)
     }
 }
 
@@ -118,29 +121,29 @@ impl BaubleErrors {
     fn for_reports(
         &self,
         mut handle_report: impl for<'b> FnMut(Report<'b, Span>),
-        ctx: &impl AssetContext,
+        ctx: &BaubleContext,
     ) {
         for error in self.0.iter() {
-            handle_report(BaubleError::report(error.as_ref(), ctx.type_registry()))
+            handle_report(BaubleError::report(error.as_ref(), ctx))
         }
     }
 
-    pub fn print_errors(&self, ctx: &impl AssetContext) {
+    pub fn print_errors(&self, ctx: &BaubleContext) {
         self.for_reports(
             |report| {
-                let _ = report.eprint(AssetContextCache(ctx));
+                let _ = report.eprint(BaubleContextCache(ctx));
             },
             ctx,
         );
     }
 
-    pub fn write_errors<W>(&self, ctx: &impl AssetContext, w: &mut W)
+    pub fn write_errors<W>(&self, ctx: &BaubleContext, w: &mut W)
     where
         W: std::io::Write,
     {
         self.for_reports(
             |report| {
-                let _ = report.write(AssetContextCache(ctx), &mut *w);
+                let _ = report.write(BaubleContextCache(ctx), &mut *w);
             },
             ctx,
         );
@@ -164,10 +167,7 @@ impl<B: BaubleError> From<Vec<B>> for BaubleErrors {
     }
 }
 
-pub fn print_errors<T>(
-    res: Result<T, impl Into<BaubleErrors>>,
-    ctx: &impl AssetContext,
-) -> Option<T> {
+pub fn print_errors<T>(res: Result<T, impl Into<BaubleErrors>>, ctx: &BaubleContext) -> Option<T> {
     res.map_err(|errors| {
         let errors: BaubleErrors = errors.into();
         errors.print_errors(ctx)
