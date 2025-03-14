@@ -12,3 +12,4 @@ categories = ["parser-implementations"]
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["extra-traits", "full"] }
+indexmap.workspace = true
