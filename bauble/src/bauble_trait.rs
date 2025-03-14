@@ -196,7 +196,6 @@ impl BaubleError for ToRustError {
                 vec![(
                     Spanned::new(
                         value_span,
-                        // TODO:
                         Cow::Owned(format!(
                             "Expected the kind {ty}, found {}",
                             types.key_type(*found).meta.path
@@ -209,7 +208,6 @@ impl BaubleError for ToRustError {
                 vec![(
                     Spanned::new(
                         value_span,
-                        // TODO:
                         Cow::Owned(format!(
                             "Expected the variant {variant} of {ty}, found {}",
                             types.key_type(*found).meta.path

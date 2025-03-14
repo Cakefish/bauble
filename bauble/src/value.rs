@@ -2377,7 +2377,6 @@ fn convert_value<'a>(
 
     let mut used_leftover_attributes = false;
 
-    // TODO: Improve errors.
     let val = match &ty.kind {
         types::TypeKind::Tuple(tuple) => {
             if matches!(
