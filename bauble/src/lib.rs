@@ -27,7 +27,7 @@ pub mod private {
 
 use parse::Values;
 
-pub fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<Values, BaubleErrors> {
+fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<Values, BaubleErrors> {
     use chumsky::Parser;
 
     let parser = parse::parser();
@@ -43,8 +43,35 @@ pub fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<Values, BaubleError
     })
 }
 
-pub fn convert(file_id: FileId, ctx: &BaubleContext) -> Result<Vec<Object>, BaubleErrors> {
-    let values = parse(file_id, ctx)?;
+#[macro_export]
+macro_rules! bauble_test {
+    ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
+        {
+            let mut ctx = $crate::context::BaubleContextBuilder::new();
+            $(ctx.register_type::<$ty, _>();)*
+            let mut ctx = ctx.build();
+            ctx.register_file($crate::path::TypePath::new("test").unwrap(), format!("\n{}\n", $source));
 
-    value::convert_values(file_id, values, &value::Symbols::new(ctx))
+            let (objects, errors) = ctx.load_all();
+
+            if !errors.is_empty() {
+                $crate::print_errors(Err::<(), _>(errors), &ctx);
+
+                panic!("Error converting");
+            }
+
+            let mut objects = objects.into_iter();
+            $(
+                let value = objects.next().expect("Not as many objects as test expr in bauble test?");
+                let mut read_value = $expr;
+                let test_value = ::std::mem::replace(&mut read_value, $crate::print_errors(Bauble::from_bauble(value.value, &::bauble::DefaultAllocator), &ctx).unwrap());
+
+
+                assert_eq!(
+                    read_value,
+                    test_value,
+                );
+            )*
+        }
+    };
 }

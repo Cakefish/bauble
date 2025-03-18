@@ -1,38 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, context::BaubleContextBuilder, error::print_errors, path::TypePath};
-
-macro_rules! bauble_test {
-    ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
-        {
-            let mut ctx = BaubleContextBuilder::new();
-            $(ctx.register_type::<$ty, _>();)*
-            let mut ctx = ctx.build();
-            ctx.register_file(TypePath::new("test").unwrap(), format!("\n{}\n", $source));
-
-            let (objects, errors) = ctx.load_all();
-
-            if !errors.is_empty() {
-                print_errors(Err::<(), _>(errors), &ctx);
-
-                panic!("Error converting");
-            }
-
-            let mut objects = objects.into_iter();
-            $(
-                let value = objects.next().expect("Not as many objects as test expr in bauble test?");
-                let mut read_value = $expr;
-                let test_value = std::mem::replace(&mut read_value, print_errors(Bauble::from_bauble(value.value, &::bauble::DefaultAllocator), &ctx).unwrap());
-
-
-                assert_eq!(
-                    read_value,
-                    test_value,
-                );
-            )*
-        }
-    };
-}
+use bauble::{Bauble, bauble_test};
 
 #[test]
 fn test_struct() {
