@@ -14,6 +14,10 @@ pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
     const BAUBLE_PATH: &'static str;
 }
 
+impl BaubleTrait for dyn std::any::Any {
+    const BAUBLE_PATH: &'static str = "std::Any";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(usize);
 
@@ -76,6 +80,7 @@ pub struct Trait {
     pub types: TypeSet,
 }
 
+#[derive(Clone)]
 pub struct TypeRegistry {
     types: Vec<Type>,
 
@@ -83,6 +88,8 @@ pub struct TypeRegistry {
 
     generic: HashMap<TypePath, TypeId>,
     type_from_rust: HashMap<std::any::TypeId, TypeId>,
+
+    top_level_trait_dependency: TraitId,
 
     primitive_types: [TypeId; 5],
 }
@@ -136,38 +143,71 @@ impl TypeRegistry {
 
             asset_refs: Default::default(),
 
+            // NOTE: We always
+            top_level_trait_dependency: Self::any_trait(),
+
             generic: Default::default(),
             type_from_rust: Default::default(),
 
             primitive_types: [Self::any_type(); 5],
         };
 
-        // The 0 element in types is Any.
+        // The element at index 0 is always any trait
+        this.get_or_register_trait::<dyn std::any::Any>();
+
+        // The element at index 1 is any trait.
         let any_id = this.get_or_register_type::<crate::Val, crate::DefaultAllocator>();
 
-        this.set_primitive_type(Primitive::Any, any_id);
+        this.set_primitive_default_type(any_id);
 
         let float_id = this.get_or_register_type::<f32, crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Num, float_id);
+        this.set_primitive_default_type(float_id);
 
         let string_id = this.get_or_register_type::<String, crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Str, string_id);
+        this.set_primitive_default_type(string_id);
 
         let bool_id = this.get_or_register_type::<bool, crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Bool, bool_id);
+        this.set_primitive_default_type(bool_id);
 
         let unit_id = this.get_or_register_type::<(), crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Unit, unit_id);
+        this.set_primitive_default_type(unit_id);
 
         this
     }
 
-    /// This is present in all `TypeRegistry`
-    pub fn any_type() -> TypeId {
-        TypeId(0)
+    /// If a type implements the required top-level type.
+    pub fn impls_top_level_type(&self, id: TypeId) -> bool {
+        self.key_trait(self.top_level_trait_dependency).contains(id)
     }
 
-    pub fn set_primitive_type(&mut self, primitive: Primitive, id: TypeId) {
+    pub fn top_level_trait(&self) -> TraitId {
+        self.top_level_trait_dependency
+    }
+
+    /// This is present in all `TypeRegistry`
+    pub fn any_trait() -> TraitId {
+        TraitId(TypeId(0))
+    }
+
+    /// This is present in all `TypeRegistry`
+    pub fn any_type() -> TypeId {
+        TypeId(1)
+    }
+
+    /// Sets what type this primitive type should use by default.
+    ///
+    /// For example, if you register a type with `TypeKind::Primitive(Primitive::Str)`
+    /// that type will then be used whenever we have a string bauble value we can't
+    /// resolve the type for.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `TypeKind` of this type isn't a primitive.
+    pub fn set_primitive_default_type(&mut self, id: TypeId) {
+        let TypeKind::Primitive(primitive) = self.key_type(id).kind else {
+            panic!("Tried to set a non-primitive type as a primitive default type")
+        };
+
         self.primitive_types[primitive as usize] = id;
     }
 
@@ -376,7 +416,7 @@ impl TypeRegistry {
         }
     }
 
-    pub fn get_or_register_trait<T: BaubleTrait>(&mut self) -> TraitId {
+    pub fn get_or_register_trait<T: ?Sized + BaubleTrait>(&mut self) -> TraitId {
         let rust_id = std::any::TypeId::of::<T>();
         if let Some(id) = self.type_from_rust.get(&rust_id) {
             if matches!(self.key_type(*id).kind, TypeKind::Trait(_)) {
@@ -406,6 +446,20 @@ impl TypeRegistry {
                 }
             }))
         }
+    }
+
+    pub fn set_top_level_trait_dependency(&mut self, tr: TraitId) {
+        self.top_level_trait_dependency = tr;
+    }
+
+    pub fn add_trait_dependency(&mut self, ty: TypeId, tr: TraitId) {
+        self.types[ty.0].meta.traits.push(tr);
+
+        let TypeKind::Trait(tr) = &mut self.types[tr.0.0].kind else {
+            unreachable!("Invariant");
+        };
+
+        tr.insert(ty);
     }
 
     /// # Panics

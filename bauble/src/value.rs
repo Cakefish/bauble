@@ -164,6 +164,10 @@ pub struct Object {
 pub enum ConversionError {
     UnregisteredAsset,
     UnresolvedType,
+    MissingRequiredTrait {
+        tr: types::TraitId,
+        ty: TypeId,
+    },
     AmbiguousUse {
         ident: TypePathElem,
     },
@@ -263,6 +267,7 @@ impl BaubleError for Spanned<ConversionError> {
     fn msg_general(&self, ctx: &BaubleContext) -> crate::error::ErrorMsg {
         let types = ctx.type_registry();
         let msg = match &self.value {
+            ConversionError::MissingRequiredTrait { .. } => Cow::Borrowed("Missing required trait"),
             ConversionError::CopyCycle(_) => Cow::Borrowed("A copy cycle was found"),
             ConversionError::PathError(_) => Cow::Borrowed("Path error"),
             ConversionError::AmbiguousUse { .. } => Cow::Borrowed("Ambiguous use"),
@@ -421,6 +426,11 @@ impl BaubleError for Spanned<ConversionError> {
         let types = ctx.type_registry();
 
         let msg: Cow<'_, str> = match &self.value {
+            ConversionError::MissingRequiredTrait { tr, ty } => Cow::Owned(format!(
+                "The type `{}` doesn't implement the trait `{}`",
+                types.key_type(*ty).meta.path,
+                types.key_type(*tr).meta.path
+            )),
             ConversionError::UnresolvedType => Cow::Borrowed(
                 "This top level value needs to either have it's type denoted, or be a value that can be resolved to a specific type",
             ),
@@ -1238,7 +1248,7 @@ pub(crate) fn convert_values(
 
     let mut objects = Vec::new();
     let mut name_allocs = HashMap::new();
-    let mut add_value = |name: TypePathElem<&str>, val: Val| {
+    let mut add_value = |name: TypePathElem<&str>, val: Val, symbols: &Symbols| {
         let idx = *name_allocs
             .entry(name.to_owned())
             .and_modify(|i| *i += 1u64)
@@ -1246,9 +1256,9 @@ pub(crate) fn convert_values(
         let name = TypePathElem::new(format!("{name}@{idx}"))
             .expect("idx is just a number, and we know name is a valid path elem.");
 
-        objects.push(create_object(path, name.borrow(), val));
+        objects.push(create_object(path, name.borrow(), val, symbols)?);
 
-        Value::Ref(path.join(&name))
+        Ok(Value::Ref(path.join(&name)))
     };
 
     let mut node_removals = Vec::new();
@@ -1544,7 +1554,7 @@ fn set_attributes(
     mut val: Val,
     attributes: &Spanned<parse::Attributes>,
     symbols: &Symbols,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
     object_name: TypePathElem<&str>,
 ) -> Result<Val> {
     let types = symbols.ctx.type_registry();
@@ -1579,7 +1589,7 @@ fn set_attributes(
 fn convert_copy_value<'a>(
     value: impl Into<BorrowedObject<'a>>,
     symbols: &Symbols,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
     object_name: TypePathElem<&str>,
 ) -> Result<CopyVal> {
     let value: BorrowedObject<'a> = value.into();
@@ -1740,7 +1750,7 @@ fn convert_copy_value<'a>(
 fn convert_from_copy<'a>(
     copy_value: impl Into<BorrowCopyVal<'a>>,
     symbols: &Symbols,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
     expected_type: TypeId,
     object_name: TypePathElem<&str>,
 ) -> Result<Val> {
@@ -1757,7 +1767,7 @@ fn convert_from_copy<'a>(
 fn convert_from_copy_with_attributes<'a>(
     copy_value: impl Into<BorrowCopyVal<'a>>,
     symbols: &Symbols,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
     expected_type: TypeId,
     object_name: TypePathElem<&str>,
     extra_attributes: Option<&Spanned<parse::Attributes>>,
@@ -2139,7 +2149,7 @@ fn convert_from_copy_with_attributes<'a>(
                             object_name.borrow(),
                         )?;
 
-                        let ref_value = add_value(object_name.borrow(), val);
+                        let ref_value = add_value(object_name.borrow(), val, symbols)?;
 
                         Ok(ref_value)
                     }
@@ -2204,7 +2214,7 @@ fn convert_from_copy_with_attributes<'a>(
 fn convert_value<'a>(
     value: impl Into<BorrowedObject<'a>>,
     symbols: &Symbols,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
     expected_type: TypeId,
     object_name: TypePathElem<&str>,
 ) -> Result<Val> {
@@ -2624,7 +2634,7 @@ fn convert_value<'a>(
                     object_name.borrow(),
                 )?;
 
-                let ref_value = add_value(object_name.borrow(), val);
+                let ref_value = add_value(object_name.borrow(), val, symbols)?;
 
                 Ok(ref_value)
             }
@@ -2703,16 +2713,29 @@ fn convert_object(
     value: &ParseObject,
     symbols: &Symbols,
     expected_type: TypeId,
-    add_value: &mut impl FnMut(TypePathElem<&str>, Val) -> Value,
+    add_value: &mut impl FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
 ) -> Result<Object> {
     let value = convert_value(value, symbols, add_value, expected_type, name)?;
 
-    Ok(create_object(path, name, value))
+    create_object(path, name, value, symbols)
 }
 
-fn create_object(path: TypePath<&str>, name: TypePathElem<&str>, value: Val) -> Object {
-    Object {
-        object_path: path.join(&name),
-        value,
+fn create_object(
+    path: TypePath<&str>,
+    name: TypePathElem<&str>,
+    value: Val,
+    symbols: &Symbols,
+) -> Result<Object> {
+    if symbols.ctx.type_registry().impls_top_level_type(value.ty) {
+        Ok(Object {
+            object_path: path.join(&name),
+            value,
+        })
+    } else {
+        Err(ConversionError::MissingRequiredTrait {
+            tr: symbols.ctx.type_registry().top_level_trait(),
+            ty: value.ty,
+        }
+        .spanned(value.span()))
     }
 }

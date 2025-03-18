@@ -35,6 +35,21 @@ impl Display for VariantKind {
 /// The error that `Bauble::from_bauble` returns.
 pub struct ToRustError(Box<InnerToRustError>);
 
+impl ToRustError {
+    /// When in a `Bauble::from_bauble` function prefer using `Bauble::error`.
+    pub fn new(
+        in_type: std::any::TypeId,
+        value_span: Span,
+        kind: impl Into<ToRustErrorKind>,
+    ) -> Self {
+        Self(Box::new(InnerToRustError {
+            in_type,
+            value_span,
+            kind: kind.into(),
+        }))
+    }
+}
+
 struct InnerToRustError {
     in_type: std::any::TypeId,
     value_span: Span,
@@ -102,6 +117,12 @@ impl CustomError {
 
     pub fn with_err_label(self, s: Spanned<impl Into<Cow<'static, str>>>) -> Self {
         self.with_label(s, Level::Error)
+    }
+}
+
+impl From<CustomError> for ToRustErrorKind {
+    fn from(value: CustomError) -> Self {
+        Self::Custom(value)
     }
 }
 
@@ -280,11 +301,11 @@ pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static
     /// Construct this type from a bauble value. This function doesn't do any type checking.
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError>;
 
-    fn error(span: crate::Span, error: ToRustErrorKind) -> ToRustError {
+    fn error(span: crate::Span, error: impl Into<ToRustErrorKind>) -> ToRustError {
         ToRustError(Box::new(InnerToRustError {
             in_type: std::any::TypeId::of::<Self>(),
             value_span: span,
-            kind: error,
+            kind: error.into(),
         }))
     }
 }

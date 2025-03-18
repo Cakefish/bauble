@@ -3,7 +3,7 @@ use indexmap::IndexMap;
 use crate::{
     Bauble, BaubleAllocator, BaubleErrors,
     path::{TypePath, TypePathElem},
-    types::{TypeId, TypeRegistry},
+    types::{BaubleTrait, TypeId, TypeRegistry},
 };
 
 pub type Source = ariadne::Source<String>;
@@ -73,6 +73,7 @@ impl PathReference {
     }
 }
 
+#[derive(Clone)]
 pub struct BaubleContextBuilder {
     registry: TypeRegistry,
 }
@@ -91,7 +92,34 @@ impl BaubleContextBuilder {
     }
 
     pub fn register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> &mut Self {
-        self.registry.get_or_register_type::<T, A>();
+        self.get_or_register_type::<T, A>();
+        self
+    }
+
+    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+        self.registry.get_or_register_type::<T, A>()
+    }
+
+    pub fn add_trait_for_type<T: ?Sized + BaubleTrait>(&mut self, ty: TypeId) {
+        let tr = self.registry.get_or_register_trait::<T>();
+        self.registry.add_trait_dependency(ty, tr);
+    }
+
+    pub fn set_top_level_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) {
+        let tr = self.registry.get_or_register_trait::<T>();
+        self.registry.set_top_level_trait_dependency(tr);
+    }
+
+    /// # Panics
+    ///
+    /// Can panic if `T`'s `TypeKind` isn't a primitive.
+    pub fn set_primitive_default_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(
+        &mut self,
+    ) -> &mut Self {
+        let id = self.registry.get_or_register_type::<T, A>();
+
+        self.registry.set_primitive_default_type(id);
+
         self
     }
 
@@ -111,7 +139,7 @@ impl BaubleContextBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct CtxNode {
     reference: InnerReference,
     path: TypePath,
@@ -322,6 +350,7 @@ impl CtxNode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(usize);
 
+#[derive(Clone)]
 pub struct BaubleContext {
     registry: TypeRegistry,
     root_node: CtxNode,
