@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
 use crate::{
-    BaubleContext, BaubleError, BaubleErrors, FileId, VariantKind,
+    BaubleContext, BaubleError, BaubleErrors, CustomError, FileId, VariantKind,
     context::PathReference,
     error::Level,
     parse::{self, Object as ParseObject, Path, PathEnd, PathTreeEnd, Use, Values},
@@ -208,6 +208,13 @@ pub enum ConversionError {
         copy: Spanned<TypePathElem>,
         error: Box<Spanned<ConversionError>>,
     },
+    Custom(CustomError),
+}
+
+impl From<CustomError> for ConversionError {
+    fn from(value: CustomError) -> Self {
+        Self::Custom(value)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -308,6 +315,7 @@ impl BaubleError for Spanned<ConversionError> {
             )),
             ConversionError::ErrorInCopy { error, .. } => return error.msg_general(ctx),
             ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
+            ConversionError::Custom(custom) => custom.message.clone(),
         };
 
         msg.spanned(self.span)
@@ -762,6 +770,7 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::UnregisteredAsset => Cow::Borrowed(
                 "This asset hasn't been registered with `BaubleContext::register_asset`",
             ),
+            ConversionError::Custom(custom) => return custom.labels.clone(),
         };
 
         vec![(msg.spanned(self.span), Level::Error)]
@@ -2699,11 +2708,17 @@ fn convert_value<'a>(
         .spanned(value.attributes.span));
     }
 
-    Ok(Val {
+    let val = Val {
         value: val.spanned(value.value.span),
         attributes: attributes.spanned(value.attributes.span),
         ty: *ty_id,
-    })
+    };
+
+    if let Some(validation) = types.key_type(*ty_id).meta.extra_validation {
+        validation(&val, types).map_err(|err| err.spanned(value.value.span))?;
+    }
+
+    Ok(val)
 }
 
 /// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.

@@ -3,8 +3,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use syn::{
     AttrStyle, Data, DeriveInput, Error, Expr, Fields, Index, Token, Type, WhereClause,
-    WherePredicate, parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned,
-    token::PathSep,
+    WherePredicate, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
 };
 
 #[derive(Default, Clone)]
@@ -29,7 +28,7 @@ impl Extra {
         })?;
 
         if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-            Err(meta.error("unexpected token after extra value"))?
+            Err(meta.error("Unexpected token after `extra` attribute"))?
         }
 
         Ok(())
@@ -99,8 +98,10 @@ enum FieldsKind {
 #[derive(Default)]
 struct ContainerAttrs {
     extra: Extra,
+    traits: Vec<TokenStream>,
     path: Option<String>,
     rename: Option<Ident>,
+    validate: Option<Expr>,
     allocator: Option<TokenStream>,
     bounds: Option<Punctuated<WherePredicate, syn::token::Comma>>,
     flatten: bool,
@@ -166,13 +167,7 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `rename` attribute"))?
                         }
 
-                        meta.input.parse::<Token![=]>()?;
-
-                        this.rename = Some(meta.input.parse()?);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after rename attribute"))?
-                        }
+                        this.rename = Some(meta.value()?.parse()?);
                     }
                     "flatten" => {
                         if this.flatten {
@@ -180,12 +175,24 @@ impl ContainerAttrs {
                         }
 
                         this.flatten = true;
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("unexpected token after flatten attribute"))?
-                        }
                     }
+                    "validate" => {
+                        if this.validate.is_some() {
+                            Err(meta.error("Duplicate `validate` attribute"))?
+                        }
 
+                        this.validate = Some(meta.value()?.parse()?);
+                    }
+                    "traits" => {
+                        if !kind.is_type() {
+                            Err(meta.error("The `traits` attribute can only be used on types"))?
+                        }
+                        meta.parse_nested_meta(|meta| {
+                            this.traits.push(meta.path.to_token_stream());
+
+                            Ok(())
+                        })?;
+                    }
                     "path" => {
                         if !kind.is_type() {
                             Err(meta.error("The `path` attribute can only be used on types"))?
@@ -195,10 +202,8 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `path` attribute"))?
                         }
 
-                        meta.input.parse::<Token![=]>()?;
-
                         let path =
-                            Punctuated::<Ident, PathSep>::parse_separated_nonempty(meta.input)?;
+                            Punctuated::<Ident, PathSep>::parse_separated_nonempty(meta.value()?)?;
 
                         if path.is_empty() {
                             Err(meta.error("`path` attribute can't be empty"))?
@@ -215,10 +220,6 @@ impl ContainerAttrs {
                             .join("::");
 
                         this.path = Some(path);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after path attribute"))?
-                        }
                     }
 
                     "allocator" => {
@@ -230,13 +231,7 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `allocator` attribute"))?
                         }
 
-                        meta.input.parse::<Token![=]>()?;
-
-                        this.allocator = Some(meta.input.parse()?);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after allocator attribute"))?
-                        }
+                        this.allocator = Some(meta.value()?.parse()?);
                     }
 
                     "bounds" => {
@@ -244,19 +239,12 @@ impl ContainerAttrs {
                             Err(meta.error("The `bounds` attribute can only be used on types"))?
                         }
 
-                        if this.bounds.is_some() {
-                            Err(meta.error("Duplicate `bounds` attribute"))?
-                        }
+                        let bounds = this.bounds.get_or_insert_default();
 
-                        meta.input.parse::<Token![=]>()?;
-                        let bounds_parse;
-                        parenthesized!(bounds_parse in meta.input);
-                        this.bounds =
-                            Some(bounds_parse.parse_terminated(WherePredicate::parse, Token![,])?);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after bounds attribute"))?
-                        }
+                        meta.parse_nested_meta(|meta| {
+                            bounds.push(meta.input.parse()?);
+                            Ok(())
+                        })?;
                     }
 
                     "tuple" => {
@@ -269,10 +257,6 @@ impl ContainerAttrs {
                         }
 
                         this.tuple = true;
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after bounds attribute"))?
-                        }
                     }
 
                     attr => {
@@ -360,10 +344,6 @@ fn parse_fields(
                                     default = Some(quote! { ::std::default::Default::default() });
                                 }
 
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("unexpected token after default value"))?
-                                }
-
                                 Ok(())
                             }
                             "as_default" => {
@@ -379,10 +359,6 @@ fn parse_fields(
                                         Some(quote! { ::std::default::Default::default() });
                                 }
 
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("unexpected token after default value"))?
-                                }
-
                                 Ok(())
                             }
                             "attribute" => {
@@ -395,10 +371,6 @@ fn parse_fields(
                                     attribute = Some(ident);
                                 } else {
                                     attribute = Some(field.ident.clone().ok_or(meta.error("For unnamed fields the attribute specifier needs to be annotated with `attribute = ident`"))?);
-                                }
-
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("unexpected token after attribute specifier"))?
                                 }
 
                                 Ok(())
@@ -884,10 +856,12 @@ fn derive_variants<'a>(
         );
 
         let extra = variant_attrs.extra.convert();
+        let validate = variant_attrs.validate.into_iter();
         type_variants.push(quote! {
             ::bauble::types::Variant::flattened(::bauble::path::TypePathElem::new(#name).unwrap(), #type_kind)
                 .with_attributes(#type_attrs)
                 .with_extra(#extra)
+                #(.with_validation(#validate))*
         });
 
         match_construct.push(quote! {
@@ -939,6 +913,7 @@ fn derive_variants<'a>(
 pub fn derive_bauble_derive_input(
     ast: &DeriveInput,
     allocator: Option<TokenStream>,
+    mut traits: Vec<TokenStream>,
 ) -> TokenStream {
     let ty_attrs = match ContainerAttrs::parse(
         &ast.attrs,
@@ -952,6 +927,8 @@ pub fn derive_bauble_derive_input(
         Ok(a) => a,
         Err(e) => return e.into_compile_error(),
     };
+
+    traits.extend(ty_attrs.traits);
 
     let allocator = ty_attrs
         .allocator
@@ -1073,6 +1050,11 @@ pub fn derive_bauble_derive_input(
 
     let extra = ty_attrs.extra.convert();
 
+    let extra_validation = ty_attrs
+        .validate
+        .map(|v| quote!(::core::option::Option::Some(#v)))
+        .unwrap_or(quote!(::core::option::Option::None));
+
     // Assemble the implementation
     quote! {
         #[automatically_derived]
@@ -1090,7 +1072,8 @@ pub fn derive_bauble_derive_input(
                         generic_base_type: #generic_type,
                         extra: #extra,
                         attributes: #type_attributes,
-                        ..::bauble::types::TypeMeta::default()
+                        traits: ::std::vec![#(registry.get_or_register_trait::<dyn #traits>()),*],
+                        extra_validation: #extra_validation,
                     },
                     kind: #construct_type,
                 }
@@ -1127,5 +1110,5 @@ pub fn derive_bauble(input: TokenStream) -> TokenStream {
         }
     };
 
-    derive_bauble_derive_input(&ast, None)
+    derive_bauble_derive_input(&ast, None, Vec::new())
 }

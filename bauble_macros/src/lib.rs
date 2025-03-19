@@ -17,6 +17,10 @@ use proc_macro::TokenStream;
 ///   be deserialized from that type. If this is on a tuple struct with more than
 ///   one field, it will be deserialized from a tuple. If this is on an enum, it's
 ///   the same as if all the variants had the `flatten` attribute.
+/// - `traits`: Adds traits which this type implements to the bauble trait.
+/// - `validate`: Adds extra validation to this type. Expects a function like
+///   `fn(&Val, &TypeRegistry) -> Result<(), ConversionError>`. Can either
+///   be a defined function, or a closure.
 /// - `allocator`: Changes what allocator that is used, by default this is
 ///   `DefaultAllocator`.
 /// - `bounds`: Adds extra bounds to the `Bauble` implementation.
@@ -33,6 +37,9 @@ use proc_macro::TokenStream;
 ///   one field, it will be deserialized from a tuple.
 /// - `tuple`: Converts a struct with named fields to be parsed as a struct with
 ///   unnamed fields.
+/// - `validate`: Adds extra validation to this type. Expects a function like
+///   `fn(&Val, &TypeRegistry) -> Result<(), ConversionError>`. Can either
+///   be a defined function, or a closure.
 ///
 /// # Field attributes:
 ///

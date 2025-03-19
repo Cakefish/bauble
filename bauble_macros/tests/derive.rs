@@ -108,7 +108,7 @@ fn test_flattened() {
 fn test_std_types() {
     #[derive(Bauble, PartialEq, Debug)]
     struct Test {
-        a: Vec<(u32, i32)>,
+        a: Vec<(u8, i32)>,
         b: HashMap<String, Vec<bool>>,
         c: HashMap<[u32; 3], [Option<String>; 3]>,
     }

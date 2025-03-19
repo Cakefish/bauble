@@ -48,7 +48,6 @@ pub struct TraitId(TypeId);
 
 #[derive(Clone, Debug)]
 enum SealedTypeSet {
-    #[expect(dead_code)]
     All,
     Certain(HashSet<TypeId>),
 }
@@ -103,6 +102,7 @@ pub struct Variant {
     pub ident: TypePathElem,
     pub kind: VariantKind,
     pub attributes: NamedFields,
+    pub extra_validation: Option<ValidationFunction>,
     pub extra: IndexMap<String, String>,
 }
 
@@ -112,6 +112,7 @@ impl Variant {
             ident: ident.to_owned(),
             kind: VariantKind::Explicit(fields),
             attributes: Default::default(),
+            extra_validation: None,
             extra: Default::default(),
         }
     }
@@ -121,6 +122,7 @@ impl Variant {
             ident: ident.to_owned(),
             kind: VariantKind::Flattened(ty),
             attributes: Default::default(),
+            extra_validation: None,
             extra: Default::default(),
         }
     }
@@ -132,6 +134,11 @@ impl Variant {
 
     pub fn with_extra(mut self, extra: IndexMap<String, String>) -> Self {
         self.extra = extra;
+        self
+    }
+
+    pub fn with_validation(mut self, validation: ValidationFunction) -> Self {
+        self.extra_validation = Some(validation);
         self
     }
 }
@@ -153,7 +160,8 @@ impl TypeRegistry {
         };
 
         // The element at index 0 is always any trait
-        this.get_or_register_trait::<dyn std::any::Any>();
+        let any_trait = this.get_or_register_trait::<dyn std::any::Any>();
+        this.types[any_trait.0.0].kind = TypeKind::Trait(TypeSet(SealedTypeSet::All));
 
         // The element at index 1 is any trait.
         let any_id = this.get_or_register_type::<crate::Val, crate::DefaultAllocator>();
@@ -256,6 +264,7 @@ impl TypeRegistry {
                                     path: TypePath::empty(),
                                     attributes: variant.attributes,
                                     extra: variant.extra,
+                                    extra_validation: variant.extra_validation,
                                     ..Default::default()
                                 },
                                 kind: match variant.kind {
@@ -544,6 +553,9 @@ impl TypeRegistry {
     }
 }
 
+pub type ValidationFunction =
+    fn(val: &crate::Val, registry: &TypeRegistry) -> Result<(), crate::ConversionError>;
+
 #[derive(Default, Clone)]
 pub struct TypeMeta {
     pub path: TypePath,
@@ -552,6 +564,8 @@ pub struct TypeMeta {
     pub traits: Vec<TraitId>,
     /// What attributes the type expects.
     pub attributes: NamedFields,
+    /// If this type has any extra invariants that need to be checked.
+    pub extra_validation: Option<ValidationFunction>,
     pub extra: IndexMap<String, String>,
 }
 

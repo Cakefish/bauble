@@ -7,6 +7,37 @@ use crate::{
     context::{BaubleContext, BaubleContextCache},
 };
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CustomError {
+    pub message: Cow<'static, str>,
+    pub level: Level,
+    pub labels: Vec<(Spanned<Cow<'static, str>>, Level)>,
+}
+
+impl CustomError {
+    pub fn new(s: impl Into<Cow<'static, str>>) -> Self {
+        Self {
+            message: s.into(),
+            level: Level::Error,
+            labels: Vec::new(),
+        }
+    }
+
+    pub fn with_level(mut self, level: Level) -> Self {
+        self.level = level;
+        self
+    }
+
+    pub fn with_label(mut self, s: Spanned<impl Into<Cow<'static, str>>>, level: Level) -> Self {
+        self.labels.push((s.map(|s| s.into()), level));
+        self
+    }
+
+    pub fn with_err_label(self, s: Spanned<impl Into<Cow<'static, str>>>) -> Self {
+        self.with_label(s, Level::Error)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Level {
     Info,

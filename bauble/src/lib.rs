@@ -11,11 +11,10 @@ pub mod value;
 pub use bauble_macros::Bauble;
 
 pub use bauble_trait::{
-    Bauble, BaubleAllocator, CustomError, DefaultAllocator, ToRustError, ToRustErrorKind,
-    VariantKind,
+    Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
 };
 pub use context::{BaubleContext, FileId, Source};
-pub use error::{BaubleError, BaubleErrors, print_errors};
+pub use error::{BaubleError, BaubleErrors, CustomError, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use types::path;
 pub use value::{Attributes, ConversionError, FieldsKind, Object, Val, Value};
