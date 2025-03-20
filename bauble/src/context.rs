@@ -660,11 +660,11 @@ impl ariadne::Cache<FileId> for BaubleContextCache<'_> {
     fn fetch(
         &mut self,
         id: &FileId,
-    ) -> Result<&ariadne::Source<Self::Storage>, Box<dyn std::fmt::Debug + '_>> {
-        Ok(self.0.get_source(*id))
+    ) -> Result<&ariadne::Source<Self::Storage>, impl std::fmt::Debug> {
+        Ok::<_, ()>(self.0.get_source(*id))
     }
 
-    fn display<'b>(&self, id: &'b FileId) -> Option<Box<dyn std::fmt::Display + 'b>> {
+    fn display<'b>(&self, id: &'b FileId) -> Option<impl std::fmt::Display + 'b> {
         Some(Box::new(self.0.get_file_path(*id).to_string()))
     }
 }
