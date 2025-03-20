@@ -310,9 +310,8 @@ macro_rules! impl_ints {
                                     if !num.is_integer() {
                                         Err(
                                             crate::CustomError::new(format!("`{}` should be an integer", stringify!($ty)))
-                                                .with_label(
+                                                .with_err_label(
                                                     Spanned::new(val.value.span, "This is a decimal number"),
-                                                    Level::Error,
                                                 ),
                                         )?
                                     }
@@ -320,12 +319,11 @@ macro_rules! impl_ints {
                                     if !(rust_decimal::Decimal::from(<$ty>::MIN)..=rust_decimal::Decimal::from(<$ty>::MAX)).contains(&num) {
                                         Err(
                                             crate::CustomError::new(format!("Out of range for integer `{}`", stringify!($ty)))
-                                                .with_label(
+                                                .with_err_label(
                                                     Spanned::new(
                                                         val.value.span,
                                                         format!("Expected this to be in the range {}..={}", <$ty>::MIN, <$ty>::MAX),
                                                     ),
-                                                    Level::Error,
                                                 ),
                                         )?
                                     }

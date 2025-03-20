@@ -18,6 +18,10 @@ impl BaubleTrait for dyn std::any::Any {
     const BAUBLE_PATH: &'static str = "std::Any";
 }
 
+impl BaubleTrait for dyn std::fmt::Debug {
+    const BAUBLE_PATH: &'static str = "std::Debug";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(usize);
 
@@ -231,6 +235,11 @@ impl TypeRegistry {
         self.type_id_of_std_id(std::any::TypeId::of::<T>())
     }
 
+    pub fn trait_id<T: ?Sized + BaubleTrait>(&self) -> Option<TraitId> {
+        self.type_id_of_std_id(std::any::TypeId::of::<T>())
+            .map(TraitId)
+    }
+
     pub fn type_ids(&self) -> impl Iterator<Item = TypeId> {
         (0..self.types.len()).map(TypeId)
     }
@@ -306,29 +315,25 @@ impl TypeRegistry {
         }
     }
 
-    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
-        self.type_id::<T, A>().unwrap_or_else(|| {
-            self.register_type(|this, id| {
-                this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
-                let ty = T::construct_type(this);
-                for tr in ty.meta.traits.iter() {
-                    let TypeKind::Trait(types) = &mut this.types[tr.0.0].kind else {
-                        panic!("Invariant")
-                    };
+    fn on_register_type(&mut self, id: TypeId, ty: &Type) {
+        for tr in ty.meta.traits.iter() {
+            let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
+                panic!("Invariant")
+            };
 
-                    types.insert(id);
-                }
+            types.insert(id);
+        }
 
-                match &ty.kind {
-                    TypeKind::Enum { variants } => {
-                        for (variant, variant_ty) in &variants.0 {
-                            this.types[variant_ty.0].meta = TypeMeta {
+        match &ty.kind {
+            TypeKind::Enum { variants } => {
+                for (variant, variant_ty) in &variants.0 {
+                    self.types[variant_ty.0].meta = TypeMeta {
                                 path: ty.meta.path.join(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                    let generic_id = this.get_or_register_generic_type(
-                                        this.key_type(generic).meta.path.join(variant),
+                                    let generic_id = self.get_or_register_generic_type(
+                                        self.key_type(generic).meta.path.combine(variant),
                                     );
-                                    let TypeKind::Generic(types) = &mut this.types[generic_id.0.0].kind else {
+                                    let TypeKind::Generic(types) = &mut self.types[generic_id.0.0].kind else {
                                         panic!(
                                             "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
                                         )
@@ -340,17 +345,20 @@ impl TypeRegistry {
                                 }),
                                 ..ty.meta.clone()
                             };
-                            if let TypeKind::EnumVariant { enum_type, variant: v, .. } =
-                                &mut this.types[variant_ty.0].kind
-                            {
-                                *enum_type = id;
-                                *v = variant.clone();
-                            }
-                        }
+                    if let TypeKind::EnumVariant {
+                        enum_type,
+                        variant: v,
+                        ..
+                    } = &mut self.types[variant_ty.0].kind
+                    {
+                        *enum_type = id;
+                        *v = variant.clone();
                     }
-                    TypeKind::BitFlags(bitflag) => {
-                        for variant in &bitflag.variants {
-                            this.register_type(|this, variant_id| Type {
+                }
+            }
+            TypeKind::BitFlags(bitflag) => {
+                for variant in &bitflag.variants {
+                    self.register_type(|this, variant_id| Type {
                                 meta: TypeMeta {
                                     path: ty.meta.path.join(variant),
                                     generic_base_type: ty.meta.generic_base_type.map(|generic| {
@@ -376,20 +384,35 @@ impl TypeRegistry {
                                     variant: variant.clone(),
                                 },
                             });
-                        }
-                    }
-                    _ => {}
                 }
+            }
+            _ => {}
+        }
 
-                if let Some(ty) = ty.meta.generic_base_type {
-                    let TypeKind::Generic(types) = &mut this.types[ty.0.0].kind else {
-                        panic!(
-                            "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
-                        )
-                    };
+        if let Some(ty) = ty.meta.generic_base_type {
+            let TypeKind::Generic(types) = &mut self.types[ty.0.0].kind else {
+                panic!("`generic_base_type` pointing to a type that isn't `TypeKind::Generic`")
+            };
 
-                    types.insert(id);
-                }
+            types.insert(id);
+        }
+    }
+
+    #[must_use]
+    pub fn register_dummy_type(&mut self, ty: Type) -> TypeId {
+        self.register_type(|this, id| {
+            this.on_register_type(id, &ty);
+
+            ty
+        })
+    }
+
+    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+        self.type_id::<T, A>().unwrap_or_else(|| {
+            self.register_type(|this, id| {
+                this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
+                let ty = T::construct_type(this);
+                this.on_register_type(id, &ty);
 
                 ty
             })
@@ -499,6 +522,10 @@ impl TypeRegistry {
         self.type_id::<T, A>().map(|id| self.key_type(id))
     }
 
+    pub fn get_trait<T: ?Sized + BaubleTrait>(&self) -> Option<&Type> {
+        self.trait_id::<T>().map(|id| self.key_type(id))
+    }
+
     pub fn iter_type_set<'a>(&self, type_set: &'a TypeSet) -> impl Iterator<Item = TypeId> + 'a {
         match &type_set.0 {
             SealedTypeSet::All => Some((0..self.types.len()).map(TypeId))
@@ -573,6 +600,15 @@ pub struct TypeMeta {
 pub struct FieldType {
     pub id: TypeId,
     pub extra: IndexMap<String, String>,
+}
+
+impl From<TypeId> for FieldType {
+    fn from(value: TypeId) -> Self {
+        Self {
+            id: value,
+            extra: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -658,6 +694,12 @@ impl NamedFields {
             .into_iter()
             .map(|(key, val)| (key.into(), val.into()))
             .collect();
+        self
+    }
+
+    pub fn with_additional<F: Into<FieldType>>(mut self, f: F) -> Self {
+        self.allow_additional = Some(f.into());
+
         self
     }
 

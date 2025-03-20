@@ -2195,11 +2195,17 @@ fn convert_from_copy_with_attributes<'a>(
                 .spanned(attribute_span));
             }
 
-            Ok(Val {
+            let val = Val {
                 ty: expected_type,
                 value: value.spanned(span),
                 attributes: attributes.spanned(attribute_span),
-            })
+            };
+
+            if let Some(validation) = types.key_type(expected_type).meta.extra_validation {
+                validation(&val, types).map_err(|err| err.spanned(val.value.span))?;
+            }
+
+            Ok(val)
         }
         BorrowCopyVal::Resolved(val) => {
             if types.can_infer_from(expected_type, val.ty) {
