@@ -8,10 +8,14 @@ use crate::{
 
 pub type Source = ariadne::Source<String>;
 
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Clone, Default)]
+struct DefaultUses(IndexMap<TypePathElem, TypePath>);
+
+#[derive(Default, Clone, Debug)]
 struct InnerReference {
     ty: Option<TypeId>,
     asset: Option<TypeId>,
+    redirect: Option<TypePath>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -76,6 +80,7 @@ impl PathReference {
 #[derive(Clone)]
 pub struct BaubleContextBuilder {
     registry: TypeRegistry,
+    default_uses: DefaultUses,
 }
 
 impl Default for BaubleContextBuilder {
@@ -86,9 +91,20 @@ impl Default for BaubleContextBuilder {
 
 impl BaubleContextBuilder {
     pub fn new() -> Self {
-        Self {
+        let mut this = Self {
             registry: TypeRegistry::new(),
-        }
+            default_uses: DefaultUses::default(),
+        };
+
+        this.with_default_use(
+            TypePathElem::new("Some").unwrap().to_owned(),
+            TypePath::new("std::Option::Some").unwrap().to_owned(),
+        )
+        .with_default_use(
+            TypePathElem::new("None").unwrap().to_owned(),
+            TypePath::new("std::Option::None").unwrap().to_owned(),
+        );
+        this
     }
 
     pub fn register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> &mut Self {
@@ -100,14 +116,23 @@ impl BaubleContextBuilder {
         self.registry.get_or_register_type::<T, A>()
     }
 
-    pub fn add_trait_for_type<T: ?Sized + BaubleTrait>(&mut self, ty: TypeId) {
+    pub fn add_trait_for_type<T: ?Sized + BaubleTrait>(&mut self, ty: TypeId) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
         self.registry.add_trait_dependency(ty, tr);
+
+        self
     }
 
-    pub fn set_top_level_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) {
+    pub fn set_top_level_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
         self.registry.set_top_level_trait_dependency(tr);
+
+        self
+    }
+
+    pub fn with_default_use(&mut self, ident: TypePathElem, path: TypePath) -> &mut Self {
+        self.default_uses.0.insert(ident, path);
+        self
     }
 
     /// # Panics
@@ -125,6 +150,9 @@ impl BaubleContextBuilder {
 
     pub fn build(self) -> BaubleContext {
         let mut root_node = CtxNode::new(TypePath::empty());
+        for (id, path) in self.default_uses.0 {
+            root_node.add_node(id.borrow()).reference.redirect = Some(path);
+        }
         for id in self.registry.type_ids() {
             if self.registry.key_type(id).meta.path.is_writable() {
                 root_node.build_type(id, &self.registry);
@@ -156,12 +184,22 @@ impl CtxNode {
             children: Default::default(),
         }
     }
-    fn reference(&self) -> PathReference {
-        PathReference {
+
+    fn reference(&self, root: &Self) -> PathReference {
+        let mut this = PathReference {
             ty: self.reference.ty,
             asset: self.reference.asset.map(|ty| (ty, self.path.clone())),
             module: (!self.children.is_empty()).then(|| self.path.clone()),
+        };
+
+        if let Some(redirect) = self.reference.redirect.as_ref()
+            && let Some(mut reference) = root.walk(redirect.borrow(), |node| node.reference(root))
+        {
+            reference.combine_override(this);
+            this = reference;
         }
+
+        this
     }
 
     fn filter<'a>(
@@ -499,14 +537,15 @@ impl BaubleContext {
     }
 
     pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
-        self.root_node.walk(path, |node| node.reference())
+        self.root_node
+            .walk(path, |node| node.reference(&self.root_node))
     }
 
     pub fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
         self.root_node.walk(path, |node| {
             node.children
                 .iter()
-                .map(|(key, child_node)| (key.to_owned(), child_node.reference()))
+                .map(|(key, child_node)| (key.to_owned(), child_node.reference(&self.root_node)))
                 .collect()
         })
     }
@@ -517,7 +556,9 @@ impl BaubleContext {
         ident: TypePathElem<&str>,
     ) -> Option<PathReference> {
         self.root_node
-            .walk(path, |node| node.find(ident, |node| node.reference()))
+            .walk(path, |node| {
+                node.find(ident, |node| node.reference(&self.root_node))
+            })
             .flatten()
     }
 
@@ -544,7 +585,10 @@ impl BaubleContext {
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
             .walk(path, |node| {
-                node.filter(|node| node.reference.asset.is_some(), max_depth)
+                node.filter(
+                    |node| node.reference(&self.root_node).asset.is_some(),
+                    max_depth,
+                )
             })
             .into_iter()
             .flatten()
@@ -557,7 +601,10 @@ impl BaubleContext {
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
             .walk(path, |node| {
-                node.filter(|node| node.reference.ty.is_some(), max_depth)
+                node.filter(
+                    |node| node.reference(&self.root_node).ty.is_some(),
+                    max_depth,
+                )
             })
             .into_iter()
             .flatten()
@@ -570,7 +617,10 @@ impl BaubleContext {
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
             .walk(path, |node| {
-                node.filter(|node| !node.children.is_empty(), max_depth)
+                node.filter(
+                    |node| node.reference(&self.root_node).module.is_some(),
+                    max_depth,
+                )
             })
             .into_iter()
             .flatten()
@@ -585,11 +635,14 @@ impl BaubleContext {
         self.root_node
             .walk(path, move |node| {
                 node.filter(
-                    move |node| match kind {
-                        crate::value::RefKind::Module => !node.children.is_empty(),
-                        crate::value::RefKind::Asset => node.reference.asset.is_some(),
-                        crate::value::RefKind::Type => node.reference.ty.is_some(),
-                        crate::value::RefKind::Any => true,
+                    move |node| {
+                        let r = node.reference(&self.root_node);
+                        match kind {
+                            crate::value::RefKind::Module => r.module.is_some(),
+                            crate::value::RefKind::Asset => r.asset.is_some(),
+                            crate::value::RefKind::Type => r.ty.is_some(),
+                            crate::value::RefKind::Any => true,
+                        }
                     },
                     max_depth,
                 )

@@ -14,7 +14,7 @@ fn test_struct() {
     bauble_test!(
         [Test]
         r#"
-        test = derive::Test { x: -5, y: 5, z: std::Option::Some(true) }
+        test = derive::Test { x: -5, y: 5, z: Some(true) }
         "#
         [Test {
             x: -5,
@@ -116,8 +116,6 @@ fn test_std_types() {
     bauble_test!(
         [Test]
         r#"
-        use std::Option::*;
-
         copy key = "🔑"
         copy value = Some("💖")
 
