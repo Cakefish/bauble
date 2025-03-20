@@ -91,6 +91,7 @@ pub struct TypeRegistry {
 
     generic: HashMap<TypePath, TypeId>,
     type_from_rust: HashMap<std::any::TypeId, TypeId>,
+    to_be_assigned: HashSet<TypeId>,
 
     top_level_trait_dependency: TraitId,
 
@@ -156,6 +157,8 @@ impl TypeRegistry {
 
             // NOTE: We always
             top_level_trait_dependency: Self::any_trait(),
+
+            to_be_assigned: Default::default(),
 
             generic: Default::default(),
             type_from_rust: Default::default(),
@@ -266,7 +269,9 @@ impl TypeRegistry {
                 variants
                     .into_iter()
                     .map(|variant| {
-                        let ty = self.register_type(|_this, _id| {
+                        let ty = self.register_type(|this, id| {
+                            this.to_be_assigned.insert(id);
+
                             Type {
                                 meta: TypeMeta {
                                     // We assign this later.
@@ -327,6 +332,7 @@ impl TypeRegistry {
         match &ty.kind {
             TypeKind::Enum { variants } => {
                 for (variant, variant_ty) in &variants.0 {
+                    self.to_be_assigned.remove(variant_ty);
                     self.types[variant_ty.0].meta = TypeMeta {
                                 path: ty.meta.path.join(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
@@ -407,16 +413,47 @@ impl TypeRegistry {
         })
     }
 
-    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+    /// Is this type system valid?
+    ///
+    /// Currently this checks:
+    /// - Are there any unassigned registered types?
+    pub fn validate(&self) -> bool {
+        self.to_be_assigned.is_empty()
+    }
+
+    pub fn reserve_type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
         self.type_id::<T, A>().unwrap_or_else(|| {
             self.register_type(|this, id| {
+                this.to_be_assigned.insert(id);
+                this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
+                Type {
+                    meta: TypeMeta::default(),
+                    kind: TypeKind::Primitive(Primitive::Any),
+                }
+            })
+        })
+    }
+
+    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+        let id = self.type_id::<T, A>();
+
+        match id {
+            Some(id) if self.to_be_assigned.remove(&id) => {
+                let ty = T::construct_type(self);
+                self.on_register_type(id, &ty);
+                self.types[id.0] = ty;
+
+                id
+            }
+            Some(id) => id,
+            None => self.register_type(|this, id| {
                 this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
                 let ty = T::construct_type(this);
                 this.on_register_type(id, &ty);
 
                 ty
-            })
-        })
+            }),
+        }
     }
 
     /// Generics types are used so that users of bauble can use the path.
@@ -553,8 +590,8 @@ impl TypeRegistry {
         match (&target.kind, &input.kind) {
             (TypeKind::Primitive(Primitive::Any), _) => true,
             (TypeKind::Transparent(id), _) => self.can_infer_from(*id, input_id),
-            (TypeKind::Enum { variants }, TypeKind::EnumVariant { enum_type, .. }) => {
-                *enum_type == output_id && variants.0.values().any(|id| *id == input_id)
+            (_, TypeKind::EnumVariant { enum_type, .. }) => {
+                self.can_infer_from(output_id, *enum_type)
             }
             (TypeKind::Enum { variants }, _) => {
                 // Direct references to flattened types are allowed.
@@ -567,10 +604,6 @@ impl TypeRegistry {
             (TypeKind::Trait(types), _) => types.contains(input_id),
             (TypeKind::Ref(a), TypeKind::Ref(b)) => self.can_infer_from(*a, *b),
             (TypeKind::Ref(t), _) => self.can_infer_from(*t, input_id),
-
-            (TypeKind::BitFlags { .. }, TypeKind::EnumVariant { enum_type, .. }) => {
-                *enum_type == output_id
-            }
 
             (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
 

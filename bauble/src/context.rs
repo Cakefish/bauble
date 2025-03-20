@@ -116,6 +116,10 @@ impl BaubleContextBuilder {
         self.registry.get_or_register_type::<T, A>()
     }
 
+    pub fn type_registry(&mut self) -> &mut TypeRegistry {
+        &mut self.registry
+    }
+
     pub fn add_trait_for_type<T: ?Sized + BaubleTrait>(&mut self, ty: TypeId) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
         self.registry.add_trait_dependency(ty, tr);
@@ -148,7 +152,11 @@ impl BaubleContextBuilder {
         self
     }
 
+    /// # Panics
+    ///
+    /// Panics if `TypeRegistry::validate` is false.
     pub fn build(self) -> BaubleContext {
+        assert!(self.registry.validate(), "The type system should be valid");
         let mut root_node = CtxNode::new(TypePath::empty());
         for (id, path) in self.default_uses.0 {
             root_node.add_node(id.borrow()).reference.redirect = Some(path);
