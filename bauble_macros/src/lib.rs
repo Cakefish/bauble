@@ -6,40 +6,39 @@ use proc_macro::TokenStream;
 /// This type will also need to be registered on the bauble context with
 /// `BaubleContextBuilder::register_type` to be able to parse this type in bauble.
 ///
-/// # Type attributes
+/// # Only type attributes
 ///
-/// Attributes that can be added to the type, i.e above `enum` or `struct`.
+/// Attributes that can be added to the type, i.e above enum or struct.
 ///
-/// - `extra`: Adds extra key, string data to the bauble type.
 /// - `path`: Changes the module for this in the bauble type system.
-/// - `rename`: Renames this type in the bauble type system.
-/// - `flatten`: If there is only one field in the container this container will
-///   be deserialized from that type. If this is on a tuple struct with more than
-///   one field, it will be deserialized from a tuple. If this is on an enum, it's
-///   the same as if all the variants had the `flatten` attribute.
 /// - `traits`: Adds traits which this type implements to the bauble trait.
-/// - `validate`: Adds extra validation to this type. Expects a function like
-///   `fn(&Val, &TypeRegistry) -> Result<(), ConversionError>`. Can either
-///   be a defined function, or a closure.
 /// - `allocator`: Changes what allocator that is used, by default this is
 ///   `DefaultAllocator`.
 /// - `bounds`: Adds extra bounds to the `Bauble` implementation.
+/// - `from`: Parse this type as if it was flattening to the specified type.
+///   Specified like `from = T` and this type has to implement `From<T>`.
 ///
-/// # Container attributes
+/// # Container or type attributes
 ///
-/// Attributes that can be added to the container, i.e above `struct` or enum
+/// Attributes that can be added to a type or enum variant.
+///
+/// - `extra`: Adds extra key, string data to the bauble type.
+/// - `rename`: Renames the identifier used in the bauble type system.
+/// - `flatten`: If there is only one field in the container this container will
+///   be deserialized from that type. If this is on a tuple struct or variant with
+///   more than one field, it will be deserialized from a tuple. If this is on an
+///   enum, it's the same as if all the variants had the `flatten` attribute.
+/// - `validate`: Adds extra validation to this type or variant. Expects a function
+///   like `fn(&Val, &TypeRegistry) -> Result<(), ConversionError>`. Can either
+///   be a defined function, or a closure.
+///
+/// # Only container attributes
+///
+/// Attributes that can be added to the container, i.e above struct or enum
 /// variants.
 ///
-/// - `extra`: Adds extra key, string data to the container bauble type.
-/// - `rename`: Renames this container in the bauble type system.
-/// - `flatten`: If there is only one field in the container this container will
-///   be deserialized from that type. If this is on a tuple struct with more than
-///   one field, it will be deserialized from a tuple.
-/// - `tuple`: Converts a struct with named fields to be parsed as a struct with
-///   unnamed fields.
-/// - `validate`: Adds extra validation to this type. Expects a function like
-///   `fn(&Val, &TypeRegistry) -> Result<(), ConversionError>`. Can either
-///   be a defined function, or a closure.
+/// - `tuple`: Converts a struct or variant with named fields to be parsed as a
+///   struct or variant with unnamed fields.
 ///
 /// # Field attributes:
 ///

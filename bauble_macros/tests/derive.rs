@@ -175,7 +175,48 @@ fn test_complex_flatten() {
         "#
         [
             Transparent(Inner(3, 0, 2), 1),
-            Transparent(Inner(1, 2, 3), 4)
+            Transparent(Inner(1, 2, 3), 4),
         ]
+    );
+}
+
+#[test]
+fn test_from() {
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(from = u32)]
+    struct NumberRepr(String);
+
+    impl From<u32> for NumberRepr {
+        fn from(value: u32) -> Self {
+            Self(value.to_string())
+        }
+    }
+
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(from = u32)]
+    enum TestEnum {
+        A(u32),
+        B(u32),
+    }
+
+    impl From<u32> for TestEnum {
+        fn from(value: u32) -> Self {
+            if value < 1000 {
+                Self::A(value)
+            } else {
+                Self::B(value - 1000)
+            }
+        }
+    }
+
+    bauble_test!(
+        [NumberRepr, TestEnum]
+        r#"
+        a: derive::NumberRepr = 1553  
+
+        b: derive::TestEnum = 555
+        c: derive::TestEnum = 1333
+        "#
+        [NumberRepr("1553".to_string()), TestEnum::A(555), TestEnum::B(333)]
     );
 }

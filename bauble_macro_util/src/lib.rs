@@ -97,14 +97,20 @@ enum FieldsKind {
 
 #[derive(Default)]
 struct ContainerAttrs {
+    // On container or type
     extra: Extra,
-    traits: Vec<TokenStream>,
-    path: Option<String>,
     rename: Option<Ident>,
     validate: Option<Expr>,
+    flatten: bool,
+
+    // On type
+    traits: Vec<TokenStream>,
+    from: Option<Type>,
+    path: Option<String>,
     allocator: Option<TokenStream>,
     bounds: Option<Punctuated<WherePredicate, syn::token::Comma>>,
-    flatten: bool,
+
+    // On Container
     tuple: bool,
 }
 
@@ -125,13 +131,33 @@ impl ContainerType {
 }
 
 impl ContainerAttrs {
+    fn validate(&self) -> syn::Result<()> {
+        if let Some(from) = &self.from {
+            if self.flatten {
+                return Err(syn::Error::new_spanned(
+                    from,
+                    "The `flatten` and `from` attributes are incompatible",
+                ));
+            }
+            if self.tuple {
+                return Err(syn::Error::new_spanned(
+                    from,
+                    "The `tuple` and `from` attributes are incompatible",
+                ));
+            }
+        }
+
+        Ok(())
+    }
     fn parse(
         attributes: &[syn::Attribute],
         kind: ContainerType,
         flatten: bool,
+        from: Option<Type>,
     ) -> syn::Result<Self> {
         let mut this = Self {
             flatten,
+            from,
             ..Default::default()
         };
 
@@ -221,6 +247,17 @@ impl ContainerAttrs {
 
                         this.path = Some(path);
                     }
+                    "from" => {
+                        if !kind.is_type() {
+                            Err(meta.error("The `from` attribute can only be used on types"))?
+                        }
+
+                        if this.from.is_some() {
+                            Err(meta.error("Duplicate `from` attribute"))?
+                        }
+
+                        this.from = Some(meta.value()?.parse()?);
+                    }
 
                     "allocator" => {
                         if !kind.is_type() {
@@ -268,6 +305,8 @@ impl ContainerAttrs {
             })?;
         }
 
+        this.validate()?;
+
         Ok(this)
     }
 }
@@ -286,6 +325,7 @@ fn parse_fields(
     // The struct or variant's fields
     fields: &Fields,
     tuple: bool,
+    has_from: bool,
 ) -> syn::Result<FieldsInfo> {
     let mut val_count = 0;
     let kind = match fields {
@@ -417,6 +457,10 @@ fn parse_fields(
                             }
                             if attribute.is_none() {
                                 val_count += 1;
+
+                                if has_from && (default.is_some() || !extra.0.is_empty()) {
+                                    Err(Error::new(field.span(), "This field won't be parsed from bauble as there is a `from` attribute on the type"))?
+                                }
                             }
 
                             FieldTy::Val {
@@ -700,6 +744,7 @@ fn derive_struct(
     ty_info: TypeInfo,
     fields: &FieldsInfo,
     flatten: bool,
+    from: Option<Type>,
 ) -> (TokenStream, TokenStream, TokenStream) {
     let allocator = &ty_info.allocator;
     let type_attributes = {
@@ -809,7 +854,32 @@ fn derive_struct(
             quote! { #ty }
         }
     };
-    let (pattern, type_data) = derive_fields(&ty_info, fields, &construct, flatten);
+
+    let (pattern, type_data) = match from {
+        Some(from) => {
+            let v = from_bauble(quote!(*__inner));
+            let fields = fields.fields.iter().map(|f| {
+                let ident = &f.name;
+                let name = f.variable_ident();
+                quote! { #ident: #name }
+            });
+            (
+                Some((
+                    quote! { ::bauble::Value::Transparent(__inner) },
+                    quote! {{
+                        let __from: #from = #v?;
+                        let #ty {
+                            #(#fields),*
+                        } = ::std::convert::From::from(__from);
+
+                        #construct
+                    }},
+                )),
+                quote! { ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#from, #allocator>()) },
+            )
+        }
+        None => derive_fields(&ty_info, fields, &construct, flatten),
+    };
 
     let construct = match pattern {
         Some((pattern, arm)) => {
@@ -826,6 +896,59 @@ fn derive_struct(
     (type_attributes, type_data, construct)
 }
 
+fn derive_variants_from<'a>(
+    variants: impl IntoIterator<Item = &'a syn::Variant>,
+    flatten: bool,
+    allocator: TokenStream,
+    from: Type,
+) -> syn::Result<(TokenStream, TokenStream, TokenStream)> {
+    for variant in variants.into_iter() {
+        let variant_attrs = ContainerAttrs::parse(
+            &variant.attrs,
+            ContainerType::Container,
+            flatten,
+            Some(from.clone()),
+        )?;
+
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple, true)?;
+
+        for field in fields.fields {
+            if !matches!(field.ty, FieldTy::Val {
+                    default: None,
+                    attribute: None,
+                    extra,
+                    ..
+                } if extra.0.is_empty())
+            {
+                Err(syn::Error::new(
+                    field.name.span(),
+                    "Can't have attributes on fields in an enum with the `from` attribute",
+                ))?
+            }
+        }
+    }
+
+    let v = from_bauble(quote!(*__inner));
+
+    Ok((
+        quote! { ::bauble::types::NamedFields::empty() },
+        quote! { ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#from, #allocator>()) },
+        quote! {
+            match __value {
+                ::bauble::Value::Transparent(__inner) => {
+                    let __from: #from = #v?;
+                    let __res: Self = ::std::convert::From::from(__from);
+
+                    __res
+                },
+                _ => Err(Self::error(__span, ::bauble::ToRustErrorKind::WrongType {
+                    found: __ty,
+                }))?,
+            }
+        },
+    ))
+}
+
 fn derive_variants<'a>(
     variants: impl IntoIterator<Item = &'a syn::Variant>,
     flatten: bool,
@@ -835,7 +958,7 @@ fn derive_variants<'a>(
     let mut match_construct = Vec::new();
     for variant in variants.into_iter() {
         let variant_attrs =
-            ContainerAttrs::parse(&variant.attrs, ContainerType::Container, flatten)?;
+            ContainerAttrs::parse(&variant.attrs, ContainerType::Container, flatten, None)?;
 
         let ident = variant.ident.clone();
         let name = variant_attrs
@@ -843,7 +966,7 @@ fn derive_variants<'a>(
             .map(|s| s.to_string())
             .unwrap_or(ident.to_string());
 
-        let fields = parse_fields(&variant.fields, variant_attrs.tuple)?;
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple, false)?;
 
         let (type_attrs, type_kind, construct_variant) = derive_struct(
             TypeInfo {
@@ -853,6 +976,7 @@ fn derive_variants<'a>(
             },
             &fields,
             variant_attrs.flatten,
+            None,
         );
 
         let extra = variant_attrs.extra.convert();
@@ -923,6 +1047,7 @@ pub fn derive_bauble_derive_input(
             Data::Union(_) => ContainerType::Both,
         },
         false,
+        None,
     ) {
         Ok(a) => a,
         Err(e) => return e.into_compile_error(),
@@ -1013,7 +1138,7 @@ pub fn derive_bauble_derive_input(
     // Generate code to deserialize this type
     let (type_attributes, construct_type, construct_value) = match &ast.data {
         Data::Struct(data) => {
-            let fields = match parse_fields(&data.fields, ty_attrs.tuple) {
+            let fields = match parse_fields(&data.fields, ty_attrs.tuple, ty_attrs.from.is_some()) {
                 Ok(fields) => fields,
                 Err(err) => return err.into_compile_error(),
             };
@@ -1027,6 +1152,7 @@ pub fn derive_bauble_derive_input(
                 },
                 &fields,
                 ty_attrs.flatten,
+                ty_attrs.from,
             )
         }
         Data::Enum(data) => {
@@ -1037,7 +1163,12 @@ pub fn derive_bauble_derive_input(
                 )
                 .into_compile_error();
             }
-            match derive_variants(&data.variants, ty_attrs.flatten, allocator.clone()) {
+            match match ty_attrs.from {
+                Some(from) => {
+                    derive_variants_from(&data.variants, ty_attrs.flatten, allocator.clone(), from)
+                }
+                None => derive_variants(&data.variants, ty_attrs.flatten, allocator.clone()),
+            } {
                 Ok(res) => res,
                 Err(e) => return e.into_compile_error(),
             }
