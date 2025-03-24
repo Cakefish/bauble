@@ -547,7 +547,7 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::MissingField {
                 attribute, field, ..
             } => Cow::Owned(format!(
-                "Missing the `{}` {field}",
+                "Missing the {} `{field}`",
                 if *attribute { "attribute" } else { "field" }
             )),
             ConversionError::UnexpectedField {
@@ -2204,19 +2204,183 @@ fn convert_from_copy_with_attributes<'a>(
             Ok(val)
         }
         BorrowCopyVal::Resolved(val) => {
-            if types.can_infer_from(expected_type, val.ty) {
-                let mut val = val.clone();
-                if let Some(extra) = extra_attributes {
-                    val = set_attributes(val, extra, symbols, add_value, object_name)?;
+            let (is_same, can_infer, instanciable) = (
+                expected_type == val.ty,
+                types.can_infer_from(expected_type, val.ty),
+                types.key_type(expected_type).kind.instanciable(),
+            );
+
+            match (is_same, can_infer, instanciable) {
+                // If the type is the same or can infer and expected type isn't instantiable.
+                (true, true, _) | (false, true, false) => {
+                    let mut val = val.clone();
+                    if let Some(extra) = extra_attributes {
+                        val = set_attributes(val, extra, symbols, add_value, object_name)?;
+                    }
+                    Ok(val)
                 }
-                Ok(val)
-            } else {
-                // Got wrong type in copy.
-                Err(ConversionError::ExpectedExactType {
-                    expected: expected_type,
-                    got: Some(val.ty),
+                // Expected type is instantiable
+                (false, true, true) => {
+                    let ty = types.key_type(expected_type);
+
+                    let (attributes, extra_attributes) = {
+                        let mut new_attributes = Fields::new();
+                        let extra_attributes = if let Some(extra) = extra_attributes {
+                            let mut leftovers = Fields::new();
+                            for (field, value) in &extra.0 {
+                                let ty = match ty.meta.attributes.get(field.as_str()) {
+                                    Some(ty) => ty,
+                                    None => {
+                                        // TODO(@perf): Could `value.clone()` be avoided here?
+                                        leftovers.insert(field.clone(), value.clone());
+                                        continue;
+                                    }
+                                };
+
+                                new_attributes.insert(
+                                    field.clone(),
+                                    convert_value(
+                                        value,
+                                        symbols,
+                                        add_value,
+                                        ty.id,
+                                        object_name.borrow(),
+                                    )?,
+                                );
+                            }
+
+                            if leftovers.is_empty() {
+                                None
+                            } else {
+                                Some(parse::Attributes(leftovers).spanned(extra.span))
+                            }
+                        } else {
+                            None
+                        };
+
+                        (Attributes(new_attributes), extra_attributes)
+                    };
+
+                    let mut used_leftover_attributes = false;
+                    let value = match &types.key_type(expected_type).kind {
+                        types::TypeKind::Ref(ty) => {
+                            if let Value::Ref(ty) = &val.value.value {
+                                Value::Ref(ty.clone())
+                            } else {
+                                let object_name =
+                                    TypePathElem::new(format!("{object_name}&{}", ty.inner()))
+                                        .expect("This should be valid.");
+
+                                used_leftover_attributes = true;
+                                let val = convert_from_copy_with_attributes(
+                                    BorrowCopyVal::Resolved(val),
+                                    symbols,
+                                    add_value,
+                                    *ty,
+                                    object_name.borrow(),
+                                    extra_attributes.as_ref(),
+                                )?;
+
+                                add_value(object_name.borrow(), val, symbols)?
+                            }
+                        }
+                        types::TypeKind::Transparent(type_id) => {
+                            used_leftover_attributes = true;
+                            let inner = convert_from_copy_with_attributes(
+                                BorrowCopyVal::Resolved(val),
+                                symbols,
+                                add_value,
+                                *type_id,
+                                object_name,
+                                extra_attributes.as_ref(),
+                            )?;
+
+                            Value::Transparent(Box::new(inner))
+                        }
+                        types::TypeKind::Trait(_) | types::TypeKind::Generic(_) => {
+                            unreachable!("Expected type is instantiable")
+                        }
+
+                        types::TypeKind::Enum { variants, .. } => {
+                            used_leftover_attributes = true;
+                            variants
+                                .iter()
+                                .find_map(|(variant, variant_ty)| {
+                                    let variant_val = convert_from_copy_with_attributes(
+                                        BorrowCopyVal::Resolved(val),
+                                        symbols,
+                                        add_value,
+                                        variant_ty,
+                                        object_name,
+                                        extra_attributes.as_ref(),
+                                    )
+                                    .ok()?;
+
+                                    Some(Value::Enum(
+                                        variant.to_owned().spanned(val.value.span),
+                                        Box::new(variant_val),
+                                    ))
+                                })
+                                .ok_or(
+                                    ConversionError::ExpectedExactType {
+                                        expected: expected_type,
+                                        got: Some(val.ty),
+                                    }
+                                    .spanned(val.span()),
+                                )?
+                        }
+
+                        types::TypeKind::Primitive(_)
+                        | types::TypeKind::Tuple(_)
+                        | types::TypeKind::Array(_)
+                        | types::TypeKind::Map(_)
+                        | types::TypeKind::Struct(_)
+                        | types::TypeKind::EnumVariant { .. }
+                        | types::TypeKind::BitFlags(_) => {
+                            unreachable!(
+                                "None of these are inferable from something contained in a resolved copy value, {:?} as {:?}",
+                                types.key_type(val.ty),
+                                ty,
+                            );
+                        }
+                    };
+
+                    let attribute_span = extra_attributes
+                        .as_ref()
+                        .map_or(val.attributes.span, |s| s.span);
+                    if !used_leftover_attributes
+                        && let Some((ident, _)) = extra_attributes
+                            .into_iter()
+                            .flat_map(|v| v.value.0.into_iter())
+                            .next()
+                    {
+                        // Unexpected attributes
+                        return Err(ConversionError::UnexpectedField {
+                            attribute: true,
+                            field: ident.clone(),
+                            ty: val.ty,
+                        }
+                        .spanned(attribute_span));
+                    }
+
+                    Ok(Val {
+                        ty: expected_type,
+                        value: value.spanned(val.value.span),
+                        attributes: attributes.spanned(attribute_span),
+                    })
                 }
-                .spanned(val.value.span))
+                // Can't infer to this type.
+                (false, false, _) => {
+                    // Got wrong type in copy.
+                    Err(ConversionError::ExpectedExactType {
+                        expected: expected_type,
+                        got: Some(val.ty),
+                    }
+                    .spanned(val.value.span))
+                }
+
+                // If the type is the same it's always inferable.
+                (true, false, _) => unreachable!(),
             }
         }
     }

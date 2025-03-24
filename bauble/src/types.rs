@@ -616,7 +616,7 @@ impl TypeRegistry {
 pub type ValidationFunction =
     fn(val: &crate::Val, registry: &TypeRegistry) -> Result<(), crate::ConversionError>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct TypeMeta {
     pub path: TypePath,
     /// If this is `Some` the type is generic.
@@ -644,7 +644,7 @@ impl From<TypeId> for FieldType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Type {
     pub meta: TypeMeta,
     pub kind: TypeKind,
