@@ -598,7 +598,7 @@ impl TypeRegistry {
                 variants
                     .0
                     .values()
-                    .any(|id| self.can_infer_from(*id, input_id))
+                    .any(|output_id| self.can_infer_from(*output_id, input_id))
             }
 
             (TypeKind::Trait(types), _) => types.contains(input_id),

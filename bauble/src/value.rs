@@ -162,6 +162,7 @@ pub struct Object {
 
 #[derive(Clone, Debug)]
 pub enum ConversionError {
+    // TODO: Add an enum error variant that shows errors for trying to parse variants.
     UnregisteredAsset,
     UnresolvedType,
     MissingRequiredTrait {
@@ -1788,23 +1789,16 @@ fn convert_from_copy_with_attributes<'a>(
             value,
             attributes,
         } => {
-            if let Some(ty) = val_ty
-                && !types.can_infer_from(expected_type, ty.value)
-            {
-                return Err(ConversionError::ExpectedExactType {
-                    expected: expected_type,
-                    got: Some(ty.value),
-                }
-                .spanned(ty.span));
-            }
-            let ty_id = if types.key_type(expected_type).kind.instanciable() {
-                expected_type
-            } else {
-                default_value_type(symbols, value.primitive_type(), *val_ty)
-                    .unwrap_or(expected_type)
-            };
+            let mut val_type = *val_ty;
+            let ty_id = resolve_type(
+                symbols,
+                expected_type,
+                &mut val_type,
+                value.value.primitive_type(),
+                value.span,
+            )?;
 
-            let ty = types.key_type(expected_type);
+            let ty = types.key_type(ty_id.value);
 
             let span = value.span;
             let attribute_span = attributes.span;
@@ -1834,7 +1828,7 @@ fn convert_from_copy_with_attributes<'a>(
                             // input tuple too long.
                             ConversionError::WrongTupleLength {
                                 got: l,
-                                tuple_ty: ty_id,
+                                tuple_ty: ty_id.value,
                             }
                             .spanned(value.span())
                         })?;
@@ -1862,7 +1856,7 @@ fn convert_from_copy_with_attributes<'a>(
                         if !fields.contains_key(field.as_str()) {
                             return Err(ConversionError::MissingField {
                                 attribute: $attribute,
-                                ty: ty_id,
+                                ty: ty_id.value,
                                 field: field.to_string(),
                             }
                             .spanned(value.span));
@@ -1877,7 +1871,7 @@ fn convert_from_copy_with_attributes<'a>(
                             None => {
                                 return Err(ConversionError::UnexpectedField {
                                     attribute: $attribute,
-                                    ty: ty_id,
+                                    ty: ty_id.value,
                                     field: field.clone(),
                                 }
                                 .spanned(value.span()));
@@ -1954,7 +1948,7 @@ fn convert_from_copy_with_attributes<'a>(
                         return Err(ConversionError::MissingField {
                             attribute: true,
                             field: attr.clone(),
-                            ty: ty_id,
+                            ty: ty_id.value,
                         }
                         .spanned(attribute_span));
                     }
@@ -2042,7 +2036,8 @@ fn convert_from_copy_with_attributes<'a>(
                                 ))))
                             } else {
                                 // Expected unnamed fields
-                                Err(ConversionError::WrongFieldKind(ty_id).spanned(value.span))
+                                Err(ConversionError::WrongFieldKind(ty_id.value)
+                                    .spanned(value.span))
                             }
                         }
                         types::Fields::Named(named_fields) => {
@@ -2055,7 +2050,8 @@ fn convert_from_copy_with_attributes<'a>(
                                 ))))
                             } else {
                                 // Expected unnamed fields
-                                Err(ConversionError::WrongFieldKind(ty_id).spanned(value.span))
+                                Err(ConversionError::WrongFieldKind(ty_id.value)
+                                    .spanned(value.span))
                             }
                         }
                     }
@@ -2119,7 +2115,7 @@ fn convert_from_copy_with_attributes<'a>(
                             if !variants.variants.contains(value) {
                                 return Err(ConversionError::UnknownVariant {
                                     variant: value.clone(),
-                                    ty: ty_id,
+                                    ty: ty_id.value,
                                 }
                                 .spanned(value.span));
                             }
@@ -2190,7 +2186,7 @@ fn convert_from_copy_with_attributes<'a>(
                 return Err(ConversionError::UnexpectedField {
                     attribute: true,
                     field: ident,
-                    ty: ty_id,
+                    ty: ty_id.value,
                 }
                 .spanned(attribute_span));
             }
@@ -2226,6 +2222,47 @@ fn convert_from_copy_with_attributes<'a>(
     }
 }
 
+fn resolve_type(
+    symbols: &Symbols,
+    expected_type: TypeId,
+    val_type: &mut Option<Spanned<TypeId>>,
+    primitive_type: Option<types::Primitive>,
+    span: crate::Span,
+) -> Result<Spanned<TypeId>> {
+    let types = symbols.ctx.type_registry();
+    let ty = if types.key_type(expected_type).kind.instanciable() {
+        expected_type.spanned(val_type.map(|s| s.span).unwrap_or(span))
+    } else {
+        match default_value_type(symbols, primitive_type, *val_type) {
+            Some(ty) => {
+                let ty = ty.spanned(val_type.map_or(span, |s| s.span));
+                *val_type = Some(ty);
+
+                ty
+            }
+            None => {
+                return Err(ConversionError::ExpectedExactType {
+                    expected: expected_type,
+                    got: None,
+                }
+                .spanned(span));
+            }
+        }
+    };
+
+    if let Some(val_type) = val_type {
+        if !types.can_infer_from(expected_type, val_type.value) {
+            return Err(ConversionError::ExpectedExactType {
+                expected: expected_type,
+                got: Some(val_type.value),
+            }
+            .spanned(span));
+        }
+    }
+
+    Ok(ty)
+}
+
 fn convert_value<'a>(
     value: impl Into<BorrowedObject<'a>>,
     symbols: &Symbols,
@@ -2258,28 +2295,15 @@ fn convert_value<'a>(
     }
 
     let types = symbols.ctx.type_registry();
-    let val_type = value_type(value, symbols)?;
+    let mut val_type = value_type(value, symbols)?;
 
-    let ty_id = {
-        if let Some(val_type) = val_type.as_ref() {
-            if !types.can_infer_from(expected_type, val_type.value) {
-                return Err(ConversionError::ExpectedExactType {
-                    expected: expected_type,
-                    got: Some(val_type.value),
-                }
-                .spanned(value.value.span));
-            }
-        }
-
-        // If `expected_type` isn't instantiable, i.e is a trait, we go off of the value type.
-        if !types.key_type(expected_type).kind.instanciable() {
-            default_value_type(symbols, value.value.primitive_type(), val_type)
-                .unwrap_or(expected_type)
-                .spanned(val_type.map_or(value.value.span, |s| s.span))
-        } else {
-            expected_type.spanned(val_type.map(|s| s.span).unwrap_or(value.value.span))
-        }
-    };
+    let ty_id = resolve_type(
+        symbols,
+        expected_type,
+        &mut val_type,
+        value.value.primitive_type(),
+        value.value.span,
+    )?;
 
     let ty = types.key_type(ty_id.value);
 
