@@ -204,7 +204,7 @@ pub enum ConversionError {
         got: Option<TypeId>,
     },
     PathError(crate::path::PathError),
-    CopyCycle(Vec<(Spanned<String>, Vec<Spanned<String>>)>),
+    Cycle(Vec<(Spanned<String>, Vec<Spanned<String>>)>),
     ErrorInCopy {
         copy: Spanned<TypePathElem>,
         error: Box<Spanned<ConversionError>>,
@@ -227,31 +227,30 @@ pub enum RefKind {
 }
 
 #[derive(Clone, Debug)]
-enum PathKind {
+pub enum PathKind {
     Direct(TypePath),
     /// TypePath::*::TypePathElem
     Indirect(TypePath, TypePathElem),
 }
 
-impl TryFrom<&Path> for PathKind {
-    type Error = Spanned<crate::path::PathError>;
+impl std::fmt::Display for PathKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathKind::Direct(path) => write!(f, "{path}"),
+            PathKind::Indirect(path, ident) => write!(f, "{path}::*::{ident}"),
+        }
+    }
+}
 
-    fn try_from(value: &Path) -> std::result::Result<Self, Self::Error> {
-        let mut leading =
-            TypePath::new(value.leading.join("::")).map_err(|e| e.spanned(value.span()))?;
-
-        match &value.last.value {
-            PathEnd::WithIdent(ident) => Ok(PathKind::Indirect(
-                leading,
-                TypePathElem::new(ident.as_str())
-                    .map_err(|e| e.spanned(ident.span))?
-                    .to_owned(),
-            )),
-            PathEnd::Ident(ident) => {
-                leading
-                    .push_str(ident.as_str())
-                    .map_err(|e| e.spanned(ident.span))?;
-                Ok(PathKind::Direct(leading))
+impl PathKind {
+    fn could_be(&self, path: TypePath<&str>) -> bool {
+        match self {
+            PathKind::Direct(p) => p.borrow() == path,
+            PathKind::Indirect(p, ident) => {
+                path.starts_with(p.borrow())
+                    && path.ends_with(*ident.borrow())
+                    // If `leading` ends with `ident` we could have false positives if we didn't include this check.
+                    && path.byte_len() > p.byte_len() + ident.byte_len()
             }
         }
     }
@@ -276,7 +275,7 @@ impl BaubleError for Spanned<ConversionError> {
         let types = ctx.type_registry();
         let msg = match &self.value {
             ConversionError::MissingRequiredTrait { .. } => Cow::Borrowed("Missing required trait"),
-            ConversionError::CopyCycle(_) => Cow::Borrowed("A copy cycle was found"),
+            ConversionError::Cycle(_) => Cow::Borrowed("A cycle was found"),
             ConversionError::PathError(_) => Cow::Borrowed("Path error"),
             ConversionError::AmbiguousUse { .. } => Cow::Borrowed("Ambiguous use"),
             ConversionError::ExpectedBitfield { .. } => Cow::Borrowed("Expected bitfield"),
@@ -483,7 +482,7 @@ impl BaubleError for Spanned<ConversionError> {
 
                 return errors;
             }
-            ConversionError::CopyCycle(cycle) => {
+            ConversionError::Cycle(cycle) => {
                 return cycle
                     .iter()
                     .flat_map(|(a, contained)| {
@@ -987,8 +986,9 @@ impl<'a> Symbols<'a> {
             .and_then(|reference| reference.unwrap_ref().module.clone())
     }
 
-    fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<PathReference>> {
+    fn resolve_path(&self, raw_path: &Path) -> Result<Spanned<PathKind>> {
         let mut leading = TypePath::empty();
+
         let mut path_iter = raw_path.leading.iter();
         if let Some(first) = path_iter.next() {
             leading = self.get_module(first.as_str()).unwrap_or(
@@ -1022,54 +1022,61 @@ impl<'a> Symbols<'a> {
                     .spanned(ident.span));
                 }
             }
-        } else if let PathEnd::Ident(ident) = &raw_path.last.value
-            && let Some(RefCopy::Ref(r)) = self.uses.get(ident.as_str())
-        {
-            return Ok(Cow::Borrowed(r));
         }
-        match &raw_path.last.value {
-            PathEnd::WithIdent(ident) => {
-                let ident = TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                self.ctx
-                    .ref_with_ident(leading.borrow(), ident)
-                    .ok_or_else(|| {
-                        ConversionError::RefError(Box::new(RefError {
-                            uses: Some(self.uses.clone()),
-                            path: PathKind::Indirect(leading, ident.to_owned()),
-                            path_ref: PathReference::empty(),
-                            kind: ref_kind,
-                        }))
-                        .spanned(raw_path.span())
-                    })
-            }
+
+        let path = match &raw_path.last.value {
+            PathEnd::WithIdent(ident) => PathKind::Indirect(
+                leading,
+                TypePathElem::new(ident.to_string()).map_err(|p| p.spanned(raw_path.span()))?,
+            ),
             PathEnd::Ident(ident) => {
-                let span = ident.span;
-                let ident = TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                let path = leading.join(&ident);
-                self.ctx.get_ref(path.borrow()).ok_or_else(|| {
-                    if let Some(r) = self.ctx.get_ref(leading.borrow())
-                        && let Some(ty) = r.ty
-                        && matches!(
-                            self.ctx.type_registry().key_type(ty).kind,
-                            types::TypeKind::Enum { .. } | types::TypeKind::BitFlags(_)
-                        )
-                    {
-                        return ConversionError::UnknownVariant {
-                            variant: ident.to_owned().spanned(span),
-                            ty,
-                        }
-                        .spanned(raw_path.span());
-                    }
-                    ConversionError::RefError(Box::new(RefError {
-                        uses: Some(self.uses.clone()),
-                        path: PathKind::Direct(path),
-                        path_ref: PathReference::empty(),
-                        kind: ref_kind,
-                    }))
-                    .spanned(raw_path.span())
-                })
+                leading
+                    .push_str(ident.as_str())
+                    .map_err(|p| p.spanned(raw_path.span()))?;
+                PathKind::Direct(leading)
+            }
+        };
+        Ok(path.spanned(raw_path.span()))
+    }
+
+    fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<PathReference>> {
+        let path = self.resolve_path(raw_path)?;
+        match &path.value {
+            PathKind::Direct(path) => {
+                if let Some(RefCopy::Ref(r)) = self.uses.get(path.as_str()) {
+                    return Ok(Cow::Borrowed(r));
+                } else {
+                    self.ctx.get_ref(path.borrow())
+                }
+            }
+            PathKind::Indirect(path, ident) => {
+                self.ctx.ref_with_ident(path.borrow(), ident.borrow())
             }
         }
+        .ok_or_else(|| {
+            if let PathKind::Direct(path) = &*path
+                && let Some((leading, ident)) = path.get_end()
+                && let Some(r) = self.ctx.get_ref(leading)
+                && let Some(ty) = r.ty
+                && matches!(
+                    self.ctx.type_registry().key_type(ty).kind,
+                    types::TypeKind::Enum { .. } | types::TypeKind::BitFlags(_)
+                )
+            {
+                ConversionError::UnknownVariant {
+                    variant: ident.to_owned().spanned(raw_path.last.span),
+                    ty,
+                }
+            } else {
+                ConversionError::RefError(Box::new(RefError {
+                    uses: Some(self.uses.clone()),
+                    path: path.value.clone(),
+                    path_ref: PathReference::empty(),
+                    kind: ref_kind,
+                }))
+            }
+            .spanned(raw_path.span())
+        })
         .map(Cow::Owned)
     }
 
@@ -1079,7 +1086,7 @@ impl<'a> Symbols<'a> {
         item.asset.clone().ok_or(
             ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
-                path: PathKind::try_from(&path.value)?,
+                path: self.resolve_path(path)?.value,
                 path_ref: item.into_owned(),
                 kind: RefKind::Asset,
             }))
@@ -1093,7 +1100,7 @@ impl<'a> Symbols<'a> {
         item.ty.ok_or(
             ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
-                path: PathKind::try_from(&path.value)?,
+                path: self.resolve_path(path)?.value,
                 path_ref: item.into_owned(),
                 kind: RefKind::Type,
             }))
@@ -1102,17 +1109,111 @@ impl<'a> Symbols<'a> {
     }
 }
 
+/// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
+pub struct DelayedRegister {
+    pub asset: Spanned<TypePath>,
+    pub reference: Spanned<PathKind>,
+}
+
+pub fn resolve_delayed(
+    mut delayed: Vec<DelayedRegister>,
+    ctx: &mut crate::context::BaubleContext,
+) -> std::result::Result<(), Vec<Spanned<ConversionError>>> {
+    loop {
+        let old_len = delayed.len();
+
+        // Try to register delayed registers, and remove them as they succeed.
+        delayed.retain(|d| {
+            if let Some(r) = match &d.reference.value {
+                PathKind::Direct(path) => ctx.get_ref(path.borrow()),
+                PathKind::Indirect(path, ident) => {
+                    ctx.ref_with_ident(path.borrow(), ident.borrow())
+                }
+            } && let Some((ty, _)) = &r.asset
+            {
+                ctx.register_asset(d.asset.value.borrow(), *ty);
+                false
+            } else {
+                true
+            }
+        });
+
+        if delayed.is_empty() {
+            return Ok(());
+        }
+
+        // If the length didn't change we have errors.
+        if delayed.len() == old_len {
+            let mut graph = petgraph::graphmap::DiGraphMap::new();
+            let mut map = HashMap::new();
+            for a in delayed.iter() {
+                let node_a = graph.add_node(a.asset.as_ref().map(|p| p.borrow()));
+                map.insert(node_a, a.reference.as_ref());
+
+                for b in delayed.iter() {
+                    if a.reference.could_be(b.asset.borrow()) {
+                        graph.add_edge(node_a, b.asset.as_ref().map(|p| p.borrow()), ());
+                    }
+                }
+            }
+
+            let mut errors = Vec::new();
+            for scc in petgraph::algo::tarjan_scc(&graph) {
+                if scc.len() == 1 {
+                    if map[&scc[0]].could_be(scc[0].borrow()) {
+                        errors.push(
+                            ConversionError::Cycle(vec![(
+                                scc[0].to_string().spanned(scc[0].span),
+                                vec![map[&scc[0]].to_string().spanned(map[&scc[0]].span)],
+                            )])
+                            .spanned(scc[0].span),
+                        )
+                    } else {
+                        errors.push(
+                            ConversionError::RefError(Box::new(RefError {
+                                // TODO: Could pass uses here for better suggestions.
+                                uses: None,
+                                path: map[&scc[0]].value.clone(),
+                                path_ref: PathReference::empty(),
+                                kind: RefKind::Asset,
+                            }))
+                            .spanned(map[&scc[0]].span),
+                        )
+                    }
+                } else {
+                    errors.push(
+                        ConversionError::Cycle(
+                            scc.iter()
+                                .map(|s| {
+                                    (
+                                        s.to_string().spanned(s.span),
+                                        vec![map[s].to_string().spanned(map[s].span)],
+                                    )
+                                })
+                                .collect(),
+                        )
+                        .spanned(scc[0].span),
+                    );
+                }
+            }
+
+            return Err(errors);
+        }
+    }
+}
+
 pub fn register_assets(
     path: TypePath<&str>,
     ctx: &mut crate::context::BaubleContext,
     default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
     values: &Values,
-) -> std::result::Result<(), Vec<Spanned<ConversionError>>> {
+) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
     let mut uses = default_uses
         .into_iter()
         .map(|(key, val)| (key, RefCopy::Ref(val)))
         .collect();
     let mut errors = Vec::new();
+    let mut delayed = Vec::new();
 
     let mut symbols = Symbols { ctx: &*ctx, uses };
     for use_ in &values.uses {
@@ -1125,6 +1226,7 @@ pub fn register_assets(
 
     // TODO: Register these in a correct order to allow for assets referencing assets.
     for (ident, binding) in &values.values {
+        let span = ident.span;
         let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
         let path = path.join(ident);
         let mut symbols = Symbols { ctx: &*ctx, uses };
@@ -1132,7 +1234,7 @@ pub fn register_assets(
         let ty = if let Some(ty) = &binding.type_path {
             symbols.resolve_type(ty)
         } else {
-            value_type(&binding.object, &symbols)
+            let res = value_type(&binding.object, &symbols)
                 .map(|v| {
                     default_value_type(&symbols, binding.object.value.value.primitive_type(), v)
                 })
@@ -1146,7 +1248,21 @@ pub fn register_assets(
                     } else {
                         Err(ConversionError::UnresolvedType.spanned(binding.object.value.span))
                     }
-                })
+                });
+
+            if res.is_err()
+                && let parse::Value::Ref(reference) = &binding.object.value.value
+                && let Ok(reference) = symbols.resolve_path(reference)
+            {
+                delayed.push(DelayedRegister {
+                    asset: path.spanned(span),
+                    reference,
+                });
+                Symbols { uses, .. } = symbols;
+                continue;
+            }
+
+            res
         };
 
         match ty {
@@ -1172,7 +1288,7 @@ pub fn register_assets(
     }
 
     if errors.is_empty() {
-        Ok(())
+        Ok(delayed)
     } else {
         Err(errors)
     }
@@ -1282,7 +1398,7 @@ pub(crate) fn convert_values(
         }
         let scc_set = HashSet::<TypePathElem<&str>>::from_iter(scc.iter().copied());
         use_errors.push(
-            ConversionError::CopyCycle(
+            ConversionError::Cycle(
                 scc.iter()
                     .map(|s| {
                         (

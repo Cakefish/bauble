@@ -337,7 +337,7 @@ impl TypeRegistry {
                                 path: ty.meta.path.join(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
                                     let generic_id = self.get_or_register_generic_type(
-                                        self.key_type(generic).meta.path.combine(variant),
+                                        self.key_type(generic).meta.path.join(variant),
                                     );
                                     let TypeKind::Generic(types) = &mut self.types[generic_id.0.0].kind else {
                                         panic!(

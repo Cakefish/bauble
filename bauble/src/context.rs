@@ -171,6 +171,8 @@ impl BaubleContextBuilder {
             registry: self.registry,
             root_node,
             files: Vec::new(),
+
+            retry_files: Vec::new(),
         }
     }
 }
@@ -237,6 +239,8 @@ impl CtxNode {
             None
         })
     }
+
+    #[expect(dead_code)]
     fn find<R>(&self, ident: TypePathElem<&str>, visit: impl FnOnce(&CtxNode) -> R) -> Option<R> {
         fn find_inner<R, F: FnOnce(&CtxNode) -> R>(
             node: &CtxNode,
@@ -401,6 +405,8 @@ pub struct BaubleContext {
     registry: TypeRegistry,
     root_node: CtxNode,
     files: Vec<(TypePath, Source)>,
+
+    retry_files: Vec<FileId>,
 }
 
 impl BaubleContext {
@@ -463,14 +469,15 @@ impl BaubleContext {
     /// This clears asset references in any of the file modules.
     fn reload_files<I: IntoIterator<Item = FileId>>(
         &mut self,
-        files: I,
-    ) -> (Vec<crate::Object>, BaubleErrors)
-    where
-        I::IntoIter: Clone + ExactSizeIterator,
-    {
-        let files = files.into_iter();
+        new_files: I,
+    ) -> (Vec<crate::Object>, BaubleErrors) {
+        let mut files = std::mem::take(&mut self.retry_files);
+        files.extend(new_files);
+        files.sort_unstable();
+        files.dedup();
+
         // Clear any previous assets that were loaded by these files.
-        for file in files.clone() {
+        for file in files.iter() {
             // Need a partial borrow here.
             let (path, _) = &self.files[file.0];
             self.root_node
@@ -482,11 +489,11 @@ impl BaubleContext {
         let mut skip = Vec::new();
         // Parse values, and return any errors.
         let mut errors = BaubleErrors::empty();
-        for file in files.clone() {
-            let values = match crate::parse(file, self) {
+        for file in files.iter() {
+            let values = match crate::parse(*file, self) {
                 Ok(values) => values,
                 Err(err) => {
-                    skip.push(file);
+                    skip.push(*file);
                     errors.extend(err);
                     continue;
                 }
@@ -498,7 +505,9 @@ impl BaubleContext {
         let mut skip_iter = skip.iter().copied().peekable();
         let mut new_skip = Vec::new();
 
-        for (file, values) in files.clone().zip(file_values.iter()).filter(|(file, _)| {
+        let mut delayed = Vec::new();
+
+        for (file, values) in files.iter().zip(file_values.iter()).filter(|(file, _)| {
             if skip_iter.peek() == Some(file) {
                 skip_iter.next();
                 false
@@ -507,35 +516,55 @@ impl BaubleContext {
             }
         }) {
             // Need a partial borrow here.
-            let (path, _) = self.file(file);
+            let (path, _) = self.file(*file);
             let path = path.to_owned();
-            if let Err(e) = crate::value::register_assets(path.borrow(), self, [], values) {
-                // Skip files that errored on registering.
-                new_skip.push(file);
-                errors.extend(BaubleErrors::from(e));
+            match crate::value::register_assets(path.borrow(), self, [], values) {
+                Ok(d) => {
+                    delayed.extend(d);
+                }
+                Err(e) => {
+                    // Skip files that errored on registering.
+                    new_skip.push(*file);
+                    errors.extend(BaubleErrors::from(e));
+                }
             }
         }
 
-        let mut objects = Vec::new();
-        let mut skip_a = skip.into_iter().peekable();
-        let mut skip_b = new_skip.into_iter().peekable();
+        skip.extend(new_skip);
+        // TODO: Less hacky way to get which files errored here?
+        if let Err(e) = crate::value::resolve_delayed(delayed, self) {
+            // We want to skip any files that had errors.
+            for e in e {
+                skip.push(e.span.file());
+                if let crate::ConversionError::Cycle(v) = &e.value {
+                    skip.extend(v.iter().map(|s| s.0.span.file()))
+                }
+                errors.push(e);
+            }
+        }
 
-        for (file, values) in files.zip(file_values).filter(|(file, _)| {
-            if skip_a.peek() == Some(file) {
-                skip_a.next();
-                false
-            } else if skip_b.peek() == Some(file) {
-                skip_b.next();
+        skip.sort_unstable();
+        skip.dedup();
+
+        let mut objects = Vec::new();
+
+        let mut skip_iter = skip.iter().copied().peekable();
+
+        for (file, values) in files.iter().zip(file_values).filter(|(file, _)| {
+            if skip_iter.peek() == Some(file) {
+                skip_iter.next();
                 false
             } else {
                 true
             }
         }) {
-            match crate::value::convert_values(file, values, &crate::value::Symbols::new(&*self)) {
+            match crate::value::convert_values(*file, values, &crate::value::Symbols::new(&*self)) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
             }
         }
+
+        self.retry_files.extend(skip);
 
         (objects, errors)
     }
@@ -565,7 +594,12 @@ impl BaubleContext {
     ) -> Option<PathReference> {
         self.root_node
             .walk(path, |node| {
-                node.find(ident, |node| node.reference(&self.root_node))
+                node.filter(|node| node.path.ends_with(*ident.borrow()), None)
+                    .filter_map(|n| self.root_node.walk(n, |n| n.reference(&self.root_node)))
+                    .reduce(|a, mut b| {
+                        b.combine_override(a);
+                        b
+                    })
             })
             .flatten()
     }
