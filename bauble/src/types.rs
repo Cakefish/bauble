@@ -155,7 +155,7 @@ impl TypeRegistry {
 
             asset_refs: Default::default(),
 
-            // NOTE: We always
+            // NOTE: Top level values always have to derive from this trait.
             top_level_trait_dependency: Self::any_trait(),
 
             to_be_assigned: Default::default(),
@@ -308,14 +308,19 @@ impl TypeRegistry {
         } else {
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
-                Type {
+                let ty = Type {
                     meta: TypeMeta {
                         path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
                             .expect("Invariant"),
+                        traits: this.key_type(inner).meta.traits.clone(),
                         ..Default::default()
                     },
                     kind: TypeKind::Ref(inner),
-                }
+                };
+
+                this.on_register_type(id, &ty);
+
+                ty
             })
         }
     }

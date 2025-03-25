@@ -409,13 +409,26 @@ pub struct BaubleContext {
     retry_files: Vec<FileId>,
 }
 
+fn preprocess_path(path: TypePath<&str>) -> TypePath<&str> {
+    if let Some((path, end)) = path.split_end()
+        && end.as_str() == "mod"
+    {
+        path
+    } else {
+        path
+    }
+}
+
 impl BaubleContext {
-    pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) {
+    pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) -> FileId {
+        let path = preprocess_path(path);
         let node = self.root_node.build_nodes(path);
         let id = FileId(self.files.len());
         node.source = Some(id);
         self.files
             .push((path.to_owned(), ariadne::Source::from(source.into())));
+
+        id
     }
 
     /// Registers an asset. This is done automatically for any objects in a file that gets registered.
@@ -450,17 +463,15 @@ impl BaubleContext {
     ) -> (Vec<crate::Object>, BaubleErrors) {
         let ids = paths
             .into_iter()
-            .map(|(path, source)| match self.get_file_id(path.borrow()) {
-                Some(id) => {
-                    *self.file_mut(id).1 = Source::from(source.into());
-                    id
-                }
-                None => {
-                    self.register_file(path.borrow(), source);
-                    self.get_file_id(path.borrow())
-                        .expect("We just registered the file")
-                }
-            })
+            .map(
+                |(path, source)| match self.get_file_id(preprocess_path(path.borrow())) {
+                    Some(id) => {
+                        *self.file_mut(id).1 = Source::from(source.into());
+                        id
+                    }
+                    None => self.register_file(path.borrow(), source),
+                },
+            )
             .collect::<Vec<_>>();
 
         self.reload_files(ids)
