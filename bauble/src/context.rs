@@ -288,7 +288,7 @@ impl CtxNode {
     fn add_node(&mut self, child: TypePathElem<&str>) -> &mut Self {
         self.children
             .entry(child.to_owned())
-            .or_insert_with(|| CtxNode::new(self.path.combine(&child)))
+            .or_insert_with(|| CtxNode::new(self.path.join(&child)))
     }
 
     /// # Panics

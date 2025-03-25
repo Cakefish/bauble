@@ -17,8 +17,9 @@ pub use context::{BaubleContext, FileId, Source};
 pub use error::{BaubleError, BaubleErrors, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use types::path;
-pub use value::{Attributes, ConversionError, FieldsKind, Object, Val, Value, convert_values};
+pub use value::{Attributes, ConversionError, FieldsKind, Object, Val, Value};
 
+#[doc(hidden)]
 pub mod private {
     pub use indexmap::IndexMap;
 }
@@ -44,5 +45,5 @@ pub fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<Values, BaubleError
 pub fn convert(file_id: FileId, ctx: &BaubleContext) -> Result<Vec<Object>, BaubleErrors> {
     let values = parse(file_id, ctx)?;
 
-    convert_values(file_id, values, &value::Symbols::new(ctx))
+    value::convert_values(file_id, values, &value::Symbols::new(ctx))
 }

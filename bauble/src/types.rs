@@ -204,7 +204,6 @@ impl TypeRegistry {
     #[must_use]
     /// Build a `TypeKind::Enum`.
     pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> TypeKind {
-        println!("{}", std::backtrace::Backtrace::capture());
         TypeKind::Enum {
             variants: EnumVariants(
                 variants
@@ -275,10 +274,10 @@ impl TypeRegistry {
                     TypeKind::Enum { variants } => {
                         for (variant, variant_ty) in &variants.0 {
                             this.types[variant_ty.0].meta = TypeMeta {
-                                path: ty.meta.path.combine(variant),
+                                path: ty.meta.path.join(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
                                     let generic_id = this.get_or_register_generic_type(
-                                        this.key_type(generic).meta.path.combine(variant),
+                                        this.key_type(generic).meta.path.join(variant),
                                     );
                                     let TypeKind::Generic(types) = &mut this.types[generic_id.0.0].kind else {
                                         panic!(
@@ -304,10 +303,10 @@ impl TypeRegistry {
                         for variant in &bitflag.variants {
                             this.register_type(|this, variant_id| Type {
                                 meta: TypeMeta {
-                                    path: ty.meta.path.combine(variant),
+                                    path: ty.meta.path.join(variant),
                                     generic_base_type: ty.meta.generic_base_type.map(|generic| {
                                         let id = this.get_or_register_generic_type(
-                                            this.key_type(generic).meta.path.combine(variant),
+                                            this.key_type(generic).meta.path.join(variant),
                                         );
                                         let TypeKind::Generic(types) = &mut this.types[id.0.0].kind else {
                                             panic!(
@@ -691,25 +690,24 @@ impl From<Primitive> for TypeKind {
 impl TypeKind {
     pub fn instanciable(&self) -> bool {
         match self {
-            TypeKind::Tuple(_) => true,
-            TypeKind::Array(_) => true,
-            TypeKind::Map(_) => true,
-            TypeKind::Struct(_) => true,
-            TypeKind::Enum { .. } => true,
-            TypeKind::BitFlags(..) => true,
-            TypeKind::Ref(..) => true,
+            TypeKind::Tuple(_)
+            | TypeKind::Array(_)
+            | TypeKind::Map(_)
+            | TypeKind::Struct(_)
+            | TypeKind::Enum { .. }
+            | TypeKind::BitFlags(..)
+            | TypeKind::Ref(..)
+            | TypeKind::Transparent(..)
+            | TypeKind::EnumVariant { .. } => true,
+            TypeKind::Trait(_) | TypeKind::Generic(_) => false,
             TypeKind::Primitive(prim) => match prim {
+                Primitive::Num
+                | Primitive::Str
+                | Primitive::Bool
+                | Primitive::Unit
+                | Primitive::Raw => true,
                 Primitive::Any => false,
-                Primitive::Num => true,
-                Primitive::Str => true,
-                Primitive::Bool => true,
-                Primitive::Unit => true,
-                Primitive::Raw => true,
             },
-            TypeKind::Transparent(..) => true,
-            TypeKind::EnumVariant { .. } => true,
-            TypeKind::Trait(_) => false,
-            TypeKind::Generic(_) => false,
         }
     }
 }

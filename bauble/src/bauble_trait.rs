@@ -139,10 +139,10 @@ impl BaubleError for ToRustError {
                 format!("Wrong kind for the variant {variant} of type {ty}")
             }
             ToRustErrorKind::MissingAttribute { .. } => {
-                format!("Missing attributy for the type {ty}")
+                format!("Missing attribute for the type {ty}")
             }
             ToRustErrorKind::InvalidIntLiteral { conv_error } => {
-                format!("Invalid literal of type {ty}: {conv_error}")
+                format!("Invalid integer literal of type {ty}: {conv_error}")
             }
             ToRustErrorKind::Custom(custom) => {
                 format!("error for type {ty}: {}", custom.message)
@@ -165,7 +165,7 @@ impl BaubleError for ToRustError {
                 vec![(
                     Spanned::new(
                         self.0.value_span,
-                        Cow::Owned(format!("Missing field the field {field}")),
+                        Cow::Owned(format!("Missing the field {field}")),
                     ),
                     Level::Error,
                 )]
@@ -272,7 +272,7 @@ impl BaubleAllocator<'_> for DefaultAllocator {
 }
 
 pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static {
-    /// DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
+    /// # DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
     ///
     /// Constructs a reflection type that bauble uses to parse and resolve types.
     fn construct_type(registry: &mut types::TypeRegistry) -> types::Type;

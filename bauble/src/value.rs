@@ -427,8 +427,8 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::PathError(err) => {
                 let generic = match err {
                     crate::path::PathError::EmptyElem(_) => "Malformed path",
-                    crate::path::PathError::MissingEnd(_) => "Malformed path",
-                    crate::path::PathError::MissingStart(_) => "Malformed path",
+                    crate::path::PathError::MissingDelimiterEnd(_) => "Malformed path",
+                    crate::path::PathError::MissingDelimiterStart(_) => "Malformed path",
                     crate::path::PathError::TooManyElements => "Path had too many elements",
                     crate::path::PathError::ZeroElements => "Path had no elements",
                 };
@@ -445,14 +445,14 @@ impl BaubleError for Spanned<ConversionError> {
                             Level::Error,
                         ));
                     }
-                    crate::path::PathError::MissingEnd(i) => {
+                    crate::path::PathError::MissingDelimiterEnd(i) => {
                         errors.push((
                             Cow::Borrowed("This delimiter is missing a closing delimiter")
                                 .spanned(span_index(*i)),
                             Level::Error,
                         ));
                     }
-                    crate::path::PathError::MissingStart(i) => {
+                    crate::path::PathError::MissingDelimiterStart(i) => {
                         errors.push((
                             Cow::Borrowed("This delimiter is missing an opening delimiter")
                                 .spanned(span_index(*i)),
@@ -823,7 +823,7 @@ impl RefCopy {
 }
 
 #[derive(Clone)]
-pub struct Symbols<'a> {
+pub(crate) struct Symbols<'a> {
     ctx: &'a BaubleContext,
     uses: HashMap<TypePathElem, RefCopy>,
 }
@@ -899,7 +899,7 @@ impl<'a> Symbols<'a> {
                 PathTreeEnd::PathEnd(PathEnd::Ident(ident)) => {
                     let path_end =
                         TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                    let path = leading.combine(&path_end);
+                    let path = leading.join(&path_end);
                     if let Some(reference) = this.ctx.get_ref(path.borrow()) {
                         this.add_ref(path_end.to_owned(), reference)
                             .map_err(|e| e.spanned(ident.span))?;
@@ -1025,7 +1025,7 @@ impl<'a> Symbols<'a> {
             PathEnd::Ident(ident) => {
                 let span = ident.span;
                 let ident = TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                let path = leading.combine(&ident);
+                let path = leading.join(&ident);
                 self.ctx.get_ref(path.borrow()).ok_or_else(|| {
                     if let Some(r) = self.ctx.get_ref(leading.borrow())
                         && let Some(ty) = r.ty
@@ -1106,7 +1106,7 @@ pub fn register_assets(
     // TODO: Register these in a correct order to allow for assets referencing assets.
     for (ident, binding) in &values.values {
         let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = path.combine(ident);
+        let path = path.join(ident);
         let mut symbols = Symbols { ctx: &*ctx, uses };
 
         let ty = if let Some(ty) = &binding.type_path {
@@ -1158,7 +1158,7 @@ pub fn register_assets(
     }
 }
 
-pub fn convert_values(
+pub(crate) fn convert_values(
     file: FileId,
     values: Values,
     default_symbols: &Symbols,
@@ -1177,7 +1177,7 @@ pub fn convert_values(
 
     for (symbol, _) in &values.values {
         let ident = TypePathElem::new(symbol.as_str()).expect("Invariant");
-        let path = path.combine(&ident);
+        let path = path.join(&ident);
 
         if let Some(PathReference {
             asset: Some(asset), ..
@@ -1248,7 +1248,7 @@ pub fn convert_values(
 
         objects.push(create_object(path, name.borrow(), val));
 
-        Value::Ref(path.combine(&name))
+        Value::Ref(path.join(&name))
     };
 
     let mut node_removals = Vec::new();
@@ -2712,7 +2712,7 @@ fn convert_object(
 
 fn create_object(path: TypePath<&str>, name: TypePathElem<&str>, value: Val) -> Object {
     Object {
-        object_path: path.combine(&name),
+        object_path: path.join(&name),
         value,
     }
 }

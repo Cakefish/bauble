@@ -137,8 +137,8 @@ impl<S: AsRef<str>> std::fmt::Display for TypePath<S> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathError {
     EmptyElem(usize),
-    MissingEnd(usize),
-    MissingStart(usize),
+    MissingDelimiterEnd(usize),
+    MissingDelimiterStart(usize),
     TooManyElements,
     ZeroElements,
 }
@@ -165,7 +165,7 @@ fn path_len(path: &str) -> Result<usize> {
             skip_delims(path_iter, c, i)?;
         }
 
-        Err(PathError::MissingEnd(index))
+        Err(PathError::MissingDelimiterEnd(index))
     }
 
     fn skip_delims(
@@ -176,7 +176,7 @@ fn path_len(path: &str) -> Result<usize> {
         if let Some((_, end)) = PATH_DELIMS.iter().find(|(start, _)| *start == current) {
             end_delim(path_iter, *end, index)
         } else if PATH_DELIMS.iter().any(|(_, end)| *end == current) {
-            Err(PathError::MissingStart(index))
+            Err(PathError::MissingDelimiterStart(index))
         } else {
             Ok(())
         }
@@ -288,7 +288,7 @@ impl<S: AsRef<str>> TypePath<S> {
         TypePath(self.as_str().to_string())
     }
 
-    pub fn combine<T: AsRef<str>>(&self, other: &TypePath<T>) -> TypePath {
+    pub fn join<T: AsRef<str>>(&self, other: &TypePath<T>) -> TypePath {
         match (self.is_empty(), other.is_empty()) {
             (true, true) => TypePath::empty(),
             (false, true) => self.to_owned(),
