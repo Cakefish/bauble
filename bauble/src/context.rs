@@ -620,11 +620,15 @@ impl BaubleContext {
     }
 
     pub fn get_file_path(&self, file: FileId) -> TypePath<&str> {
-        self.files
-            .get(file.0)
-            .expect("FileId was invalid")
-            .0
-            .borrow()
+        match self.files.get(file.0) {
+            Some(p) => p.0.borrow(),
+            None => {
+                panic!(
+                    "`FileId({})` is invalid, was it registered in another context?",
+                    file.0
+                );
+            }
+        }
     }
 
     pub fn get_source(&self, file: FileId) -> &Source {
