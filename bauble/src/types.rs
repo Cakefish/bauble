@@ -83,7 +83,7 @@ pub struct Trait {
     pub types: TypeSet,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TypeRegistry {
     types: Vec<Type>,
 

@@ -2575,7 +2575,8 @@ fn convert_value<'a>(
     }
 
     let types = symbols.ctx.type_registry();
-    let mut val_type = value_type(value, symbols)?;
+    let raw_val_type = value_type(value, symbols)?;
+    let mut val_type = raw_val_type;
 
     let ty_id = resolve_type(
         symbols,
@@ -2801,14 +2802,14 @@ fn convert_value<'a>(
             }
         }
         types::TypeKind::Enum { variants, .. } => {
-            if let Some(val_type) = val_type.as_ref() {
+            if let Some(val_type) = raw_val_type {
                 let variant = if let types::TypeKind::EnumVariant {
                     variant, enum_type, ..
                 } = &types.key_type(val_type.value).kind
                     && *enum_type == ty_id.value
                 {
                     debug_assert_eq!(variants.get(variant.borrow()), Some(val_type.value));
-                    Some((variant.borrow(), *val_type))
+                    Some((variant.borrow(), val_type))
                 } else if types.key_type(ty_id.value).meta.generic_base_type.is_some()
                     && let types::TypeKind::Generic(generic) = &types.key_type(val_type.value).kind
                     && let Some(instance) = types.iter_type_set(generic).next()
@@ -2886,7 +2887,7 @@ fn convert_value<'a>(
         }
         types::TypeKind::BitFlags(variants) => match &value.value.value {
             parse::Value::Path(path) => {
-                if let Some(val_type) = val_type.as_ref()
+                if let Some(val_type) = raw_val_type
                     && let types::TypeKind::EnumVariant {
                         variant,
                         enum_type,
