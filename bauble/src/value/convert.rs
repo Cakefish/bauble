@@ -375,6 +375,7 @@ trait ConvertValueInner: ConvertValue {
             }};
         }
 
+        /// A struct to store extra attributes, this is mostly to avoid allocations in most cases.
         enum ExtraAttributes<'a, C0, C1> {
             None,
             BorrowedA(&'a Attributes<C0>),
@@ -524,6 +525,7 @@ trait ConvertValueInner: ConvertValue {
             let mut meta = meta.with_object_name(object_name.borrow());
 
             let mut new_attrs = Attributes::default();
+            // We prioritise taking from `extra_attributes`. Putting extra stuff in a new `extra_attributes`.
             let mut extra_attributes = if let Some(extra_attributes) = extra_attributes {
                 for (ident, v) in extra_attributes {
                     let Some(ty) = ty.meta.attributes.get(ident.as_str()) else {
@@ -555,6 +557,7 @@ trait ConvertValueInner: ConvertValue {
 
             let old_len = new_attrs.len();
             let empty = extra_attributes.is_empty();
+            // And then we take from our own attributes, putting duplicates and extra stuff in `extra_attributes`.
             for (ident, v) in &attributes.value {
                 let (Some(ty), false) = (
                     ty.meta.attributes.get(ident.as_str()),
@@ -597,6 +600,7 @@ trait ConvertValueInner: ConvertValue {
                 }
             }
 
+            // Check if we're missing any required attributes.
             for (attr, _) in ty.meta.attributes.required.iter() {
                 if new_attrs.get(attr.as_str()).is_none() {
                     return Err(ConversionError::MissingField {
@@ -658,6 +662,7 @@ trait ConvertValueInner: ConvertValue {
 
                 Value::Map(values)
             }
+            // Both struct and enum variant are parsed from a `Struct` value.
             (
                 types::TypeKind::Struct(fields) | types::TypeKind::EnumVariant { fields, .. },
                 Value::Struct(f),
@@ -700,6 +705,7 @@ trait ConvertValueInner: ConvertValue {
                 _ => Err(ConversionError::WrongFields { ty: *ty_id }.spanned(span))?,
             }),
             (types::TypeKind::Enum { variants }, _) => {
+                // First see if we already have the correct value.
                 let (variant, inner) = if let Value::Enum(variant, value) = &value.value
                     && raw_val_type.is_some_and(|ty| ty.value == ty_id.value)
                 {
@@ -716,9 +722,16 @@ trait ConvertValueInner: ConvertValue {
                         variant.map(|v| v.to_owned()),
                         extra_attributes.convert_with(value, meta.reborrow(), ty)?,
                     )
-                } else if let Some(raw_val_type) = raw_val_type
-                    && let Some((variant, _)) =
-                        variants.iter().find(|(_, ty)| *ty == raw_val_type.value)
+                }
+                // Otherwise see if we have the value of an `EnumVariant` or its generic type.
+                else if let Some(raw_val_type) = raw_val_type
+                    && let Some((variant, variant_ty)) =
+                        variants.iter().find(|(_, ty)| {
+                            *ty == raw_val_type.value
+                                || types.key_type(*ty).meta.generic_base_type.is_some_and(|t| {
+                                    types.key_generic(t).contains(raw_val_type.value)
+                                })
+                        })
                 {
                     (
                         variant.to_owned().spanned(raw_val_type.span),
@@ -727,10 +740,14 @@ trait ConvertValueInner: ConvertValue {
                             &Spanned::new(attributes_span, Default::default()),
                             Some(raw_val_type),
                             meta.reborrow(),
-                            raw_val_type.value,
+                            variant_ty,
                         )?,
                     )
-                } else {
+                }
+                // If not, try to parse as all different variants, we could still convert
+                // correctly if we just did this step. But it produces ugly errors, and
+                // isn't as easy to check as the other ways.
+                else {
                     let mut variant_errors = Vec::new();
 
                     let (variant, inner) = variants
@@ -763,6 +780,7 @@ trait ConvertValueInner: ConvertValue {
 
                 Value::Enum(variant, Box::new(inner))
             }
+            // An or-type can be just one path, represented by a struct with unit fields.
             (types::TypeKind::Or(variants), Value::Struct(f)) => {
                 if matches!(f, FieldsKind::Unit) {
                     if let Some(val_type) = raw_val_type {
@@ -804,6 +822,8 @@ trait ConvertValueInner: ConvertValue {
                     Err(ConversionError::WrongFields { ty: *ty_id }.spanned(span))?
                 }
             }
+            // Or it can be the `Or` value. We assume this is correctly type because of the checks
+            // for `Or` in `value_type`.
             (types::TypeKind::Or(_), Value::Or(idents)) => {
                 let variants = idents
                     .iter()
@@ -816,9 +836,11 @@ trait ConvertValueInner: ConvertValue {
 
                 Value::Or(variants)
             }
+            // A ref can be from a ref value.
             (types::TypeKind::Ref(_), Value::Ref(r)) => {
                 Value::Ref(Self::get_asset(r, meta.symbols)?)
             }
+            // Or from another value, and we instantiate a new object that we can refer to.
             (types::TypeKind::Ref(ty), _) => {
                 let object_name = TypePathElem::new(format!("{}&{}", meta.object_name, ty.inner()))
                     .expect("We didn't add any ::");
@@ -844,6 +866,7 @@ trait ConvertValueInner: ConvertValue {
                         PrimitiveValue::Raw(v.clone())
                     }
 
+                    // NOTE: Keep this exhaustive so this can be found when adding a new primitive type.
                     (
                         types::Primitive::Num
                         | types::Primitive::Bool
@@ -855,11 +878,13 @@ trait ConvertValueInner: ConvertValue {
                     ) => Err(expected_err())?,
                 })
             }
+            // Either we get a transparent value,
             (types::TypeKind::Transparent(ty), Value::Transparent(value)) => {
                 let val = extra_attributes.convert_with(value, meta.reborrow(), *ty)?;
 
                 Value::Transparent(Box::new(val))
             }
+            // or we convert from a flat one.
             (types::TypeKind::Transparent(ty), _) => {
                 let val = extra_attributes.convert_inner_with(
                     value,

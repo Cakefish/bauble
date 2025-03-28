@@ -1,5 +1,16 @@
+use crate::{
+    Spanned,
+    parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
+    path::TypePath,
+    types::TypeRegistry,
+};
+
+use super::{Attributes, CopyVal, FieldsKind, Object, Val, Value};
+/// Config to be used when formatting bauble.
 pub struct DisplayConfig {
+    /// String inserted for tabs.
     pub tab: &'static str,
+    /// If supported this will create inline comments printing the type paths of values.
     pub debug_types: bool,
 }
 
@@ -12,6 +23,7 @@ impl Default for DisplayConfig {
     }
 }
 
+/// Display something that implements `IndentedDisplay`.
 pub fn display_formatted<CTX, V: IndentedDisplay<CTX> + ?Sized>(
     v: &V,
     ctx: &CTX,
@@ -136,15 +148,6 @@ mod formatter {
 
 use formatter::{Formatter, LineWriter};
 
-use crate::{
-    Spanned,
-    parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
-    path::TypePath,
-    types::TypeRegistry,
-};
-
-use super::{Attributes, CopyVal, FieldsKind, Object, Val, Value};
-
 pub trait IndentedDisplay<CTX> {
     fn indented_display(&self, w: LineWriter<CTX>);
 }
@@ -248,6 +251,12 @@ impl<CTX, Inner: IndentedDisplay<CTX>, Ref: std::fmt::Display, Variant: std::fmt
                 super::PrimitiveValue::Str(v) => w.debug_fmt(v),
                 super::PrimitiveValue::Bool(v) => w.fmt(v),
                 super::PrimitiveValue::Unit => w.write("()"),
+                // `Raw` is a bit annoying to handle here, since we don't know how it
+                // was originally expressed. So we need to check:
+                // 1. Can it be displayed as a literal raw, i.e `#some_raw`
+                // 2. If not, how many braces do we need, since raw values can contain
+                //    `}`, but it has to end with as many `}` as there was `{` at the
+                //    start.
                 super::PrimitiveValue::Raw(v) => {
                     let mut num_braces = None;
                     let mut row = None;

@@ -19,7 +19,7 @@ mod error;
 mod symbols;
 
 use convert::{ConvertMeta, ConvertValue, no_attr, value_type};
-pub use display::{DisplayConfig, display_formatted};
+pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
