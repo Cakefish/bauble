@@ -1,13 +1,13 @@
 pub struct DisplayConfig {
     pub tab: &'static str,
-    pub type_debug: bool,
+    pub debug_types: bool,
 }
 
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
             tab: "    ",
-            type_debug: false,
+            debug_types: false,
         }
     }
 }
@@ -294,7 +294,9 @@ impl<CTX, Inner: IndentedDisplay<CTX>, Ref: std::fmt::Display, Variant: std::fmt
                 }
             },
             Value::Transparent(inner) | Value::Enum(_, inner) => {
-                inner.indented_display(w);
+                w.write("(");
+                inner.indented_display(w.reborrow());
+                w.write(")");
             }
         }
     }
@@ -332,16 +334,17 @@ impl<CTX, Inner: IndentedDisplay<CTX>> IndentedDisplay<CTX> for Attributes<Inner
 
 impl IndentedDisplay<TypeRegistry> for Val {
     fn indented_display(&self, mut w: LineWriter<TypeRegistry>) {
-        if w.config().type_debug {
+        if w.config().debug_types {
             w.write("/* ");
             let path = w.ctx().key_type(*self.ty).meta.path.clone();
             w.fmt(&path);
-            w.write(" */");
+            w.write(" */ ");
         }
 
-        self.attributes.indented_display(w.reborrow());
-
-        w.write(" ");
+        if !self.attributes.is_empty() {
+            self.attributes.indented_display(w.reborrow());
+            w.write(" ");
+        }
 
         let path = w
             .ctx()
@@ -354,8 +357,10 @@ impl IndentedDisplay<TypeRegistry> for Val {
 
 impl<CTX> IndentedDisplay<CTX> for ParseVal {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
-        self.attributes.indented_display(w.reborrow());
-        w.write(" ");
+        if !self.attributes.is_empty() {
+            self.attributes.indented_display(w.reborrow());
+            w.write(" ");
+        }
 
         let ty = self.ty.as_ref().map(|p| p.to_string());
         self.value
@@ -372,11 +377,11 @@ impl IndentedDisplay<TypeRegistry> for CopyVal {
                 attributes,
             } => {
                 let path = if let Some(ty) = ty {
-                    if w.config().type_debug {
+                    if w.config().debug_types {
                         w.write("/* ");
                         let path = w.ctx().key_type(ty.value).meta.path.clone();
                         w.fmt(&path);
-                        w.write(" */");
+                        w.write(" */ ");
                     }
 
                     w.ctx()
@@ -387,9 +392,10 @@ impl IndentedDisplay<TypeRegistry> for CopyVal {
                     TypePath::empty()
                 };
 
-                attributes.indented_display(w.reborrow());
-
-                w.write(" ");
+                if !attributes.is_empty() {
+                    attributes.indented_display(w.reborrow());
+                    w.write(" ");
+                }
 
                 value.indented_display(w.with_type(path.as_str()));
             }

@@ -161,15 +161,25 @@ impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for S
 
 // TODO Re-add error recovery
 pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>> {
-    let comment_end = just::<_, ParserSource<'a>, Extra<'a>>('\n').or(end().map(|_| '\0'));
-    let comments = just("//")
-        .ignore_then(recursive::<'_, '_, ParserSource<'a>, char, _, _, _>(
-            |more_comment| comment_end.or(any().ignore_then(more_comment)),
-        ))
-        .ignored()
-        .padded()
-        .repeated()
-        .padded(); // Have to pad again in case there are no repetitions
+    let line_comment_end = just::<_, ParserSource<'a>, Extra<'a>>('\n').or(end().map(|_| '\0'));
+    let line_comment = just("//")
+        .ignore_then(
+            any()
+                .and_is(line_comment_end.not())
+                .repeated()
+                .then_ignore(line_comment_end),
+        )
+        .ignored();
+    // This is a naive block comment. It doesn't handle nested block comments.
+    let block_comment = just("/*")
+        .ignore_then(
+            any()
+                .and_is(just("*/").not())
+                .repeated()
+                .then_ignore(just("*/")),
+        )
+        .ignored();
+    let comments = line_comment.or(block_comment).padded().repeated().padded(); // Have to pad again in case there are no repetitions
 
     // A rust identifier, use snake case.
     let ident = any()
@@ -216,7 +226,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
         .map(|(leading, last)| Path { leading, last });
 
     let uses = just("use")
-        .padded_by(comments.clone())
+        .padded_by(comments)
         .ignore_then(recursive::<
             '_,
             '_,
@@ -230,14 +240,11 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             let everything = just('*').map(|_| PathTreeEnd::Everything);
 
             let group = node
-                .padded_by(comments.clone())
-                .separated_by(just(',').padded_by(comments.clone()))
+                .padded_by(comments)
+                .separated_by(just(',').padded_by(comments))
                 .allow_trailing()
                 .collect()
-                .delimited_by(
-                    just('{').padded_by(comments.clone()),
-                    just('}').padded_by(comments.clone()),
-                )
+                .delimited_by(just('{').padded_by(comments), just('}').padded_by(comments))
                 .map(PathTreeEnd::Group);
             path_start
                 .map_with(|v, e| v.spanned(e.span()))
@@ -255,26 +262,30 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                     .spanned(e.span())
                 })
         }))
-        .then_ignore(just(';').padded_by(comments.clone()))
+        .then_ignore(just(';').padded_by(comments))
         .repeated()
         .collect();
 
     let object = recursive(
         |object: Recursive<dyn Parser<'a, ParserSource<'a>, ParseVal, Extra<'a>>>| {
-            let attribute = just('#').ignore_then(
-                ident
-                    .padded()
-                    .padded_by(comments.clone())
-                    .then_ignore(just('='))
-                    .then(object.clone())
-                    .separated_by(just(','))
-                    .allow_trailing()
-                    .collect()
-                    .delimited_by(just('['), just(']')),
-            );
+            let attribute = just("#[")
+                .padded()
+                .padded_by(comments)
+                .ignore_then(
+                    ident
+                        .padded()
+                        .padded_by(comments)
+                        .then_ignore(just('='))
+                        .then(object.clone())
+                        .separated_by(just(','))
+                        .allow_trailing()
+                        .collect(),
+                )
+                .then_ignore(just("]").padded().padded_by(comments));
 
             let attributes = attribute
-                .padded_by(comments.clone())
+                .padded()
+                .padded_by(comments)
                 .repeated()
                 .collect()
                 .map_with(|value: Vec<Vec<(Ident, ParseVal)>>, e| {
@@ -395,11 +406,16 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 .map(|_| Value::Primitive(PrimitiveValue::Bool(true)))
                 .or(just("false").map(|_| Value::Primitive(PrimitiveValue::Bool(false))));
 
-            let separator = just(',').padded_by(comments.clone());
+            let transparent = object
+                .clone()
+                .map(|v| Value::Transparent(Box::new(v)))
+                .delimited_by(just('(').padded_by(comments), just(')').padded_by(comments));
+
+            let separator = just(',').padded_by(comments);
 
             let sequence = object
                 .clone()
-                .separated_by(separator.clone())
+                .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded();
@@ -407,17 +423,11 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             // Parser for arrays.
             let array = sequence
                 .clone()
-                .delimited_by(
-                    just('[').padded_by(comments.clone()),
-                    just(']').padded_by(comments.clone()),
-                )
+                .delimited_by(just('[').padded_by(comments), just(']').padded_by(comments))
                 .map(Value::Array);
 
             let tuple = sequence
-                .delimited_by(
-                    just('(').padded_by(comments.clone()),
-                    just(')').padded_by(comments.clone()),
-                )
+                .delimited_by(just('(').padded_by(comments), just(')').padded_by(comments))
                 .recover_with(via_parser(nested_delimiters(
                     '(',
                     ')',
@@ -426,18 +436,15 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 )));
 
             let structure = ident
-                .padded_by(comments.clone())
+                .padded_by(comments)
                 .padded()
-                .then_ignore(just(':').padded().padded_by(comments.clone()))
+                .then_ignore(just(':').padded().padded_by(comments))
                 .then(object.clone())
-                .separated_by(separator.clone())
+                .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
-                .delimited_by(
-                    just('{').padded_by(comments.clone()),
-                    just('}').padded_by(comments.clone()),
-                )
+                .delimited_by(just('{').padded_by(comments), just('}').padded_by(comments))
                 .map(|fields| fields.into_iter().collect())
                 .recover_with(via_parser(nested_delimiters(
                     '{',
@@ -451,34 +458,29 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 Value::Ref(path)
             });
 
-            let path_p = path.padded_by(comments.clone()).padded();
+            let path_p = path.padded_by(comments).padded();
 
             // Parser for tuple structs
             let unnamed_struct = path_p
-                .clone()
                 .then(tuple.clone())
                 .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Unnamed(fields))));
 
             // Parser for structs
             let named_struct = path_p
-                .clone()
                 .then(structure.clone())
                 .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Named(fields))));
 
             // Parser for a structure, without an identifier
             let map = object
                 .clone()
-                .padded_by(comments.clone())
+                .padded_by(comments)
                 .then_ignore(just(':'))
-                .then(object.padded_by(comments.clone()))
+                .then(object.padded_by(comments))
                 .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
-                .delimited_by(
-                    just('{').padded_by(comments.clone()),
-                    just('}').padded_by(comments.clone()),
-                )
+                .delimited_by(just('{').padded_by(comments), just('}').padded_by(comments))
                 .recover_with(via_parser(nested_delimiters(
                     '{',
                     '}',
@@ -497,9 +499,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             // - `| Path::B`
             // - `|`
             let path_or = path_p
-                .clone()
                 .map_with(|path, e| path.spanned(e.span()))
-                .separated_by(just('|').padded_by(comments.clone()))
+                .separated_by(just('|').padded_by(comments))
                 .allow_leading()
                 .at_least(2)
                 .collect()
@@ -536,6 +537,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 num.map(no_type),
                 string.map(no_type),
                 reference.map(no_type),
+                transparent.map(no_type),
                 array.map(no_type),
                 tuple.map(no_type),
                 map.map(no_type),
@@ -557,7 +559,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 .then(
                     value
                         .map_with(|value, e| value.spanned(e.span()))
-                        .padded_by(comments.clone())
+                        .padded_by(comments)
                         .padded()
                         .boxed(),
                 )
@@ -584,18 +586,18 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
     fn binding<'a, V: 'a + Debug>(
         ident: impl 'a + Parser<'a, ParserSource<'a>, Ident, Extra<'a>>,
         value: impl 'a + Parser<'a, ParserSource<'a>, V, Extra<'a>>,
-        path: impl 'a + Parser<'a, ParserSource<'a>, Path, Extra<'a>> + Clone,
-        comments: impl 'a + Clone + Parser<'a, ParserSource<'a>, (), Extra<'a>>,
+        path: impl 'a + Parser<'a, ParserSource<'a>, Path, Extra<'a>>,
+        comments: impl 'a + Copy + Parser<'a, ParserSource<'a>, (), Extra<'a>>,
     ) -> impl Parser<'a, ParserSource<'a>, (Ident, Option<Path>, V), Extra<'a>> {
         ident
-            .padded_by(comments.clone())
+            .padded_by(comments)
             .padded()
             .then(
                 just(':')
-                    .padded_by(comments.clone())
+                    .padded_by(comments)
                     .padded()
                     .ignore_then(path)
-                    .padded_by(comments.clone())
+                    .padded_by(comments)
                     .padded()
                     .or_not(),
             )
@@ -613,7 +615,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
     uses.then(
         just("copy")
             .padded()
-            .ignore_then(binding(ident, object.clone(), path, comments.clone()))
+            .ignore_then(binding(ident, object.clone(), path, comments))
             .map(|binding| (binding, ItemType::Copy))
             .or(binding(ident, object, path, comments).map(|binding| (binding, ItemType::Value)))
             .repeated()
@@ -641,6 +643,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
         )
     })
     .then_ignore(end())
+    .padded()
+    .padded_by(comments)
 }
 
 pub fn allowed_in_raw_literal(c: char) -> bool {

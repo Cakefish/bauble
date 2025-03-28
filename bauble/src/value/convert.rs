@@ -375,132 +375,153 @@ trait ConvertValueInner: ConvertValue {
             }};
         }
 
+        enum ExtraAttributes<'a, C0, C1> {
+            None,
+            BorrowedA(&'a Attributes<C0>),
+            BorrowedB(&'a Attributes<C1>),
+            BorrowedC(&'a Attributes<Val>),
+            Owned(Attributes<AnyVal<'a>>),
+        }
+
+        impl<'a, C0: ConvertValue, C1: ConvertValue> ExtraAttributes<'a, C0, C1> {
+            fn get_mut(&mut self) -> &mut Attributes<AnyVal<'a>> {
+                match self {
+                    ExtraAttributes::None => {
+                        *self = ExtraAttributes::Owned(Attributes::default());
+
+                        self.get_mut()
+                    }
+                    ExtraAttributes::BorrowedA(attributes) => {
+                        *self = ExtraAttributes::Owned(C0::to_any_attributes(attributes));
+
+                        self.get_mut()
+                    }
+                    ExtraAttributes::BorrowedB(attributes) => {
+                        *self = ExtraAttributes::Owned(C1::to_any_attributes(attributes));
+
+                        self.get_mut()
+                    }
+                    ExtraAttributes::BorrowedC(attributes) => {
+                        *self = ExtraAttributes::Owned(Val::to_any_attributes(attributes));
+
+                        self.get_mut()
+                    }
+                    ExtraAttributes::Owned(attributes) => attributes,
+                }
+            }
+
+            pub fn extend(&mut self, attributes: &'a Attributes<Val>) {
+                if self.is_empty() {
+                    *self = ExtraAttributes::BorrowedC(attributes);
+                } else {
+                    self.get_mut().0.extend(
+                        attributes
+                            .iter()
+                            .map(|(ident, v)| (ident.clone(), v.to_any())),
+                    );
+                }
+            }
+
+            fn convert_with<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+                &mut self,
+                value: &C1,
+                meta: ConvertMeta<F_>,
+                expected_type: TypeId,
+            ) -> Result<Val> {
+                match std::mem::replace(self, ExtraAttributes::None) {
+                    ExtraAttributes::None => value.convert(meta, expected_type, no_attr()),
+                    ExtraAttributes::BorrowedA(attributes) => {
+                        value.convert(meta, expected_type, Some(attributes))
+                    }
+                    ExtraAttributes::BorrowedB(attributes) => {
+                        value.convert(meta, expected_type, Some(attributes))
+                    }
+                    ExtraAttributes::BorrowedC(attributes) => {
+                        value.convert(meta, expected_type, Some(attributes))
+                    }
+                    ExtraAttributes::Owned(attributes) => {
+                        value.convert(meta, expected_type, Some(&attributes))
+                    }
+                }
+            }
+
+            fn convert_inner_with<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+                &mut self,
+                value: &Spanned<Value<C1, C1::Ref, C1::Variant>>,
+                attributes: &Spanned<Attributes<C1>>,
+                val_ty: Option<Spanned<TypeId>>,
+                meta: ConvertMeta<F_>,
+                expected_type: TypeId,
+            ) -> Result<Val>
+            where
+                C1: ConvertValueInner,
+            {
+                match std::mem::replace(self, ExtraAttributes::None) {
+                    ExtraAttributes::None => {
+                        C1::convert_inner(value, attributes, val_ty, meta, expected_type, no_attr())
+                    }
+                    ExtraAttributes::BorrowedA(extra_attributes) => C1::convert_inner(
+                        value,
+                        attributes,
+                        val_ty,
+                        meta,
+                        expected_type,
+                        Some(extra_attributes),
+                    ),
+                    ExtraAttributes::BorrowedB(extra_attributes) => C1::convert_inner(
+                        value,
+                        attributes,
+                        val_ty,
+                        meta,
+                        expected_type,
+                        Some(extra_attributes),
+                    ),
+                    ExtraAttributes::BorrowedC(extra_attributes) => C1::convert_inner(
+                        value,
+                        attributes,
+                        val_ty,
+                        meta,
+                        expected_type,
+                        Some(extra_attributes),
+                    ),
+                    ExtraAttributes::Owned(extra_attributes) => C1::convert_inner(
+                        value,
+                        attributes,
+                        val_ty,
+                        meta,
+                        expected_type,
+                        Some(&extra_attributes),
+                    ),
+                }
+            }
+
+            fn is_empty(&self) -> bool {
+                match self {
+                    ExtraAttributes::None => true,
+                    ExtraAttributes::BorrowedA(a) => a.is_empty(),
+                    ExtraAttributes::BorrowedB(a) => a.is_empty(),
+                    ExtraAttributes::BorrowedC(a) => a.is_empty(),
+                    ExtraAttributes::Owned(a) => a.is_empty(),
+                }
+            }
+
+            fn first(&self) -> Option<&Ident> {
+                match self {
+                    ExtraAttributes::None => None,
+                    ExtraAttributes::BorrowedA(attributes) => attributes.first().map(|(k, _)| k),
+                    ExtraAttributes::BorrowedB(attributes) => attributes.first().map(|(k, _)| k),
+                    ExtraAttributes::BorrowedC(attributes) => attributes.first().map(|(k, _)| k),
+                    ExtraAttributes::Owned(attributes) => attributes.first().map(|(k, _)| k),
+                }
+            }
+        }
+
         let attributes_span = attributes.span;
 
         let (attributes, mut extra_attributes) = {
             let object_name =
                 TypePathElem::new(format!("{}#", meta.object_name)).expect("No :: were added");
             let mut meta = meta.with_object_name(object_name.borrow());
-            enum ExtraAttributes<'a, C0, C1> {
-                None,
-                BorrowedA(&'a Attributes<C0>),
-                BorrowedB(&'a Attributes<C1>),
-                Owned(Attributes<AnyVal<'a>>),
-            }
-
-            impl<'a, C0: ConvertValue, C1: ConvertValue> ExtraAttributes<'a, C0, C1> {
-                fn get_mut(&mut self) -> &mut Attributes<AnyVal<'a>> {
-                    match self {
-                        ExtraAttributes::None => {
-                            *self = ExtraAttributes::Owned(Attributes::default());
-
-                            self.get_mut()
-                        }
-                        ExtraAttributes::BorrowedA(attributes) => {
-                            *self = ExtraAttributes::Owned(C0::to_any_attributes(attributes));
-
-                            self.get_mut()
-                        }
-                        ExtraAttributes::BorrowedB(attributes) => {
-                            *self = ExtraAttributes::Owned(C1::to_any_attributes(attributes));
-
-                            self.get_mut()
-                        }
-                        ExtraAttributes::Owned(attributes) => attributes,
-                    }
-                }
-
-                fn convert_with<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
-                    &mut self,
-                    value: &C1,
-                    meta: ConvertMeta<F_>,
-                    expected_type: TypeId,
-                ) -> Result<Val> {
-                    match std::mem::replace(self, ExtraAttributes::None) {
-                        ExtraAttributes::None => value.convert(meta, expected_type, no_attr()),
-                        ExtraAttributes::BorrowedA(attributes) => {
-                            value.convert(meta, expected_type, Some(attributes))
-                        }
-                        ExtraAttributes::BorrowedB(attributes) => {
-                            value.convert(meta, expected_type, Some(attributes))
-                        }
-                        ExtraAttributes::Owned(attributes) => {
-                            value.convert(meta, expected_type, Some(&attributes))
-                        }
-                    }
-                }
-
-                fn convert_inner_with<
-                    F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
-                >(
-                    &mut self,
-                    value: &Spanned<Value<C1, C1::Ref, C1::Variant>>,
-                    attributes: &Spanned<Attributes<C1>>,
-                    val_ty: Option<Spanned<TypeId>>,
-                    meta: ConvertMeta<F_>,
-                    expected_type: TypeId,
-                ) -> Result<Val>
-                where
-                    C1: ConvertValueInner,
-                {
-                    match std::mem::replace(self, ExtraAttributes::None) {
-                        ExtraAttributes::None => C1::convert_inner(
-                            value,
-                            attributes,
-                            val_ty,
-                            meta,
-                            expected_type,
-                            no_attr(),
-                        ),
-                        ExtraAttributes::BorrowedA(extra_attributes) => C1::convert_inner(
-                            value,
-                            attributes,
-                            val_ty,
-                            meta,
-                            expected_type,
-                            Some(extra_attributes),
-                        ),
-                        ExtraAttributes::BorrowedB(extra_attributes) => C1::convert_inner(
-                            value,
-                            attributes,
-                            val_ty,
-                            meta,
-                            expected_type,
-                            Some(extra_attributes),
-                        ),
-                        ExtraAttributes::Owned(extra_attributes) => C1::convert_inner(
-                            value,
-                            attributes,
-                            val_ty,
-                            meta,
-                            expected_type,
-                            Some(&extra_attributes),
-                        ),
-                    }
-                }
-
-                fn is_empty(&self) -> bool {
-                    match self {
-                        ExtraAttributes::None => true,
-                        ExtraAttributes::BorrowedA(a) => a.is_empty(),
-                        ExtraAttributes::BorrowedB(a) => a.is_empty(),
-                        ExtraAttributes::Owned(a) => a.is_empty(),
-                    }
-                }
-
-                fn first(&self) -> Option<&Ident> {
-                    match self {
-                        ExtraAttributes::None => None,
-                        ExtraAttributes::BorrowedA(attributes) => {
-                            attributes.first().map(|(k, _)| k)
-                        }
-                        ExtraAttributes::BorrowedB(attributes) => {
-                            attributes.first().map(|(k, _)| k)
-                        }
-                        ExtraAttributes::Owned(attributes) => attributes.first().map(|(k, _)| k),
-                    }
-                }
-            }
 
             let mut new_attrs = Attributes::default();
             let mut extra_attributes = if let Some(extra_attributes) = extra_attributes {
@@ -849,6 +870,11 @@ trait ConvertValueInner: ConvertValue {
                 )?;
 
                 Value::Transparent(Box::new(val))
+            }
+            (_, Value::Transparent(value)) => {
+                // Try again as if it wasn't a transparent value.
+                extra_attributes.extend(&attributes);
+                return extra_attributes.convert_with(value, meta.reborrow(), expected_type);
             }
             _ => Err(expected_err())?,
         };

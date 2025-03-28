@@ -64,7 +64,9 @@ macro_rules! bauble_test {
                 panic!("Error converting");
             }
 
-            let re_source = $crate::display_formatted(objects.as_slice(), ctx.type_registry(), &$crate::DisplayConfig::default());
+            let re_source = $crate::display_formatted(objects.as_slice(), ctx.type_registry(), &$crate::DisplayConfig {
+                ..$crate::DisplayConfig::default()
+            });
 
             let (re_objects, errors) = ctx.reload_paths([(file_path, re_source.as_str())]);
 
