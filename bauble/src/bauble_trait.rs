@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::HashMap, fmt::Display};
 use indexmap::IndexMap;
 
 use crate::{
-    Val, Value,
+    CustomError, Val, Value,
     context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
     parse::Ident,
@@ -34,6 +34,21 @@ impl Display for VariantKind {
 
 /// The error that `Bauble::from_bauble` returns.
 pub struct ToRustError(Box<InnerToRustError>);
+
+impl ToRustError {
+    /// When in a `Bauble::from_bauble` function prefer using `Bauble::error`.
+    pub fn new(
+        in_type: std::any::TypeId,
+        value_span: Span,
+        kind: impl Into<ToRustErrorKind>,
+    ) -> Self {
+        Self(Box::new(InnerToRustError {
+            in_type,
+            value_span,
+            kind: kind.into(),
+        }))
+    }
+}
 
 struct InnerToRustError {
     in_type: std::any::TypeId,
@@ -74,34 +89,9 @@ pub enum ToRustErrorKind {
     Custom(CustomError),
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct CustomError {
-    pub message: Cow<'static, str>,
-    pub level: Level,
-    pub labels: Vec<(Spanned<Cow<'static, str>>, Level)>,
-}
-
-impl CustomError {
-    pub fn new(s: impl Into<Cow<'static, str>>) -> Self {
-        Self {
-            message: s.into(),
-            level: Level::Error,
-            labels: Vec::new(),
-        }
-    }
-
-    pub fn with_level(mut self, level: Level) -> Self {
-        self.level = level;
-        self
-    }
-
-    pub fn with_label(mut self, s: Spanned<impl Into<Cow<'static, str>>>, level: Level) -> Self {
-        self.labels.push((s.map(|s| s.into()), level));
-        self
-    }
-
-    pub fn with_err_label(self, s: Spanned<impl Into<Cow<'static, str>>>) -> Self {
-        self.with_label(s, Level::Error)
+impl From<CustomError> for ToRustErrorKind {
+    fn from(value: CustomError) -> Self {
+        Self::Custom(value)
     }
 }
 
@@ -280,11 +270,11 @@ pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static
     /// Construct this type from a bauble value. This function doesn't do any type checking.
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError>;
 
-    fn error(span: crate::Span, error: ToRustErrorKind) -> ToRustError {
+    fn error(span: crate::Span, error: impl Into<ToRustErrorKind>) -> ToRustError {
         ToRustError(Box::new(InnerToRustError {
             in_type: std::any::TypeId::of::<Self>(),
             value_span: span,
-            kind: error,
+            kind: error.into(),
         }))
     }
 }
@@ -307,7 +297,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
     }
 }
 
-macro_rules! impl_nums {
+macro_rules! impl_ints {
     ($($ty:ty)*) => {
         $(
             impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for $ty {
@@ -315,6 +305,32 @@ macro_rules! impl_nums {
                     types::Type {
                         meta: types::TypeMeta {
                             path: TypePath::new(stringify!($ty)).unwrap().to_owned(),
+                            extra_validation: Some(|val, _registry| {
+                                if let Value::Primitive(PrimitiveValue::Num(num)) = val.value.value {
+                                    if !num.is_integer() {
+                                        Err(
+                                            crate::CustomError::new(format!("`{}` should be an integer", stringify!($ty)))
+                                                .with_err_label(
+                                                    Spanned::new(val.value.span, "This is a decimal number"),
+                                                ),
+                                        )?
+                                    }
+
+                                    if !(rust_decimal::Decimal::from(<$ty>::MIN)..=rust_decimal::Decimal::from(<$ty>::MAX)).contains(&num) {
+                                        Err(
+                                            crate::CustomError::new(format!("Out of range for integer `{}`", stringify!($ty)))
+                                                .with_err_label(
+                                                    Spanned::new(
+                                                        val.value.span,
+                                                        format!("Expected this to be in the range {}..={}", <$ty>::MIN, <$ty>::MAX),
+                                                    ),
+                                                ),
+                                        )?
+                                    }
+                                }
+
+                                Ok(())
+                            }),
                             ..Default::default()
                         },
                         kind: types::TypeKind::Primitive(types::Primitive::Num),
@@ -341,9 +357,44 @@ macro_rules! impl_nums {
     };
 }
 
-impl_nums!(
+macro_rules! impl_floats {
+    ($($ty:ty)*) => {
+        $(
+            impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for $ty {
+                fn construct_type(_: &mut types::TypeRegistry) -> types::Type {
+                    types::Type {
+                        meta: types::TypeMeta {
+                            path: TypePath::new(stringify!($ty)).unwrap().to_owned(),
+                            ..Default::default()
+                        },
+                        kind: types::TypeKind::Primitive(types::Primitive::Num),
+                    }
+                }
+
+                fn from_bauble(
+                    val: Val,
+                    allocator: &A,
+                ) -> Result<A::Out<Self>, ToRustError> {
+                    if let Value::Primitive(PrimitiveValue::Num(num)) = val.value.value {
+                        // NOTE: This implementation always returns `Some` so we don't need any extra validation.
+                        let f = <$ty>::try_from(num).expect("`Decimal `try_into` a float should always be `Some`.");
+                        // SAFETY: no allocations are made in this method
+                        Ok(unsafe { allocator.wrap(f) })
+                    } else {
+                        Err(<Self as Bauble<'a, A>>::error(val.span(), ToRustErrorKind::WrongType { found: val.ty }))
+                    }
+                }
+            }
+        )*
+    };
+}
+
+impl_ints!(
     u8 u16 u32 u64 u128 usize
     i8 i16 i32 i64 i128 isize
+);
+
+impl_floats!(
     f32 f64
 );
 

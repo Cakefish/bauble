@@ -14,6 +14,14 @@ pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
     const BAUBLE_PATH: &'static str;
 }
 
+impl BaubleTrait for dyn std::any::Any {
+    const BAUBLE_PATH: &'static str = "std::Any";
+}
+
+impl BaubleTrait for dyn std::fmt::Debug {
+    const BAUBLE_PATH: &'static str = "std::Debug";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(usize);
 
@@ -44,7 +52,6 @@ pub struct TraitId(TypeId);
 
 #[derive(Clone, Debug)]
 enum SealedTypeSet {
-    #[expect(dead_code)]
     All,
     Certain(HashSet<TypeId>),
 }
@@ -76,6 +83,7 @@ pub struct Trait {
     pub types: TypeSet,
 }
 
+#[derive(Clone, Debug)]
 pub struct TypeRegistry {
     types: Vec<Type>,
 
@@ -83,6 +91,9 @@ pub struct TypeRegistry {
 
     generic: HashMap<TypePath, TypeId>,
     type_from_rust: HashMap<std::any::TypeId, TypeId>,
+    to_be_assigned: HashSet<TypeId>,
+
+    top_level_trait_dependency: TraitId,
 
     primitive_types: [TypeId; 5],
 }
@@ -96,6 +107,7 @@ pub struct Variant {
     pub ident: TypePathElem,
     pub kind: VariantKind,
     pub attributes: NamedFields,
+    pub extra_validation: Option<ValidationFunction>,
     pub extra: IndexMap<String, String>,
 }
 
@@ -105,6 +117,7 @@ impl Variant {
             ident: ident.to_owned(),
             kind: VariantKind::Explicit(fields),
             attributes: Default::default(),
+            extra_validation: None,
             extra: Default::default(),
         }
     }
@@ -114,6 +127,7 @@ impl Variant {
             ident: ident.to_owned(),
             kind: VariantKind::Flattened(ty),
             attributes: Default::default(),
+            extra_validation: None,
             extra: Default::default(),
         }
     }
@@ -127,6 +141,11 @@ impl Variant {
         self.extra = extra;
         self
     }
+
+    pub fn with_validation(mut self, validation: ValidationFunction) -> Self {
+        self.extra_validation = Some(validation);
+        self
+    }
 }
 
 impl TypeRegistry {
@@ -136,38 +155,74 @@ impl TypeRegistry {
 
             asset_refs: Default::default(),
 
+            // NOTE: Top level values always have to derive from this trait.
+            top_level_trait_dependency: Self::any_trait(),
+
+            to_be_assigned: Default::default(),
+
             generic: Default::default(),
             type_from_rust: Default::default(),
 
             primitive_types: [Self::any_type(); 5],
         };
 
-        // The 0 element in types is Any.
+        // The element at index 0 is always any trait
+        let any_trait = this.get_or_register_trait::<dyn std::any::Any>();
+        this.types[any_trait.0.0].kind = TypeKind::Trait(TypeSet(SealedTypeSet::All));
+
+        // The element at index 1 is any trait.
         let any_id = this.get_or_register_type::<crate::Val, crate::DefaultAllocator>();
 
-        this.set_primitive_type(Primitive::Any, any_id);
+        this.set_primitive_default_type(any_id);
 
         let float_id = this.get_or_register_type::<f32, crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Num, float_id);
+        this.set_primitive_default_type(float_id);
 
         let string_id = this.get_or_register_type::<String, crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Str, string_id);
+        this.set_primitive_default_type(string_id);
 
         let bool_id = this.get_or_register_type::<bool, crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Bool, bool_id);
+        this.set_primitive_default_type(bool_id);
 
         let unit_id = this.get_or_register_type::<(), crate::DefaultAllocator>();
-        this.set_primitive_type(Primitive::Unit, unit_id);
+        this.set_primitive_default_type(unit_id);
 
         this
     }
 
-    /// This is present in all `TypeRegistry`
-    pub fn any_type() -> TypeId {
-        TypeId(0)
+    /// If a type implements the required top-level type.
+    pub fn impls_top_level_type(&self, id: TypeId) -> bool {
+        self.key_trait(self.top_level_trait_dependency).contains(id)
     }
 
-    pub fn set_primitive_type(&mut self, primitive: Primitive, id: TypeId) {
+    pub fn top_level_trait(&self) -> TraitId {
+        self.top_level_trait_dependency
+    }
+
+    /// This is present in all `TypeRegistry`
+    pub fn any_trait() -> TraitId {
+        TraitId(TypeId(0))
+    }
+
+    /// This is present in all `TypeRegistry`
+    pub fn any_type() -> TypeId {
+        TypeId(1)
+    }
+
+    /// Sets what type this primitive type should use by default.
+    ///
+    /// For example, if you register a type with `TypeKind::Primitive(Primitive::Str)`
+    /// that type will then be used whenever we have a string bauble value we can't
+    /// resolve the type for.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `TypeKind` of this type isn't a primitive.
+    pub fn set_primitive_default_type(&mut self, id: TypeId) {
+        let TypeKind::Primitive(primitive) = self.key_type(id).kind else {
+            panic!("Tried to set a non-primitive type as a primitive default type")
+        };
+
         self.primitive_types[primitive as usize] = id;
     }
 
@@ -181,6 +236,11 @@ impl TypeRegistry {
 
     pub fn type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&self) -> Option<TypeId> {
         self.type_id_of_std_id(std::any::TypeId::of::<T>())
+    }
+
+    pub fn trait_id<T: ?Sized + BaubleTrait>(&self) -> Option<TraitId> {
+        self.type_id_of_std_id(std::any::TypeId::of::<T>())
+            .map(TraitId)
     }
 
     pub fn type_ids(&self) -> impl Iterator<Item = TypeId> {
@@ -209,13 +269,16 @@ impl TypeRegistry {
                 variants
                     .into_iter()
                     .map(|variant| {
-                        let ty = self.register_type(|_this, _id| {
+                        let ty = self.register_type(|this, id| {
+                            this.to_be_assigned.insert(id);
+
                             Type {
                                 meta: TypeMeta {
                                     // We assign this later.
                                     path: TypePath::empty(),
                                     attributes: variant.attributes,
                                     extra: variant.extra,
+                                    extra_validation: variant.extra_validation,
                                     ..Default::default()
                                 },
                                 kind: match variant.kind {
@@ -245,41 +308,43 @@ impl TypeRegistry {
         } else {
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
-                Type {
+                let ty = Type {
                     meta: TypeMeta {
                         path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
                             .expect("Invariant"),
+                        traits: this.key_type(inner).meta.traits.clone(),
                         ..Default::default()
                     },
                     kind: TypeKind::Ref(inner),
-                }
+                };
+
+                this.on_register_type(id, &ty);
+
+                ty
             })
         }
     }
 
-    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
-        self.type_id::<T, A>().unwrap_or_else(|| {
-            self.register_type(|this, id| {
-                this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
-                let ty = T::construct_type(this);
-                for tr in ty.meta.traits.iter() {
-                    let TypeKind::Trait(types) = &mut this.types[tr.0.0].kind else {
-                        panic!("Invariant")
-                    };
+    fn on_register_type(&mut self, id: TypeId, ty: &Type) {
+        for tr in ty.meta.traits.iter() {
+            let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
+                panic!("Invariant")
+            };
 
-                    types.insert(id);
-                }
+            types.insert(id);
+        }
 
-                match &ty.kind {
-                    TypeKind::Enum { variants } => {
-                        for (variant, variant_ty) in &variants.0 {
-                            this.types[variant_ty.0].meta = TypeMeta {
+        match &ty.kind {
+            TypeKind::Enum { variants } => {
+                for (variant, variant_ty) in &variants.0 {
+                    self.to_be_assigned.remove(variant_ty);
+                    self.types[variant_ty.0].meta = TypeMeta {
                                 path: ty.meta.path.join(variant),
                                 generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                    let generic_id = this.get_or_register_generic_type(
-                                        this.key_type(generic).meta.path.join(variant),
+                                    let generic_id = self.get_or_register_generic_type(
+                                        self.key_type(generic).meta.path.join(variant),
                                     );
-                                    let TypeKind::Generic(types) = &mut this.types[generic_id.0.0].kind else {
+                                    let TypeKind::Generic(types) = &mut self.types[generic_id.0.0].kind else {
                                         panic!(
                                             "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
                                         )
@@ -291,17 +356,20 @@ impl TypeRegistry {
                                 }),
                                 ..ty.meta.clone()
                             };
-                            if let TypeKind::EnumVariant { enum_type, variant: v, .. } =
-                                &mut this.types[variant_ty.0].kind
-                            {
-                                *enum_type = id;
-                                *v = variant.clone();
-                            }
-                        }
+                    if let TypeKind::EnumVariant {
+                        enum_type,
+                        variant: v,
+                        ..
+                    } = &mut self.types[variant_ty.0].kind
+                    {
+                        *enum_type = id;
+                        *v = variant.clone();
                     }
-                    TypeKind::BitFlags(bitflag) => {
-                        for variant in &bitflag.variants {
-                            this.register_type(|this, variant_id| Type {
+                }
+            }
+            TypeKind::BitFlags(bitflag) => {
+                for variant in &bitflag.variants {
+                    self.register_type(|this, variant_id| Type {
                                 meta: TypeMeta {
                                     path: ty.meta.path.join(variant),
                                     generic_base_type: ty.meta.generic_base_type.map(|generic| {
@@ -327,24 +395,70 @@ impl TypeRegistry {
                                     variant: variant.clone(),
                                 },
                             });
-                        }
-                    }
-                    _ => {}
                 }
+            }
+            _ => {}
+        }
 
-                if let Some(ty) = ty.meta.generic_base_type {
-                    let TypeKind::Generic(types) = &mut this.types[ty.0.0].kind else {
-                        panic!(
-                            "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
-                        )
-                    };
+        if let Some(ty) = ty.meta.generic_base_type {
+            let TypeKind::Generic(types) = &mut self.types[ty.0.0].kind else {
+                panic!("`generic_base_type` pointing to a type that isn't `TypeKind::Generic`")
+            };
 
-                    types.insert(id);
+            types.insert(id);
+        }
+    }
+
+    #[must_use]
+    pub fn register_dummy_type(&mut self, ty: Type) -> TypeId {
+        self.register_type(|this, id| {
+            this.on_register_type(id, &ty);
+
+            ty
+        })
+    }
+
+    /// Is this type system valid?
+    ///
+    /// Currently this checks:
+    /// - Are there any unassigned registered types?
+    pub fn validate(&self) -> bool {
+        self.to_be_assigned.is_empty()
+    }
+
+    pub fn reserve_type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+        self.type_id::<T, A>().unwrap_or_else(|| {
+            self.register_type(|this, id| {
+                this.to_be_assigned.insert(id);
+                this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
+                Type {
+                    meta: TypeMeta::default(),
+                    kind: TypeKind::Primitive(Primitive::Any),
                 }
-
-                ty
             })
         })
+    }
+
+    pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+        let id = self.type_id::<T, A>();
+
+        match id {
+            Some(id) if self.to_be_assigned.remove(&id) => {
+                let ty = T::construct_type(self);
+                self.on_register_type(id, &ty);
+                self.types[id.0] = ty;
+
+                id
+            }
+            Some(id) => id,
+            None => self.register_type(|this, id| {
+                this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
+                let ty = T::construct_type(this);
+                this.on_register_type(id, &ty);
+
+                ty
+            }),
+        }
     }
 
     /// Generics types are used so that users of bauble can use the path.
@@ -376,7 +490,7 @@ impl TypeRegistry {
         }
     }
 
-    pub fn get_or_register_trait<T: BaubleTrait>(&mut self) -> TraitId {
+    pub fn get_or_register_trait<T: ?Sized + BaubleTrait>(&mut self) -> TraitId {
         let rust_id = std::any::TypeId::of::<T>();
         if let Some(id) = self.type_from_rust.get(&rust_id) {
             if matches!(self.key_type(*id).kind, TypeKind::Trait(_)) {
@@ -408,6 +522,20 @@ impl TypeRegistry {
         }
     }
 
+    pub fn set_top_level_trait_dependency(&mut self, tr: TraitId) {
+        self.top_level_trait_dependency = tr;
+    }
+
+    pub fn add_trait_dependency(&mut self, ty: TypeId, tr: TraitId) {
+        self.types[ty.0].meta.traits.push(tr);
+
+        let TypeKind::Trait(tr) = &mut self.types[tr.0.0].kind else {
+            unreachable!("Invariant");
+        };
+
+        tr.insert(ty);
+    }
+
     /// # Panics
     /// Can panic if `TypeId` hasn't been constructed using this `TypeRegistry`.
     pub fn key_type(&self, id: impl Into<TypeId>) -> &Type {
@@ -434,6 +562,10 @@ impl TypeRegistry {
 
     pub fn get_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&self) -> Option<&Type> {
         self.type_id::<T, A>().map(|id| self.key_type(id))
+    }
+
+    pub fn get_trait<T: ?Sized + BaubleTrait>(&self) -> Option<&Type> {
+        self.trait_id::<T>().map(|id| self.key_type(id))
     }
 
     pub fn iter_type_set<'a>(&self, type_set: &'a TypeSet) -> impl Iterator<Item = TypeId> + 'a {
@@ -463,24 +595,20 @@ impl TypeRegistry {
         match (&target.kind, &input.kind) {
             (TypeKind::Primitive(Primitive::Any), _) => true,
             (TypeKind::Transparent(id), _) => self.can_infer_from(*id, input_id),
-            (TypeKind::Enum { variants }, TypeKind::EnumVariant { enum_type, .. }) => {
-                *enum_type == output_id && variants.0.values().any(|id| *id == input_id)
+            (_, TypeKind::EnumVariant { enum_type, .. }) => {
+                self.can_infer_from(output_id, *enum_type)
             }
             (TypeKind::Enum { variants }, _) => {
                 // Direct references to flattened types are allowed.
                 variants
                     .0
                     .values()
-                    .any(|id| self.can_infer_from(*id, input_id))
+                    .any(|output_id| self.can_infer_from(*output_id, input_id))
             }
 
             (TypeKind::Trait(types), _) => types.contains(input_id),
             (TypeKind::Ref(a), TypeKind::Ref(b)) => self.can_infer_from(*a, *b),
             (TypeKind::Ref(t), _) => self.can_infer_from(*t, input_id),
-
-            (TypeKind::BitFlags { .. }, TypeKind::EnumVariant { enum_type, .. }) => {
-                *enum_type == output_id
-            }
 
             (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
 
@@ -490,7 +618,10 @@ impl TypeRegistry {
     }
 }
 
-#[derive(Default, Clone)]
+pub type ValidationFunction =
+    fn(val: &crate::Val, registry: &TypeRegistry) -> Result<(), crate::ConversionError>;
+
+#[derive(Default, Clone, Debug)]
 pub struct TypeMeta {
     pub path: TypePath,
     /// If this is `Some` the type is generic.
@@ -498,6 +629,8 @@ pub struct TypeMeta {
     pub traits: Vec<TraitId>,
     /// What attributes the type expects.
     pub attributes: NamedFields,
+    /// If this type has any extra invariants that need to be checked.
+    pub extra_validation: Option<ValidationFunction>,
     pub extra: IndexMap<String, String>,
 }
 
@@ -507,7 +640,16 @@ pub struct FieldType {
     pub extra: IndexMap<String, String>,
 }
 
-#[derive(Clone)]
+impl From<TypeId> for FieldType {
+    fn from(value: TypeId) -> Self {
+        Self {
+            id: value,
+            extra: Default::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Type {
     pub meta: TypeMeta,
     pub kind: TypeKind,
@@ -590,6 +732,12 @@ impl NamedFields {
             .into_iter()
             .map(|(key, val)| (key.into(), val.into()))
             .collect();
+        self
+    }
+
+    pub fn with_additional<F: Into<FieldType>>(mut self, f: F) -> Self {
+        self.allow_additional = Some(f.into());
+
         self
     }
 

@@ -46,6 +46,10 @@ impl Span {
             end: self.end + range.end,
         }
     }
+
+    pub fn file(&self) -> FileId {
+        self.file
+    }
 }
 
 impl chumsky::span::Span for crate::Span {
@@ -92,6 +96,18 @@ pub struct Spanned<T> {
     pub value: T,
 }
 
+impl<T: PartialOrd> PartialOrd for Spanned<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.value.partial_cmp(&other.value)
+    }
+}
+
+impl<T: Ord> Ord for Spanned<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.value.cmp(&other.value)
+    }
+}
+
 impl<T: PartialEq> PartialEq for Spanned<T> {
     fn eq(&self, other: &Self) -> bool {
         self.value.eq(&other.value)
@@ -135,6 +151,10 @@ impl<T> DerefMut for Spanned<T> {
 impl<T> Spanned<T> {
     pub fn new(span: Span, value: T) -> Self {
         Self { span, value }
+    }
+
+    pub fn as_ref(&self) -> Spanned<&T> {
+        Spanned::new(self.span, &self.value)
     }
 
     pub fn map<U>(self, mut map: impl FnMut(T) -> U) -> Spanned<U> {

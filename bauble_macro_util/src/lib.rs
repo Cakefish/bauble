@@ -3,8 +3,7 @@ use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use syn::{
     AttrStyle, Data, DeriveInput, Error, Expr, Fields, Index, Token, Type, WhereClause,
-    WherePredicate, parenthesized, parse::Parse, parse2, punctuated::Punctuated, spanned::Spanned,
-    token::PathSep,
+    WherePredicate, parse2, punctuated::Punctuated, spanned::Spanned, token::PathSep,
 };
 
 #[derive(Default, Clone)]
@@ -29,7 +28,7 @@ impl Extra {
         })?;
 
         if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-            Err(meta.error("unexpected token after extra value"))?
+            Err(meta.error("Unexpected token after `extra` attribute"))?
         }
 
         Ok(())
@@ -98,12 +97,20 @@ enum FieldsKind {
 
 #[derive(Default)]
 struct ContainerAttrs {
+    // On container or type
     extra: Extra,
-    path: Option<String>,
     rename: Option<Ident>,
+    validate: Option<Expr>,
+    flatten: bool,
+
+    // On type
+    traits: Vec<TokenStream>,
+    from: Option<Type>,
+    path: Option<String>,
     allocator: Option<TokenStream>,
     bounds: Option<Punctuated<WherePredicate, syn::token::Comma>>,
-    flatten: bool,
+
+    // On Container
     tuple: bool,
 }
 
@@ -124,13 +131,33 @@ impl ContainerType {
 }
 
 impl ContainerAttrs {
+    fn validate(&self) -> syn::Result<()> {
+        if let Some(from) = &self.from {
+            if self.flatten {
+                return Err(syn::Error::new_spanned(
+                    from,
+                    "The `flatten` and `from` attributes are incompatible",
+                ));
+            }
+            if self.tuple {
+                return Err(syn::Error::new_spanned(
+                    from,
+                    "The `tuple` and `from` attributes are incompatible",
+                ));
+            }
+        }
+
+        Ok(())
+    }
     fn parse(
         attributes: &[syn::Attribute],
         kind: ContainerType,
         flatten: bool,
+        from: Option<Type>,
     ) -> syn::Result<Self> {
         let mut this = Self {
             flatten,
+            from,
             ..Default::default()
         };
 
@@ -166,13 +193,7 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `rename` attribute"))?
                         }
 
-                        meta.input.parse::<Token![=]>()?;
-
-                        this.rename = Some(meta.input.parse()?);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after rename attribute"))?
-                        }
+                        this.rename = Some(meta.value()?.parse()?);
                     }
                     "flatten" => {
                         if this.flatten {
@@ -180,12 +201,24 @@ impl ContainerAttrs {
                         }
 
                         this.flatten = true;
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("unexpected token after flatten attribute"))?
-                        }
                     }
+                    "validate" => {
+                        if this.validate.is_some() {
+                            Err(meta.error("Duplicate `validate` attribute"))?
+                        }
 
+                        this.validate = Some(meta.value()?.parse()?);
+                    }
+                    "traits" => {
+                        if !kind.is_type() {
+                            Err(meta.error("The `traits` attribute can only be used on types"))?
+                        }
+                        meta.parse_nested_meta(|meta| {
+                            this.traits.push(meta.path.to_token_stream());
+
+                            Ok(())
+                        })?;
+                    }
                     "path" => {
                         if !kind.is_type() {
                             Err(meta.error("The `path` attribute can only be used on types"))?
@@ -195,10 +228,8 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `path` attribute"))?
                         }
 
-                        meta.input.parse::<Token![=]>()?;
-
                         let path =
-                            Punctuated::<Ident, PathSep>::parse_separated_nonempty(meta.input)?;
+                            Punctuated::<Ident, PathSep>::parse_separated_nonempty(meta.value()?)?;
 
                         if path.is_empty() {
                             Err(meta.error("`path` attribute can't be empty"))?
@@ -215,10 +246,17 @@ impl ContainerAttrs {
                             .join("::");
 
                         this.path = Some(path);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after path attribute"))?
+                    }
+                    "from" => {
+                        if !kind.is_type() {
+                            Err(meta.error("The `from` attribute can only be used on types"))?
                         }
+
+                        if this.from.is_some() {
+                            Err(meta.error("Duplicate `from` attribute"))?
+                        }
+
+                        this.from = Some(meta.value()?.parse()?);
                     }
 
                     "allocator" => {
@@ -230,13 +268,7 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `allocator` attribute"))?
                         }
 
-                        meta.input.parse::<Token![=]>()?;
-
-                        this.allocator = Some(meta.input.parse()?);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after allocator attribute"))?
-                        }
+                        this.allocator = Some(meta.value()?.parse()?);
                     }
 
                     "bounds" => {
@@ -244,19 +276,12 @@ impl ContainerAttrs {
                             Err(meta.error("The `bounds` attribute can only be used on types"))?
                         }
 
-                        if this.bounds.is_some() {
-                            Err(meta.error("Duplicate `bounds` attribute"))?
-                        }
+                        let bounds = this.bounds.get_or_insert_default();
 
-                        meta.input.parse::<Token![=]>()?;
-                        let bounds_parse;
-                        parenthesized!(bounds_parse in meta.input);
-                        this.bounds =
-                            Some(bounds_parse.parse_terminated(WherePredicate::parse, Token![,])?);
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after bounds attribute"))?
-                        }
+                        meta.parse_nested_meta(|meta| {
+                            bounds.push(meta.input.parse()?);
+                            Ok(())
+                        })?;
                     }
 
                     "tuple" => {
@@ -269,10 +294,6 @@ impl ContainerAttrs {
                         }
 
                         this.tuple = true;
-
-                        if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                            Err(meta.error("Unexpected token after bounds attribute"))?
-                        }
                     }
 
                     attr => {
@@ -283,6 +304,8 @@ impl ContainerAttrs {
                 Ok(())
             })?;
         }
+
+        this.validate()?;
 
         Ok(this)
     }
@@ -302,6 +325,7 @@ fn parse_fields(
     // The struct or variant's fields
     fields: &Fields,
     tuple: bool,
+    has_from: bool,
 ) -> syn::Result<FieldsInfo> {
     let mut val_count = 0;
     let kind = match fields {
@@ -360,10 +384,6 @@ fn parse_fields(
                                     default = Some(quote! { ::std::default::Default::default() });
                                 }
 
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("unexpected token after default value"))?
-                                }
-
                                 Ok(())
                             }
                             "as_default" => {
@@ -379,10 +399,6 @@ fn parse_fields(
                                         Some(quote! { ::std::default::Default::default() });
                                 }
 
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("unexpected token after default value"))?
-                                }
-
                                 Ok(())
                             }
                             "attribute" => {
@@ -395,10 +411,6 @@ fn parse_fields(
                                     attribute = Some(ident);
                                 } else {
                                     attribute = Some(field.ident.clone().ok_or(meta.error("For unnamed fields the attribute specifier needs to be annotated with `attribute = ident`"))?);
-                                }
-
-                                if !meta.input.is_empty() && !meta.input.peek(Token![,]) {
-                                    Err(meta.error("unexpected token after attribute specifier"))?
                                 }
 
                                 Ok(())
@@ -445,6 +457,10 @@ fn parse_fields(
                             }
                             if attribute.is_none() {
                                 val_count += 1;
+
+                                if has_from && (default.is_some() || !extra.0.is_empty()) {
+                                    Err(Error::new(field.span(), "This field won't be parsed from bauble as there is a `from` attribute on the type"))?
+                                }
                             }
 
                             FieldTy::Val {
@@ -728,6 +744,7 @@ fn derive_struct(
     ty_info: TypeInfo,
     fields: &FieldsInfo,
     flatten: bool,
+    from: Option<Type>,
 ) -> (TokenStream, TokenStream, TokenStream) {
     let allocator = &ty_info.allocator;
     let type_attributes = {
@@ -837,7 +854,32 @@ fn derive_struct(
             quote! { #ty }
         }
     };
-    let (pattern, type_data) = derive_fields(&ty_info, fields, &construct, flatten);
+
+    let (pattern, type_data) = match from {
+        Some(from) => {
+            let v = from_bauble(quote!(*__inner));
+            let fields = fields.fields.iter().map(|f| {
+                let ident = &f.name;
+                let name = f.variable_ident();
+                quote! { #ident: #name }
+            });
+            (
+                Some((
+                    quote! { ::bauble::Value::Transparent(__inner) },
+                    quote! {{
+                        let __from: #from = #v?;
+                        let #ty {
+                            #(#fields),*
+                        } = ::std::convert::From::from(__from);
+
+                        #construct
+                    }},
+                )),
+                quote! { ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#from, #allocator>()) },
+            )
+        }
+        None => derive_fields(&ty_info, fields, &construct, flatten),
+    };
 
     let construct = match pattern {
         Some((pattern, arm)) => {
@@ -854,6 +896,59 @@ fn derive_struct(
     (type_attributes, type_data, construct)
 }
 
+fn derive_variants_from<'a>(
+    variants: impl IntoIterator<Item = &'a syn::Variant>,
+    flatten: bool,
+    allocator: TokenStream,
+    from: Type,
+) -> syn::Result<(TokenStream, TokenStream, TokenStream)> {
+    for variant in variants.into_iter() {
+        let variant_attrs = ContainerAttrs::parse(
+            &variant.attrs,
+            ContainerType::Container,
+            flatten,
+            Some(from.clone()),
+        )?;
+
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple, true)?;
+
+        for field in fields.fields {
+            if !matches!(field.ty, FieldTy::Val {
+                    default: None,
+                    attribute: None,
+                    extra,
+                    ..
+                } if extra.0.is_empty())
+            {
+                Err(syn::Error::new(
+                    field.name.span(),
+                    "Can't have attributes on fields in an enum with the `from` attribute",
+                ))?
+            }
+        }
+    }
+
+    let v = from_bauble(quote!(*__inner));
+
+    Ok((
+        quote! { ::bauble::types::NamedFields::empty() },
+        quote! { ::bauble::types::TypeKind::Transparent(registry.get_or_register_type::<#from, #allocator>()) },
+        quote! {
+            match __value {
+                ::bauble::Value::Transparent(__inner) => {
+                    let __from: #from = #v?;
+                    let __res: Self = ::std::convert::From::from(__from);
+
+                    __res
+                },
+                _ => Err(Self::error(__span, ::bauble::ToRustErrorKind::WrongType {
+                    found: __ty,
+                }))?,
+            }
+        },
+    ))
+}
+
 fn derive_variants<'a>(
     variants: impl IntoIterator<Item = &'a syn::Variant>,
     flatten: bool,
@@ -863,7 +958,7 @@ fn derive_variants<'a>(
     let mut match_construct = Vec::new();
     for variant in variants.into_iter() {
         let variant_attrs =
-            ContainerAttrs::parse(&variant.attrs, ContainerType::Container, flatten)?;
+            ContainerAttrs::parse(&variant.attrs, ContainerType::Container, flatten, None)?;
 
         let ident = variant.ident.clone();
         let name = variant_attrs
@@ -871,7 +966,7 @@ fn derive_variants<'a>(
             .map(|s| s.to_string())
             .unwrap_or(ident.to_string());
 
-        let fields = parse_fields(&variant.fields, variant_attrs.tuple)?;
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple, false)?;
 
         let (type_attrs, type_kind, construct_variant) = derive_struct(
             TypeInfo {
@@ -881,13 +976,16 @@ fn derive_variants<'a>(
             },
             &fields,
             variant_attrs.flatten,
+            None,
         );
 
         let extra = variant_attrs.extra.convert();
+        let validate = variant_attrs.validate.into_iter();
         type_variants.push(quote! {
             ::bauble::types::Variant::flattened(::bauble::path::TypePathElem::new(#name).unwrap(), #type_kind)
                 .with_attributes(#type_attrs)
                 .with_extra(#extra)
+                #(.with_validation(#validate))*
         });
 
         match_construct.push(quote! {
@@ -939,6 +1037,7 @@ fn derive_variants<'a>(
 pub fn derive_bauble_derive_input(
     ast: &DeriveInput,
     allocator: Option<TokenStream>,
+    mut traits: Vec<TokenStream>,
 ) -> TokenStream {
     let ty_attrs = match ContainerAttrs::parse(
         &ast.attrs,
@@ -948,10 +1047,13 @@ pub fn derive_bauble_derive_input(
             Data::Union(_) => ContainerType::Both,
         },
         false,
+        None,
     ) {
         Ok(a) => a,
         Err(e) => return e.into_compile_error(),
     };
+
+    traits.extend(ty_attrs.traits);
 
     let allocator = ty_attrs
         .allocator
@@ -1036,7 +1138,7 @@ pub fn derive_bauble_derive_input(
     // Generate code to deserialize this type
     let (type_attributes, construct_type, construct_value) = match &ast.data {
         Data::Struct(data) => {
-            let fields = match parse_fields(&data.fields, ty_attrs.tuple) {
+            let fields = match parse_fields(&data.fields, ty_attrs.tuple, ty_attrs.from.is_some()) {
                 Ok(fields) => fields,
                 Err(err) => return err.into_compile_error(),
             };
@@ -1050,6 +1152,7 @@ pub fn derive_bauble_derive_input(
                 },
                 &fields,
                 ty_attrs.flatten,
+                ty_attrs.from,
             )
         }
         Data::Enum(data) => {
@@ -1060,7 +1163,12 @@ pub fn derive_bauble_derive_input(
                 )
                 .into_compile_error();
             }
-            match derive_variants(&data.variants, ty_attrs.flatten, allocator.clone()) {
+            match match ty_attrs.from {
+                Some(from) => {
+                    derive_variants_from(&data.variants, ty_attrs.flatten, allocator.clone(), from)
+                }
+                None => derive_variants(&data.variants, ty_attrs.flatten, allocator.clone()),
+            } {
                 Ok(res) => res,
                 Err(e) => return e.into_compile_error(),
             }
@@ -1072,6 +1180,11 @@ pub fn derive_bauble_derive_input(
     };
 
     let extra = ty_attrs.extra.convert();
+
+    let extra_validation = ty_attrs
+        .validate
+        .map(|v| quote!(::core::option::Option::Some(#v)))
+        .unwrap_or(quote!(::core::option::Option::None));
 
     // Assemble the implementation
     quote! {
@@ -1090,7 +1203,8 @@ pub fn derive_bauble_derive_input(
                         generic_base_type: #generic_type,
                         extra: #extra,
                         attributes: #type_attributes,
-                        ..::bauble::types::TypeMeta::default()
+                        traits: ::std::vec![#(registry.get_or_register_trait::<dyn #traits>()),*],
+                        extra_validation: #extra_validation,
                     },
                     kind: #construct_type,
                 }
@@ -1127,5 +1241,5 @@ pub fn derive_bauble(input: TokenStream) -> TokenStream {
         }
     };
 
-    derive_bauble_derive_input(&ast, None)
+    derive_bauble_derive_input(&ast, None, Vec::new())
 }

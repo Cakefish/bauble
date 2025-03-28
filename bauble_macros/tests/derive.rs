@@ -1,38 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, context::BaubleContextBuilder, error::print_errors, path::TypePath};
-
-macro_rules! bauble_test {
-    ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
-        {
-            let mut ctx = BaubleContextBuilder::new();
-            $(ctx.register_type::<$ty, _>();)*
-            let mut ctx = ctx.build();
-            ctx.register_file(TypePath::new("test").unwrap(), format!("\n{}\n", $source));
-
-            let (objects, errors) = ctx.load_all();
-
-            if !errors.is_empty() {
-                print_errors(Err::<(), _>(errors), &ctx);
-
-                panic!("Error converting");
-            }
-
-            let mut objects = objects.into_iter();
-            $(
-                let value = objects.next().expect("Not as many objects as test expr in bauble test?");
-                let mut read_value = $expr;
-                let test_value = std::mem::replace(&mut read_value, print_errors(Bauble::from_bauble(value.value, &::bauble::DefaultAllocator), &ctx).unwrap());
-
-
-                assert_eq!(
-                    read_value,
-                    test_value,
-                );
-            )*
-        }
-    };
-}
+use bauble::{Bauble, bauble_test};
 
 #[test]
 fn test_struct() {
@@ -46,7 +14,7 @@ fn test_struct() {
     bauble_test!(
         [Test]
         r#"
-        test = derive::Test { x: -5, y: 5, z: std::Option::Some(true) }
+        test = derive::Test { x: -5, y: 5, z: Some(true) }
         "#
         [Test {
             x: -5,
@@ -140,7 +108,7 @@ fn test_flattened() {
 fn test_std_types() {
     #[derive(Bauble, PartialEq, Debug)]
     struct Test {
-        a: Vec<(u32, i32)>,
+        a: Vec<(u8, i32)>,
         b: HashMap<String, Vec<bool>>,
         c: HashMap<[u32; 3], [Option<String>; 3]>,
     }
@@ -148,8 +116,6 @@ fn test_std_types() {
     bauble_test!(
         [Test]
         r#"
-        use std::Option::*;
-
         copy key = "🔑"
         copy value = Some("💖")
 
@@ -207,7 +173,48 @@ fn test_complex_flatten() {
         "#
         [
             Transparent(Inner(3, 0, 2), 1),
-            Transparent(Inner(1, 2, 3), 4)
+            Transparent(Inner(1, 2, 3), 4),
         ]
+    );
+}
+
+#[test]
+fn test_from() {
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(from = u32)]
+    struct NumberRepr(String);
+
+    impl From<u32> for NumberRepr {
+        fn from(value: u32) -> Self {
+            Self(value.to_string())
+        }
+    }
+
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(from = u32)]
+    enum TestEnum {
+        A(u32),
+        B(u32),
+    }
+
+    impl From<u32> for TestEnum {
+        fn from(value: u32) -> Self {
+            if value < 1000 {
+                Self::A(value)
+            } else {
+                Self::B(value - 1000)
+            }
+        }
+    }
+
+    bauble_test!(
+        [NumberRepr, TestEnum]
+        r#"
+        a: derive::NumberRepr = 1553  
+
+        b: derive::TestEnum = 555
+        c: derive::TestEnum = 1333
+        "#
+        [NumberRepr("1553".to_string()), TestEnum::A(555), TestEnum::B(333)]
     );
 }
