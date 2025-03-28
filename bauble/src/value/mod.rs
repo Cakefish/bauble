@@ -7,7 +7,7 @@ use symbols::RefCopy;
 use crate::{
     BaubleErrors, FileId, Span, VariantKind,
     context::PathReference,
-    parse::{ParseVal, Path, PathEnd, ParseValues},
+    parse::{ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
@@ -227,11 +227,11 @@ impl PathKind {
     fn could_be(&self, path: TypePath<&str>) -> bool {
         match self {
             PathKind::Direct(p) => p.borrow() == path,
-            PathKind::Indirect(p, ident) => {
-                path.starts_with(p.borrow())
+            PathKind::Indirect(leading, ident) => {
+                path.starts_with(leading.borrow())
                     && path.ends_with(*ident.borrow())
                     // If `leading` ends with `ident` we could have false positives if we didn't include this check.
-                    && path.byte_len() > p.byte_len() + ident.byte_len()
+                    && path.byte_len() > leading.byte_len() + ident.byte_len()
             }
         }
     }
