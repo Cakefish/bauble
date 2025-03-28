@@ -367,7 +367,7 @@ impl TypeRegistry {
                     }
                 }
             }
-            TypeKind::BitFlags(bitflag) => {
+            TypeKind::Or(bitflag) => {
                 for variant in &bitflag.variants {
                     self.register_type(|this, variant_id| Type {
                                 meta: TypeMeta {
@@ -788,7 +788,7 @@ pub struct MapType {
 }
 
 #[derive(Debug, Clone)]
-pub struct BitFlagsType {
+pub struct OrType {
     pub variants: Vec<TypePathElem>,
 }
 
@@ -802,7 +802,7 @@ pub enum TypeKind {
     Enum {
         variants: EnumVariants,
     },
-    BitFlags(BitFlagsType),
+    Or(OrType),
     Ref(TypeId),
     Primitive(Primitive),
     Transparent(TypeId),
@@ -843,7 +843,7 @@ impl TypeKind {
             | TypeKind::Map(_)
             | TypeKind::Struct(_)
             | TypeKind::Enum { .. }
-            | TypeKind::BitFlags(..)
+            | TypeKind::Or(..)
             | TypeKind::Ref(..)
             | TypeKind::Transparent(..)
             | TypeKind::EnumVariant { .. } => true,

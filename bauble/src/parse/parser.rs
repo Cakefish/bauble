@@ -4,13 +4,14 @@ use chumsky::{prelude::*, text::Char};
 use indexmap::IndexMap;
 
 use crate::{
-    BaubleContext,
+    Attributes, BaubleContext, FieldsKind, PrimitiveValue, Value,
     context::FileId,
     parse::{
-        Binding, Ident, Object,
-        value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},
+        Binding, ParseVal,
+        value::{Path, PathEnd, PathTreeEnd, PathTreeNode, Values},
     },
     spanned::{SpanExt, Spanned},
+    value::Ident,
 };
 
 type Extra<'a> = extra::Err<Rich<'a, char, crate::Span>>;
@@ -259,7 +260,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
         .collect();
 
     let object = recursive(
-        |object: Recursive<dyn Parser<'a, ParserSource<'a>, Object, Extra<'a>>>| {
+        |object: Recursive<dyn Parser<'a, ParserSource<'a>, ParseVal, Extra<'a>>>| {
             let attribute = just('#').ignore_then(
                 ident
                     .padded()
@@ -276,14 +277,14 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                 .padded_by(comments.clone())
                 .repeated()
                 .collect()
-                .map_with(|value: Vec<Vec<(Ident, Object)>>, e| {
+                .map_with(|value: Vec<Vec<(Ident, ParseVal)>>, e| {
                     value
                         .into_iter()
                         .flatten()
                         .collect::<IndexMap<_, _>>()
                         .spanned(e.span())
                 })
-                .map(|attributes| Attributes(attributes.value).spanned(attributes.span))
+                .map(|attributes| Attributes::from(attributes.value).spanned(attributes.span))
                 .boxed();
 
             let int = any()
@@ -343,9 +344,9 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                 .then(just('.').ignore_then(digits.to_slice()).or_not())
                 .to_slice()
                 .try_map(|s: &str, span| {
-                    Ok(Value::Num(s.parse().map_err(|_| {
-                        Rich::custom(span, "Failed to parse number")
-                    })?))
+                    Ok(Value::Primitive(PrimitiveValue::Num(s.parse().map_err(
+                        |_| Rich::custom(span, "Failed to parse number"),
+                    )?)))
                 });
 
             // A parser for strings, with escape characters
@@ -379,7 +380,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
             let string = just('"')
                 .ignore_then(none_of("\\\"").or(escape).repeated().collect::<String>())
                 .then_ignore(just('"'))
-                .map(Value::Str);
+                .map(|v| Value::Primitive(PrimitiveValue::Str(v)));
 
             let literal = just('#').ignore_then(
                 select! {
@@ -389,13 +390,13 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                     .repeated()
                     .to_slice()
                     .map(str::to_string)
-                    .map(Value::Raw),
+                    .map(|v| Value::Primitive(PrimitiveValue::Raw(v))),
             );
 
             // Parser for bools
             let bool_ = just("true")
-                .map(|_| Value::Bool(true))
-                .or(just("false").map(|_| Value::Bool(false)));
+                .map(|_| Value::Primitive(PrimitiveValue::Bool(true)))
+                .or(just("false").map(|_| Value::Primitive(PrimitiveValue::Bool(false))));
 
             let separator = just(',').padded_by(comments.clone());
 
@@ -448,34 +449,24 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                     |_| crate::parse::Fields::new(),
                 )));
 
-            let reference = just('$').ignore_then(path).map_with(|path, e| {
+            let reference = just('$').ignore_then(path).map(|path| {
                 // We have at least 1 element in the path.
-                Value::Ref(path.spanned(e.span()))
+                Value::Ref(path)
             });
 
-            let path_p = path
-                .map_with(|path, e| path.spanned(e.span()))
-                .padded_by(comments.clone())
-                .padded();
+            let path_p = path.padded_by(comments.clone()).padded();
 
             // Parser for tuple structs
-            let named_tuple =
-                path_p
-                    .clone()
-                    .then(tuple.clone())
-                    .map(|(name, fields)| Value::Tuple {
-                        name: Some(name),
-                        fields,
-                    });
+            let unnamed_struct = path_p
+                .clone()
+                .then(tuple.clone())
+                .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Unnamed(fields))));
 
-            // Parser for Structs
+            // Parser for structs
             let named_struct = path_p
                 .clone()
                 .then(structure.clone())
-                .map(|(name, fields)| Value::Struct {
-                    name: Some(name),
-                    fields,
-                });
+                .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Named(fields))));
 
             // Parser for a structure, without an identifier
             let map = object
@@ -500,15 +491,16 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                 .map(Value::Map);
 
             // Parser for a tuple.
-            let tuple = tuple.map(|fields| Value::Tuple { name: None, fields });
+            let tuple = tuple.map(Value::Tuple);
 
             let path_or = path_p
+                .map_with(|path, e| path.spanned(e.span()))
                 .separated_by(just('|').padded_by(comments.clone()))
                 .at_least(2)
                 .collect()
                 .map(Value::Or);
 
-            let path = path.map_with(|path, e| Value::Path(path.spanned(e.span())));
+            let path = path.map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
 
             // The start of a raw string: count the number of open braces
             let start_raw = just('{').repeated().at_least(1).count();
@@ -528,22 +520,23 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                     ),
                 )
                 .map(str::to_string)
-                .map(Value::Raw);
+                .map(|v| Value::Primitive(PrimitiveValue::Raw(v)));
 
+            let no_type = |t| (None, t);
             let value = choice((
-                bool_,
-                num,
-                string,
-                reference,
-                array,
-                tuple,
-                map,
-                named_tuple,
+                bool_.map(no_type),
+                num.map(no_type),
+                string.map(no_type),
+                reference.map(no_type),
+                array.map(no_type),
+                tuple.map(no_type),
+                map.map(no_type),
+                unnamed_struct,
                 named_struct,
-                path_or,
+                path_or.map(no_type),
                 path,
-                raw,
-                literal,
+                raw.map(no_type),
+                literal.map(no_type),
             ))
             // TODO Get this recovery method working again
             //
@@ -560,16 +553,32 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                         .padded()
                         .boxed(),
                 )
-                .map(|(attributes, value)| Object { attributes, value })
+                .map(
+                    #[expect(clippy::type_complexity)]
+                    |(attributes, spanned): (
+                        _,
+                        Spanned<(Option<Path>, crate::Value<ParseVal, Path, Path>)>,
+                    )| {
+                        let Spanned {
+                            span,
+                            value: (ty, value),
+                        } = spanned;
+                        ParseVal {
+                            ty,
+                            attributes,
+                            value: value.spanned(span),
+                        }
+                    },
+                )
         },
     );
 
     fn binding<'a, V: 'a + Debug>(
         ident: impl 'a + Parser<'a, ParserSource<'a>, Ident, Extra<'a>>,
         value: impl 'a + Parser<'a, ParserSource<'a>, V, Extra<'a>>,
-        path: impl 'a + Parser<'a, ParserSource<'a>, Spanned<Path>, Extra<'a>> + Clone,
+        path: impl 'a + Parser<'a, ParserSource<'a>, Path, Extra<'a>> + Clone,
         comments: impl 'a + Clone + Parser<'a, ParserSource<'a>, (), Extra<'a>>,
-    ) -> impl Parser<'a, ParserSource<'a>, (Ident, Option<Spanned<Path>>, V), Extra<'a>> {
+    ) -> impl Parser<'a, ParserSource<'a>, (Ident, Option<Path>, V), Extra<'a>> {
         ident
             .padded_by(comments.clone())
             .padded()
@@ -593,8 +602,6 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
         Copy,
     }
 
-    let path = path.map_with(|p, e| p.spanned(e.span()));
-
     uses.then(
         just("copy")
             .padded()
@@ -611,13 +618,14 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                 values: IndexMap::default(),
                 copies: IndexMap::default(),
             },
-            |mut values, ((ident, type_path, object), ty)| {
+            |mut values, ((ident, type_path, value), ty)| {
+                let binding = Binding { type_path, value };
                 match ty {
                     ItemType::Value => {
-                        values.values.insert(ident, Binding { type_path, object });
+                        values.values.insert(ident, binding);
                     }
                     ItemType::Copy => {
-                        values.copies.insert(ident, object);
+                        values.copies.insert(ident, binding);
                     }
                 }
                 values

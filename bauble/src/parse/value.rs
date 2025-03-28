@@ -1,17 +1,9 @@
 use core::fmt;
 
-use crate::{SpanExt, spanned::Spanned, types};
+use crate::{SpanExt, spanned::Spanned, value::Ident};
 use indexmap::IndexMap;
-use rust_decimal::Decimal;
 
-// Could maybe use `&str`?
-pub type Ident = Spanned<String>;
-
-pub type Map = Vec<(Object, Object)>;
-
-pub type Fields = IndexMap<Ident, Object>;
-
-pub type Sequence = Vec<Object>;
+pub type Fields = IndexMap<Ident, ParseVal>;
 
 pub type Use = Spanned<PathTreeNode>;
 
@@ -39,20 +31,18 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn is_just(&self, s: &str) -> bool {
-        self.leading.is_empty()
-            && match &self.last.value {
-                PathEnd::WithIdent(_) => false,
-                PathEnd::Ident(ident) => ident.as_str() == s,
-            }
-    }
-
     pub fn as_ident(&self) -> Option<Spanned<&str>> {
         if let (true, PathEnd::Ident(ident)) = (self.leading.is_empty(), &self.last.value) {
             Some(ident.as_str().spanned(ident.span))
         } else {
             None
         }
+    }
+
+    pub fn last_ident(&self) -> Spanned<&str> {
+        let (PathEnd::WithIdent(ident) | PathEnd::Ident(ident)) = &self.last.value;
+
+        ident.as_ref().map(|s| s.as_str())
     }
 
     pub fn span(&self) -> crate::Span {
@@ -75,55 +65,7 @@ impl fmt::Debug for Path {
     }
 }
 
-impl Path {
-    pub fn join(&mut self, part: Ident) -> bool {
-        match &mut self.last.value {
-            PathEnd::WithIdent(_) => false,
-            PathEnd::Ident(ident) => {
-                self.leading.push(std::mem::replace(ident, part));
-                true
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Value {
-    Unit,
-    Num(Decimal),
-    Bool(bool),
-    Str(String),
-    Ref(Spanned<Path>),
-
-    Path(Spanned<Path>),
-
-    Map(Map),
-    Struct {
-        name: Option<Spanned<Path>>,
-        fields: Fields,
-    },
-    Tuple {
-        name: Option<Spanned<Path>>,
-        fields: Sequence,
-    },
-    Array(Sequence),
-    Or(Vec<Spanned<Path>>),
-    Raw(String),
-}
-
-impl Value {
-    pub fn primitive_type(&self) -> Option<types::Primitive> {
-        match self {
-            Value::Unit => Some(types::Primitive::Unit),
-            Value::Num(_) => Some(types::Primitive::Num),
-            Value::Bool(_) => Some(types::Primitive::Bool),
-            Value::Str(_) => Some(types::Primitive::Str),
-            Value::Raw(_) => Some(types::Primitive::Raw),
-            _ => None,
-        }
-    }
-}
-
+/*
 const TAB: &str = "    ";
 impl Value {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -249,6 +191,7 @@ impl fmt::Display for Value {
         self.indented_display(0, f)
     }
 }
+*/
 
 #[derive(Debug)]
 pub enum PathTreeEnd {
@@ -257,6 +200,7 @@ pub enum PathTreeEnd {
     PathEnd(PathEnd),
 }
 
+/*
 impl PathTreeEnd {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -277,6 +221,7 @@ impl PathTreeEnd {
         }
     }
 }
+*/
 
 #[derive(Debug)]
 pub struct PathTreeNode {
@@ -284,6 +229,7 @@ pub struct PathTreeNode {
     pub end: Spanned<PathTreeEnd>,
 }
 
+/*
 impl PathTreeNode {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for leading in self.leading.iter() {
@@ -293,10 +239,9 @@ impl PathTreeNode {
         self.end.indented_display(indent, f)
     }
 }
+*/
 
-#[derive(Clone, Debug, Default)]
-pub struct Attributes(pub IndexMap<Ident, Object>);
-
+/*
 impl Attributes {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self(attributes) = self;
@@ -311,13 +256,25 @@ impl Attributes {
         Ok(())
     }
 }
+*/
+
+pub type Attributes = crate::value::Attributes<ParseVal>;
+pub type Value = crate::Value<ParseVal, Path, Path>;
 
 #[derive(Debug, Clone)]
-pub struct Object {
+pub struct ParseVal {
+    pub ty: Option<Path>,
     pub attributes: Spanned<Attributes>,
     pub value: Spanned<Value>,
 }
 
+#[derive(Debug, Clone)]
+pub struct Binding {
+    pub type_path: Option<Path>,
+    pub value: ParseVal,
+}
+
+/*
 impl Object {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.attributes.indented_display(indent, f)?;
@@ -329,7 +286,7 @@ impl Object {
 fn indented_display_value(
     ident: &Ident,
     type_path: Option<&Spanned<Path>>,
-    object: &Object,
+    object: &ParseVal,
     indent: usize,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
@@ -353,20 +310,16 @@ fn indented_display_value(
     write!(f, " = ")?;
     object.value.indented_display(indent, f)
 }
-
-#[derive(Debug)]
-pub struct Binding {
-    pub type_path: Option<Spanned<Path>>,
-    pub object: Object,
-}
+*/
 
 #[derive(Debug)]
 pub struct Values {
     pub uses: Vec<Use>,
     pub values: IndexMap<Ident, Binding>,
-    pub copies: IndexMap<Ident, Object>,
+    pub copies: IndexMap<Ident, Binding>,
 }
 
+/*
 impl Values {
     fn indented_display(&self, indent: usize, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let i = TAB.repeat(indent);
@@ -396,3 +349,4 @@ impl fmt::Display for Values {
         self.indented_display(0, f)
     }
 }
+*/

@@ -1,23 +1,24 @@
 #![feature(iterator_try_collect, let_chains, ptr_metadata)]
 
-pub mod bauble_trait;
-pub mod context;
-pub mod error;
-pub mod parse;
-pub mod spanned;
+mod context;
+mod error;
+mod parse;
+mod spanned;
+mod traits;
+mod value;
+
 pub mod types;
-pub mod value;
 
 pub use bauble_macros::Bauble;
 
-pub use bauble_trait::{
-    Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
-};
-pub use context::{BaubleContext, FileId, Source};
+pub use context::{BaubleContext, BaubleContextBuilder, FileId, Source};
 pub use error::{BaubleError, BaubleErrors, CustomError, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
+pub use traits::{
+    Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
+};
 pub use types::path;
-pub use value::{Attributes, ConversionError, FieldsKind, Object, Val, Value};
+pub use value::{Attributes, ConversionError, FieldsKind, Object, PrimitiveValue, Val, Value};
 
 #[doc(hidden)]
 pub mod private {
@@ -46,7 +47,7 @@ fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<Values, BaubleErrors> {
 macro_rules! bauble_test {
     ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
         {
-            let mut ctx = $crate::context::BaubleContextBuilder::new();
+            let mut ctx = $crate::BaubleContextBuilder::new();
             $(ctx.register_type::<$ty, _>();)*
             let mut ctx = ctx.build();
             ctx.register_file($crate::path::TypePath::new("test").unwrap(), format!("\n{}\n", $source));
