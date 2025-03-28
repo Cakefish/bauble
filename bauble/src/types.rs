@@ -585,6 +585,19 @@ impl TypeRegistry {
         }
     }
 
+    pub fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
+        let p = self.key_type(ty).meta.path.borrow();
+
+        if p.is_writable() {
+            Some(p)
+        } else if let Some(t) = self.key_type(ty).meta.generic_base_type {
+            let p = self.key_type(t).meta.path.borrow();
+            p.is_writable().then_some(p)
+        } else {
+            None
+        }
+    }
+
     pub fn can_infer_from(&self, output_id: TypeId, input_id: TypeId) -> bool {
         if output_id == input_id {
             return true;

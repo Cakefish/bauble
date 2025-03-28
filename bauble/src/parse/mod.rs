@@ -4,7 +4,7 @@ mod value;
 use std::borrow::Cow;
 
 use chumsky::error::Rich;
-pub use parser::{ParserSource, parser};
+pub use parser::{ParserSource, allowed_in_raw_literal, parser};
 
 pub use value::*;
 

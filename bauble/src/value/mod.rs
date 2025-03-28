@@ -7,17 +7,19 @@ use symbols::RefCopy;
 use crate::{
     BaubleErrors, FileId, Span, VariantKind,
     context::PathReference,
-    parse::{ParseVal, Path, PathEnd, Values},
+    parse::{ParseVal, Path, PathEnd, ParseValues},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
 };
 
 mod convert;
+mod display;
 mod error;
 mod symbols;
 
 use convert::{ConvertMeta, ConvertValue, no_attr, value_type};
+pub use display::{DisplayConfig, display_formatted};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
@@ -164,9 +166,9 @@ pub enum PrimitiveValue {
 }
 
 #[derive(Clone, Debug)]
-pub enum Value<Inner = Val, Path = TypePath, Ident = TypePathElem> {
+pub enum Value<Inner = Val, AssetRef = TypePath, Variant = TypePathElem> {
     // Fully resolved path.
-    Ref(Path),
+    Ref(AssetRef),
 
     Tuple(Sequence<Inner>),
     Array(Sequence<Inner>),
@@ -175,13 +177,13 @@ pub enum Value<Inner = Val, Path = TypePath, Ident = TypePathElem> {
     /// Either struct or enum variant
     Struct(FieldsKind<Inner>),
 
-    Or(Vec<Spanned<Ident>>),
+    Or(Vec<Spanned<Variant>>),
 
     Primitive(PrimitiveValue),
 
     Transparent(Box<Inner>),
 
-    Enum(Spanned<Ident>, Box<Inner>),
+    Enum(Spanned<Variant>, Box<Inner>),
 }
 
 impl<T, P, I> Value<T, P, I> {
@@ -332,7 +334,7 @@ pub(crate) fn register_assets(
     path: TypePath<&str>,
     ctx: &mut crate::context::BaubleContext,
     default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
-    values: &Values,
+    values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
     let mut uses = default_uses
         .into_iter()
@@ -426,7 +428,7 @@ pub(crate) fn register_assets(
 
 pub(crate) fn convert_values(
     file: FileId,
-    values: Values,
+    values: ParseValues,
     default_symbols: &Symbols,
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
     let mut use_symbols = Symbols::new(default_symbols.ctx);

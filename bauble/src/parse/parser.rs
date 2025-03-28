@@ -8,7 +8,7 @@ use crate::{
     context::FileId,
     parse::{
         Binding, ParseVal,
-        value::{Path, PathEnd, PathTreeEnd, PathTreeNode, Values},
+        value::{ParseValues, Path, PathEnd, PathTreeEnd, PathTreeNode},
     },
     spanned::{SpanExt, Spanned},
     value::Ident,
@@ -160,7 +160,7 @@ impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for S
 }
 
 // TODO Re-add error recovery
-pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
+pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>> {
     let comment_end = just::<_, ParserSource<'a>, Extra<'a>>('\n').or(end().map(|_| '\0'));
     let comments = just("//")
         .ignore_then(recursive::<'_, '_, ParserSource<'a>, char, _, _, _>(
@@ -383,10 +383,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
                 .map(|v| Value::Primitive(PrimitiveValue::Str(v)));
 
             let literal = just('#').ignore_then(
-                select! {
-                    c if c.is_alphanumeric() => (),
-                    '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' | '/' | '\\' => (),
-                }
+                chumsky::primitive::select(|c, _| allowed_in_raw_literal(c).then_some(c))
                     .repeated()
                     .to_slice()
                     .map(str::to_string)
@@ -493,11 +490,22 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
             // Parser for a tuple.
             let tuple = tuple.map(Value::Tuple);
 
+            // `Or` type,
+            //
+            // Examples:
+            // - `path::A | path::B | path::C`
+            // - `| Path::B`
+            // - `|`
             let path_or = path_p
+                .clone()
                 .map_with(|path, e| path.spanned(e.span()))
                 .separated_by(just('|').padded_by(comments.clone()))
+                .allow_leading()
                 .at_least(2)
                 .collect()
+                .or(just('|')
+                    .ignore_then(path_p.map_with(|p, e| p.spanned(e.span())).or_not())
+                    .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 
             let path = path.map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
@@ -613,7 +621,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
     )
     .map(|(uses, values)| {
         values.into_iter().fold(
-            Values {
+            ParseValues {
                 uses,
                 values: IndexMap::default(),
                 copies: IndexMap::default(),
@@ -633,4 +641,13 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, Values, Extra<'a>> {
         )
     })
     .then_ignore(end())
+}
+
+pub fn allowed_in_raw_literal(c: char) -> bool {
+    match c {
+        c if c.is_alphanumeric() => true,
+        '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' | '/'
+        | '\\' => true,
+        _ => false,
+    }
 }
