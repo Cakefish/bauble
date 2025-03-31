@@ -12,7 +12,7 @@ pub mod types;
 pub use bauble_macros::Bauble;
 
 pub use context::{BaubleContext, BaubleContextBuilder, FileId, Source};
-pub use error::{BaubleError, BaubleErrors, CustomError, print_errors};
+pub use error::{BaubleError, BaubleErrors, CustomError, Level, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use traits::{
     Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
@@ -94,6 +94,7 @@ macro_rules! bauble_test {
                 )*
             };
 
+            assert_eq!(objects, re_objects);
 
             compare_objects(objects);
             compare_objects(re_objects);

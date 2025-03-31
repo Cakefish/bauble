@@ -24,7 +24,7 @@ use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Attributes<Inner = Val>(IndexMap<Ident, Inner>);
 
 impl<Inner> From<IndexMap<Ident, Inner>> for Attributes<Inner> {
@@ -93,7 +93,7 @@ impl<'a, T> IntoIterator for &'a Attributes<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 /// A value with attributes
 pub struct Val {
     pub ty: Spanned<TypeId>,
@@ -139,7 +139,7 @@ pub type Fields<Inner = Val> = IndexMap<Ident, Inner>;
 
 pub type Sequence<Inner = Val> = Vec<Inner>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum FieldsKind<Inner = Val> {
     Unit,
     Unnamed(Sequence<Inner>),
@@ -156,7 +156,7 @@ impl FieldsKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PrimitiveValue {
     Num(Decimal),
     Str(String),
@@ -165,7 +165,7 @@ pub enum PrimitiveValue {
     Raw(String),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value<Inner = Val, AssetRef = TypePath, Variant = TypePathElem> {
     // Fully resolved path.
     Ref(AssetRef),
@@ -201,7 +201,7 @@ impl<T, P, I> Value<T, P, I> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Object {
     pub object_path: TypePath,
     pub value: Val,
