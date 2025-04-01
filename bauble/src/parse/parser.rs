@@ -499,13 +499,12 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             // - `| Path::B`
             // - `|`
             let path_or = path_p
-                .map_with(|path, e| path.spanned(e.span()))
                 .separated_by(just('|').padded_by(comments))
                 .allow_leading()
                 .at_least(2)
                 .collect()
                 .or(just('|')
-                    .ignore_then(path_p.map_with(|p, e| p.spanned(e.span())).or_not())
+                    .ignore_then(path_p.or_not())
                     .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 

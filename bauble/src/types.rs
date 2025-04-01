@@ -8,7 +8,7 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{Bauble, BaubleAllocator};
+use crate::{Bauble, BaubleAllocator, value::UnspannedVal};
 
 pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
     const BAUBLE_PATH: &'static str;
@@ -109,6 +109,7 @@ pub struct Variant {
     pub attributes: NamedFields,
     pub extra_validation: Option<ValidationFunction>,
     pub extra: IndexMap<String, String>,
+    pub default: Option<UnspannedVal>,
 }
 
 impl Variant {
@@ -119,6 +120,7 @@ impl Variant {
             attributes: Default::default(),
             extra_validation: None,
             extra: Default::default(),
+            default: None,
         }
     }
 
@@ -129,6 +131,7 @@ impl Variant {
             attributes: Default::default(),
             extra_validation: None,
             extra: Default::default(),
+            default: None,
         }
     }
 
@@ -144,6 +147,11 @@ impl Variant {
 
     pub fn with_validation(mut self, validation: ValidationFunction) -> Self {
         self.extra_validation = Some(validation);
+        self
+    }
+
+    pub fn with_default(mut self, value: UnspannedVal) -> Self {
+        self.default = Some(value);
         self
     }
 }
@@ -629,6 +637,106 @@ impl TypeRegistry {
             _ => false,
         }
     }
+
+    /// Create a value with this type.
+    pub fn instantiate(&self, ty_id: TypeId) -> Option<UnspannedVal> {
+        let ty = self.key_type(ty_id);
+
+        if let Some(default) = &ty.meta.default {
+            return Some(default.clone().with_type(ty_id));
+        }
+
+        let construct_unnamed = |fields: &UnnamedFields| {
+            fields
+                .required
+                .iter()
+                .map(|f| {
+                    if let Some(d) = &f.default {
+                        Some(d.clone())
+                    } else {
+                        self.instantiate(f.id)
+                    }
+                })
+                .collect::<Option<Vec<_>>>()
+        };
+
+        let construct_named = |fields: &NamedFields| {
+            fields
+                .required
+                .iter()
+                .map(|(s, f)| {
+                    Some((
+                        s.clone(),
+                        if let Some(d) = &f.default {
+                            d.clone()
+                        } else {
+                            self.instantiate(f.id)?
+                        },
+                    ))
+                })
+                .collect::<Option<IndexMap<String, UnspannedVal>>>()
+        };
+
+        let value = match &ty.kind {
+            TypeKind::Tuple(fields) => crate::Value::Tuple(construct_unnamed(fields)?),
+            TypeKind::Array(array) => crate::Value::Array(if let Some(l) = array.len {
+                vec![self.instantiate(array.ty.id)?; l]
+            } else {
+                Vec::new()
+            }),
+            TypeKind::Map(map) => crate::Value::Map(if let Some(l) = map.len {
+                // TODO: Is it a problem that the keys will be duplicates?
+                vec![
+                    (
+                        self.instantiate(map.key.id)?,
+                        self.instantiate(map.value.id)?
+                    );
+                    l
+                ]
+            } else {
+                Vec::new()
+            }),
+            TypeKind::Struct(fields) | TypeKind::EnumVariant { fields, .. } => {
+                crate::Value::Struct(match fields {
+                    Fields::Unit => crate::FieldsKind::Unit,
+                    Fields::Unnamed(fields) => {
+                        crate::FieldsKind::Unnamed(construct_unnamed(fields)?)
+                    }
+                    Fields::Named(fields) => crate::FieldsKind::Named(construct_named(fields)?),
+                })
+            }
+            TypeKind::Enum { variants } => variants.iter().find_map(|(variant, ty)| {
+                self.instantiate(ty)
+                    .map(|v| crate::Value::Enum(variant.to_owned(), Box::new(v)))
+            })?,
+            TypeKind::Or(_) => crate::Value::Or(Vec::new()),
+            TypeKind::Ref(_) => return None,
+            TypeKind::Primitive(primitive) => crate::Value::Primitive(match primitive {
+                Primitive::Any => crate::PrimitiveValue::Unit,
+                Primitive::Num => crate::PrimitiveValue::Num(rust_decimal::Decimal::ZERO),
+                Primitive::Str => crate::PrimitiveValue::Str(String::new()),
+                Primitive::Bool => crate::PrimitiveValue::Bool(false),
+                Primitive::Unit => crate::PrimitiveValue::Unit,
+                Primitive::Raw => crate::PrimitiveValue::Raw(String::new()),
+            }),
+            TypeKind::Transparent(ty) => {
+                let inner = self.key_type(*ty);
+                crate::Value::Transparent(Box::new(if let TypeKind::Trait(tr) = &inner.kind {
+                    self.iter_type_set(tr).find_map(|ty| self.instantiate(ty))?
+                } else {
+                    self.instantiate(*ty)?
+                }))
+            }
+            TypeKind::Trait(_) => return None,
+            TypeKind::Generic(_) => return None,
+        };
+
+        Some(UnspannedVal {
+            ty: ty_id,
+            value,
+            attributes: crate::Attributes::from(construct_named(&ty.meta.attributes)?),
+        })
+    }
 }
 
 pub type ValidationFunction =
@@ -640,6 +748,7 @@ pub struct TypeMeta {
     /// If this is `Some` the type is generic.
     pub generic_base_type: Option<GenericTypeId>,
     pub traits: Vec<TraitId>,
+    pub default: Option<UnspannedVal>,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
@@ -651,6 +760,7 @@ pub struct TypeMeta {
 pub struct FieldType {
     pub id: TypeId,
     pub extra: IndexMap<String, String>,
+    pub default: Option<UnspannedVal>,
 }
 
 impl From<TypeId> for FieldType {
@@ -658,6 +768,7 @@ impl From<TypeId> for FieldType {
         Self {
             id: value,
             extra: Default::default(),
+            default: None,
         }
     }
 }
@@ -699,10 +810,7 @@ impl UnnamedFields {
 
     pub fn any() -> Self {
         Self {
-            allow_additional: Some(FieldType {
-                id: TypeRegistry::any_type(),
-                extra: Default::default(),
-            }),
+            allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
             ..Self::empty()
         }
     }
@@ -756,10 +864,7 @@ impl NamedFields {
 
     pub fn any() -> Self {
         Self {
-            allow_additional: Some(FieldType {
-                id: TypeRegistry::any_type(),
-                extra: Default::default(),
-            }),
+            allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
             ..Self::empty()
         }
     }

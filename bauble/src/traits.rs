@@ -1,7 +1,5 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display};
 
-use indexmap::IndexMap;
-
 use crate::{
     CustomError, Val, Value,
     context::BaubleContext,
@@ -490,10 +488,7 @@ macro_rules! impl_tuple {
                     kind: types::TypeKind::Tuple(
                         types::UnnamedFields::default().with_required([
                             $(
-                                FieldType {
-                                    id: registry.get_or_register_type::<$ident, A>(),
-                                    extra: IndexMap::new(),
-                                }
+                                FieldType::from(registry.get_or_register_type::<$ident, A>())
                             ),+
                         ]),
                     ),
@@ -550,10 +545,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A>
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: FieldType {
-                    id: inner,
-                    extra: IndexMap::new(),
-                },
+                ty: FieldType::from(inner),
                 len: Some(N),
             }),
         }
@@ -606,10 +598,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
             types::Variant::explicit(
                 TypePathElem::new("Some").unwrap(),
                 types::Fields::Unnamed(types::UnnamedFields {
-                    required: vec![types::FieldType {
-                        id: inner,
-                        extra: Default::default(),
-                    }],
+                    required: vec![types::FieldType::from(inner)],
                     ..Default::default()
                 }),
             ),
@@ -685,10 +674,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: types::FieldType {
-                    id: inner,
-                    extra: Default::default(),
-                },
+                ty: types::FieldType::from(inner),
                 len: None,
             }),
         }
@@ -723,10 +709,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: types::FieldType {
-                    id: inner,
-                    extra: Default::default(),
-                },
+                ty: types::FieldType::from(inner),
                 len: None,
             }),
         }
@@ -759,14 +742,8 @@ macro_rules! impl_map {
                         ..Default::default()
                     },
                     kind: types::TypeKind::Map(types::MapType {
-                        key: FieldType {
-                            id: key,
-                            extra: IndexMap::new(),
-                        },
-                        value: FieldType {
-                            id: value,
-                            extra: IndexMap::new(),
-                        },
+                        key: FieldType::from(key),
+                        value: FieldType::from(value),
                         len: None,
                     }),
                 }

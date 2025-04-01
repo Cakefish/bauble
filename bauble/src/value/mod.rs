@@ -1,11 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use symbols::RefCopy;
 
 use crate::{
-    BaubleErrors, FileId, Span, VariantKind,
+    BaubleErrors, FileId, VariantKind,
     context::PathReference,
     parse::{ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
@@ -25,21 +28,21 @@ pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Attributes<Inner = Val>(IndexMap<Ident, Inner>);
+pub struct Attributes<Inner = Val, I: Hash + Eq = Ident>(IndexMap<I, Inner>);
 
-impl<Inner> From<IndexMap<Ident, Inner>> for Attributes<Inner> {
-    fn from(value: IndexMap<Ident, Inner>) -> Self {
+impl<Inner, I: Hash + Eq> From<IndexMap<I, Inner>> for Attributes<Inner, I> {
+    fn from(value: IndexMap<I, Inner>) -> Self {
         Self(value)
     }
 }
 
-impl<T> Default for Attributes<T> {
+impl<T, I: Hash + Eq> Default for Attributes<T, I> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
 
-impl<T> Attributes<T> {
+impl<T, I: Hash + Eq> Attributes<T, I> {
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -48,27 +51,33 @@ impl<T> Attributes<T> {
         self.0.is_empty()
     }
 
-    pub fn get(&self, s: &str) -> Option<(Span, &T)> {
-        self.0.get_key_value(s).map(|(k, v)| (k.span, v))
+    pub fn get(&self, s: &str) -> Option<(&I, &T)>
+    where
+        str: indexmap::Equivalent<I>,
+    {
+        self.0.get_key_value(s)
     }
 
     pub fn values(&self) -> impl ExactSizeIterator<Item = &T> {
         self.0.values()
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&Ident, &T)> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&I, &T)> {
         self.0.iter()
     }
 
-    pub fn first(&self) -> Option<(&Ident, &T)> {
+    pub fn first(&self) -> Option<(&I, &T)> {
         self.0.first()
     }
 
-    pub fn insert(&mut self, ident: Ident, v: T) {
+    pub fn insert(&mut self, ident: I, v: T) {
         self.0.insert(ident, v);
     }
 
-    pub fn take(&mut self, ident: &str) -> Option<T> {
+    pub fn take(&mut self, ident: &str) -> Option<T>
+    where
+        str: indexmap::Equivalent<I>,
+    {
         self.0.swap_remove(ident)
     }
 }
@@ -99,6 +108,86 @@ pub struct Val {
     pub ty: Spanned<TypeId>,
     pub value: Spanned<Value>,
     pub attributes: Spanned<Attributes>,
+}
+
+impl Val {
+    pub fn into_unspanned(self) -> UnspannedVal {
+        UnspannedVal {
+            ty: *self.ty,
+            value: match self.value.value {
+                Value::Ref(r) => Value::Ref(r),
+                Value::Tuple(seq) => {
+                    Value::Tuple(seq.into_iter().map(|v| v.into_unspanned()).collect())
+                }
+                Value::Array(seq) => {
+                    Value::Array(seq.into_iter().map(|v| v.into_unspanned()).collect())
+                }
+                Value::Map(map) => Value::Map(
+                    map.into_iter()
+                        .map(|(k, v)| (k.into_unspanned(), v.into_unspanned()))
+                        .collect(),
+                ),
+                Value::Struct(fields) => Value::Struct(match fields {
+                    FieldsKind::Unit => FieldsKind::Unit,
+                    FieldsKind::Unnamed(fields) => FieldsKind::Unnamed(
+                        fields.into_iter().map(|v| v.into_unspanned()).collect(),
+                    ),
+                    FieldsKind::Named(fields) => FieldsKind::Named(
+                        fields
+                            .into_iter()
+                            .map(|(f, v)| (f.value, v.into_unspanned()))
+                            .collect(),
+                    ),
+                }),
+                Value::Or(items) => Value::Or(items.into_iter().map(|v| v.value).collect()),
+                Value::Primitive(prim) => Value::Primitive(prim),
+                Value::Transparent(inner) => Value::Transparent(Box::new(inner.into_unspanned())),
+                Value::Enum(variant, inner) => {
+                    Value::Enum(variant.value, Box::new(inner.into_unspanned()))
+                }
+            },
+            attributes: Attributes(
+                self.attributes
+                    .value
+                    .0
+                    .into_iter()
+                    .map(|(s, v)| (s.value, v.into_unspanned()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnspannedVal {
+    pub ty: TypeId,
+    pub value: Value<UnspannedVal, TypePath, TypePathElem, String>,
+    pub attributes: Attributes<UnspannedVal, String>,
+}
+
+impl UnspannedVal {
+    /// Create a new unspanned val.
+    ///
+    /// In contexts where you have a `TypeRegistry`, for example in `Bauble::construct_type`,
+    /// prefer using `TypeRegistry::instantiate` to construct this for types for which
+    /// `TypeId` is known.
+    pub fn new(value: Value<UnspannedVal, TypePath, TypePathElem, String>) -> Self {
+        Self {
+            ty: types::TypeRegistry::any_type(),
+            value,
+            attributes: Attributes::default(),
+        }
+    }
+
+    pub fn with_type(mut self, ty: TypeId) -> Self {
+        self.ty = ty;
+        self
+    }
+
+    pub fn with_attribute(mut self, ty: TypeId) -> Self {
+        self.ty = ty;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -135,15 +224,15 @@ pub type Ident = Spanned<String>;
 
 pub type Map<Inner = Val> = Vec<(Inner, Inner)>;
 
-pub type Fields<Inner = Val> = IndexMap<Ident, Inner>;
+pub type Fields<Inner = Val, Field = Ident> = IndexMap<Field, Inner>;
 
 pub type Sequence<Inner = Val> = Vec<Inner>;
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum FieldsKind<Inner = Val> {
+pub enum FieldsKind<Inner = Val, Field: Hash + Eq = Ident> {
     Unit,
     Unnamed(Sequence<Inner>),
-    Named(Fields<Inner>),
+    Named(Fields<Inner, Field>),
 }
 
 impl FieldsKind {
@@ -166,7 +255,12 @@ pub enum PrimitiveValue {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Value<Inner = Val, AssetRef = TypePath, Variant = TypePathElem> {
+pub enum Value<
+    Inner = Val,
+    AssetRef = TypePath,
+    Variant = Spanned<TypePathElem>,
+    Field: Hash + Eq = Ident,
+> {
     // Fully resolved path.
     Ref(AssetRef),
 
@@ -175,15 +269,15 @@ pub enum Value<Inner = Val, AssetRef = TypePath, Variant = TypePathElem> {
     Map(Map<Inner>),
 
     /// Either struct or enum variant
-    Struct(FieldsKind<Inner>),
+    Struct(FieldsKind<Inner, Field>),
 
-    Or(Vec<Spanned<Variant>>),
+    Or(Vec<Variant>),
 
     Primitive(PrimitiveValue),
 
     Transparent(Box<Inner>),
 
-    Enum(Spanned<Variant>, Box<Inner>),
+    Enum(Variant, Box<Inner>),
 }
 
 impl<T, P, I> Value<T, P, I> {
@@ -202,9 +296,18 @@ impl<T, P, I> Value<T, P, I> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Object {
+pub struct Object<Inner = Val> {
     pub object_path: TypePath,
-    pub value: Val,
+    pub value: Inner,
+}
+
+impl Object<Val> {
+    pub fn into_unspanned(self) -> Object<UnspannedVal> {
+        Object {
+            object_path: self.object_path,
+            value: self.value.into_unspanned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

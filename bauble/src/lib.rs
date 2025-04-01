@@ -20,7 +20,7 @@ pub use traits::{
 pub use types::path;
 pub use value::{
     Attributes, ConversionError, DisplayConfig, FieldsKind, IndentedDisplay, Object,
-    PrimitiveValue, Val, Value, display_formatted,
+    PrimitiveValue, UnspannedVal, Val, Value, display_formatted,
 };
 
 #[doc(hidden)]

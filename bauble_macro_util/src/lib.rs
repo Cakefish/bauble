@@ -56,6 +56,8 @@ enum FieldTy<'a> {
         default: Option<TokenStream>,
         /// Whether the field is a `bauble` attribute, and if so which ident to use.
         attribute: Option<Ident>,
+        /// A default bauble value for this field.
+        value_default: Option<TokenStream>,
         extra: Extra,
         /// Type from which the field is deserialized
         ty: &'a Type,
@@ -100,8 +102,9 @@ struct ContainerAttrs {
     // On container or type
     extra: Extra,
     rename: Option<Ident>,
-    validate: Option<Expr>,
+    validate: Option<TokenStream>,
     flatten: bool,
+    value_default: Option<TokenStream>,
 
     // On type
     traits: Vec<TokenStream>,
@@ -208,6 +211,13 @@ impl ContainerAttrs {
                         }
 
                         this.validate = Some(meta.value()?.parse()?);
+                    }
+                    "value_default" => {
+                        if this.value_default.is_some() {
+                            Err(meta.error("Duplicate `value_default` attribute"))?;
+                        }
+
+                        this.value_default = Some(meta.value()?.parse()?);
                     }
                     "traits" => {
                         if !kind.is_type() {
@@ -345,6 +355,7 @@ fn parse_fields(
             .enumerate()
             .map(|(index, field)| -> syn::Result<_> {
                 let mut default = None;
+                let mut value_default = None;
                 let mut as_default = None;
                 let mut attribute = None;
                 let mut extra = Extra::default();
@@ -391,13 +402,23 @@ fn parse_fields(
                                     Err(meta.error("duplicate `as_default` attribute"))?
                                 }
 
-                                if meta.input.parse::<Token![=]>().is_ok() {
-                                    let expr = meta.input.parse::<Expr>()?;
-                                    as_default = Some(quote! { #expr });
-                                } else {
-                                    as_default =
-                                        Some(quote! { ::std::default::Default::default() });
+                                as_default = Some(match meta.value() {
+                                    Ok(input) => {
+                                        let expr = input.parse::<Expr>()?;
+                                        quote! { #expr }
+                                    },
+                                    Err(_) => quote! { ::std::default::Default::default() },
+                                });
+
+                                Ok(())
+                            }
+                            "value_default" => {
+                                if value_default.is_some() {
+                                    Err(meta.error("duplicate `value_default` attribute"))?
                                 }
+
+                                let expr: Expr = meta.value()?.parse()?;
+                                value_default = Some(quote! { #expr });
 
                                 Ok(())
                             }
@@ -432,22 +453,32 @@ fn parse_fields(
                             quote! { #index }
                         }
                     },
-                    ty: match (default, as_default, attribute) {
-                        (Some(_), Some(_), _) => Err(Error::new_spanned(
+                    ty: match (default, as_default, attribute, value_default) {
+                        (Some(_), Some(_), _, _) => Err(Error::new_spanned(
                             field,
                             "field cannot be both `default` and `as_default`",
                         )
                         )?,
-                        (_, Some(_), Some(_)) => Err(Error::new_spanned(
+                        (Some(_), _, _, Some(_)) => Err(Error::new_spanned(
+                            field,
+                            "field cannot be both `default` and have `value_default`",
+                        )
+                        )?,
+                        (_, Some(_), Some(_), _) => Err(Error::new_spanned(
                             field,
                             "field cannot be both `as_default` and `attribute`",
                         )
                         )?,
-                        (None, Some(as_default), None) => FieldTy::AsDefault {
+                        (_, Some(_), _, Some(_)) => Err(Error::new_spanned(
+                            field,
+                            "field cannot be both `as_default` and have `value_default`",
+                        )
+                        )?,
+                        (None, Some(as_default), None, None) => FieldTy::AsDefault {
                             default: as_default,
                             ty: &field.ty,
                         },
-                        (default, None, attribute) => {
+                        (default, None, attribute, value_default) => {
                             if matches!(kind, Some(FieldsKind::Unnamed)) && attribute.is_none() {
                                 if default.is_some() {
                                     last = Some(field.span());
@@ -467,6 +498,7 @@ fn parse_fields(
                                 default,
                                 attribute,
                                 ty: &field.ty,
+                                value_default,
                                 extra,
                             }
                         }
@@ -570,15 +602,21 @@ fn derive_fields(
                     attribute: None,
                     extra,
                     ty,
+                    value_default,
                     ..
                 } = &field.ty
                 {
                     let extra = extra.convert();
                     let var = field.variable_ident();
+                    let value_default = match value_default {
+                        Some(e) => quote! { ::core::option::Option::Some(#e) },
+                        None => quote! { ::core::option::Option::None },
+                    };
                     let field = quote! {
                         ::bauble::types::FieldType {
                             id: registry.get_or_register_type::<#ty, #allocator>(),
                             extra: #extra,
+                            default: #value_default,
                         }
                     };
 
@@ -660,18 +698,24 @@ fn derive_fields(
                     attribute: None,
                     extra,
                     ty,
+                    value_default,
                     ..
                 } = &field.ty
                 {
                     let extra = extra.convert();
                     let var = field.variable_ident();
                     let name = field.name.to_string();
+                    let value_default = match value_default {
+                        Some(e) => quote! { ::core::option::Option::Some(#e) },
+                        None => quote! { ::core::option::Option::None },
+                    };
                     let field = quote! {
                         (
                             #name,
                             ::bauble::types::FieldType {
                                 id: registry.get_or_register_type::<#ty, #allocator>(),
                                 extra: #extra,
+                                default: #value_default,
                             },
                         )
                     };
@@ -757,15 +801,21 @@ fn derive_struct(
                 ty,
                 default,
                 extra,
+                value_default,
                 ..
             } = &field.ty
             {
                 let ident = ident.to_string();
                 let extra = extra.convert();
+                let value_default = match value_default {
+                    Some(e) => quote! { ::core::option::Option::Some(#e) },
+                    None => quote! { ::core::option::Option::None },
+                };
                 let attribute_field = quote! {
                     (#ident, ::bauble::types::FieldType {
                         id: registry.get_or_register_type::<#ty, #allocator>(),
                         extra: #extra,
+                        default: #value_default,
                     })
                 };
 
@@ -981,10 +1031,12 @@ fn derive_variants<'a>(
 
         let extra = variant_attrs.extra.convert();
         let validate = variant_attrs.validate.into_iter();
+        let default = variant_attrs.value_default.into_iter();
         type_variants.push(quote! {
             ::bauble::types::Variant::flattened(::bauble::path::TypePathElem::new(#name).unwrap(), #type_kind)
                 .with_attributes(#type_attrs)
                 .with_extra(#extra)
+                #(.with_default(#default))*
                 #(.with_validation(#validate))*
         });
 
@@ -1186,6 +1238,11 @@ pub fn derive_bauble_derive_input(
         .map(|v| quote!(::core::option::Option::Some(#v)))
         .unwrap_or(quote!(::core::option::Option::None));
 
+    let default = match ty_attrs.value_default {
+        Some(e) => quote! { ::core::option::Option::Some(#e) },
+        None => quote! { ::core::option::Option::None },
+    };
+
     // Assemble the implementation
     quote! {
         #[automatically_derived]
@@ -1203,6 +1260,7 @@ pub fn derive_bauble_derive_input(
                         generic_base_type: #generic_type,
                         extra: #extra,
                         attributes: #type_attributes,
+                        default: #default,
                         traits: ::std::vec![#(registry.get_or_register_trait::<dyn #traits>()),*],
                         extra_validation: #extra_validation,
                     },

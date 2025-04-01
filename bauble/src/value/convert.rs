@@ -33,7 +33,7 @@ fn set_attributes<C: ConvertValue, F: FnMut(TypePathElem<&str>, Val, &Symbols) -
 
         if let Some((first, _)) = val.attributes.get(ident.as_str()) {
             return Err(ConversionError::DuplicateAttribute {
-                first: ident.value.clone().spanned(first),
+                first: first.clone(),
                 second: ident.clone(),
             }
             .spanned(ident.span));
@@ -130,7 +130,7 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
                             if !matches!(enum_ty.kind, types::TypeKind::Or { .. }) {
                                 // This could've been an enum too.
                                 return Err(ConversionError::ExpectedBitfield { got: *enum_type }
-                                    .spanned(path.span));
+                                    .spanned(path.span()));
                             }
 
                             if let Some(generic) = enum_ty.meta.generic_base_type {
@@ -143,12 +143,12 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
                         } else {
                             // Generic type doesn't have any instances. Or the instance we got wasn't a bitfield.
                             Err(ConversionError::ExpectedBitfield { got: variant_ty }
-                                .spanned(path.span))
+                                .spanned(path.span()))
                         }
                     }
                     _ => {
                         Err(ConversionError::ExpectedBitfield { got: variant_ty }
-                            .spanned(path.span))
+                            .spanned(path.span()))
                     }
                 }?;
 
@@ -167,7 +167,7 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
                                 expected: *ty,
                                 got: Some(enum_type),
                             }
-                            .spanned(path.span));
+                            .spanned(path.span()));
                         }
                     }
                     None => ty = Some(enum_type),
@@ -253,6 +253,8 @@ impl<F> ConvertMeta<'_, F> {
 trait ConvertValueInner: ConvertValue {
     type Ref: std::fmt::Debug;
     type Variant: std::fmt::Debug;
+
+    fn variant_span(variant: &Self::Variant) -> Span;
 
     fn get_variant(ident: &Self::Variant, symbols: &Symbols) -> Result<TypePathElem>;
 
@@ -567,7 +569,7 @@ trait ConvertValueInner: ConvertValue {
                         let extra = extra_attributes.get_mut();
                         if let Some((first, _)) = extra.get(ident.as_str()) {
                             Err(ConversionError::DuplicateAttribute {
-                                first: ident.value.clone().spanned(first),
+                                first: first.clone(),
                                 second: ident.clone(),
                             }
                             .spanned(ident.span))?
@@ -709,8 +711,8 @@ trait ConvertValueInner: ConvertValue {
                 let (variant, inner) = if let Value::Enum(variant, value) = &value.value
                     && raw_val_type.is_some_and(|ty| ty.value == ty_id.value)
                 {
-                    let variant =
-                        Self::get_variant(&variant.value, meta.symbols)?.spanned(variant.span);
+                    let variant = Self::get_variant(variant, meta.symbols)?
+                        .spanned(Self::variant_span(variant));
                     let ty = variants.get(variant.borrow()).ok_or(
                         ConversionError::UnknownVariant {
                             variant: variant.clone(),
@@ -830,7 +832,7 @@ trait ConvertValueInner: ConvertValue {
                     .map(|ident| {
                         Ok(Self::get_variant(ident, meta.symbols)?
                             .to_owned()
-                            .spanned(ident.span))
+                            .spanned(Self::variant_span(ident)))
                     })
                     .collect::<Result<_>>()?;
 
@@ -962,10 +964,10 @@ pub(super) trait ConvertValue: Clone + std::fmt::Debug {
 impl ConvertValueInner for Val {
     type Ref = TypePath;
 
-    type Variant = TypePathElem;
+    type Variant = Spanned<TypePathElem>;
 
     fn get_variant(ident: &Self::Variant, _symbols: &Symbols) -> Result<TypePathElem> {
-        Ok(ident.clone())
+        Ok(ident.value.clone())
     }
 
     fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
@@ -974,6 +976,10 @@ impl ConvertValueInner for Val {
 
     fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
         TypePathElem::try_from(path.borrow()).ok()
+    }
+
+    fn variant_span(variant: &Self::Variant) -> Span {
+        variant.span
     }
 }
 
@@ -1057,10 +1063,10 @@ impl ConvertValue for Val {
 impl ConvertValueInner for CopyVal {
     type Ref = TypePath;
 
-    type Variant = TypePathElem;
+    type Variant = Spanned<TypePathElem>;
 
     fn get_variant(ident: &Self::Variant, _symbols: &Symbols) -> Result<TypePathElem> {
-        Ok(ident.clone())
+        Ok(ident.value.clone())
     }
 
     fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
@@ -1069,6 +1075,10 @@ impl ConvertValueInner for CopyVal {
 
     fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
         TypePathElem::try_from(path.borrow()).ok()
+    }
+
+    fn variant_span(variant: &Self::Variant) -> Span {
+        variant.span
     }
 }
 
@@ -1134,6 +1144,10 @@ impl ConvertValueInner for ParseVal {
     fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
         path.as_ident()
             .and_then(|p| TypePathElem::new(p.value).ok())
+    }
+
+    fn variant_span(variant: &Self::Variant) -> Span {
+        variant.span()
     }
 }
 
