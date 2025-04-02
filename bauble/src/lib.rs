@@ -1,39 +1,103 @@
-#![feature(iterator_try_collect, let_chains)]
+#![feature(iterator_try_collect, let_chains, ptr_metadata)]
 
-pub mod convert;
-pub mod error;
-pub mod parse;
-pub mod spanned;
-pub mod value;
+mod context;
+mod error;
+mod parse;
+mod spanned;
+mod traits;
+mod value;
 
-pub use bauble_macros::FromBauble;
+pub mod types;
 
-pub use convert::{
-    BaubleAllocator, DefaultAllocator, DeserializeError, FromBauble, FromBaubleError, VariantKind,
-};
-pub use error::{BaubleError, BaubleErrors, print_errors};
+pub use bauble_macros::Bauble;
+
+pub use context::{BaubleContext, BaubleContextBuilder, FileId, Source};
+pub use error::{BaubleError, BaubleErrors, CustomError, Level, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
+pub use traits::{
+    Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
+};
+pub use types::path;
 pub use value::{
-    AssetContext, Attributes, ConversionError, FieldsKind, Object, OwnedTypeInfo, Source, TypeInfo,
-    Val, Value, ValueKind, convert_values,
+    Attributes, ConversionError, DisplayConfig, FieldsKind, IndentedDisplay, Object,
+    PrimitiveValue, Val, Value, display_formatted,
 };
 
-use parse::Values;
+#[doc(hidden)]
+pub mod private {
+    pub use indexmap::IndexMap;
+}
 
-pub fn parse<'a>(path: &'a str, ctx: &'a impl AssetContext) -> Result<Values, BaubleErrors<'a>> {
+use parse::ParseValues;
+
+fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<ParseValues, BaubleErrors> {
     use chumsky::Parser;
 
     let parser = parse::parser();
-    let result = parser.parse(parse::ParserSource { path, ctx });
+    let result = parser.parse(parse::ParserSource { file_id, ctx });
 
-    result.into_result().map_err(BaubleErrors::from)
+    result.into_result().map_err(|errors| {
+        BaubleErrors::from(
+            errors
+                .into_iter()
+                .map(|e| e.into_owned())
+                .collect::<Vec<_>>(),
+        )
+    })
 }
 
-pub fn convert<'a>(
-    path: &'a str,
-    ctx: &'a impl AssetContext,
-) -> Result<Vec<Object>, BaubleErrors<'a>> {
-    let values = parse(path, ctx)?;
+#[macro_export]
+macro_rules! bauble_test {
+    ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
+        {
+            let mut ctx = $crate::BaubleContextBuilder::new();
+            $(ctx.register_type::<$ty, _>();)*
+            let mut ctx = ctx.build();
+            let file_path = $crate::path::TypePath::new("test").unwrap();
+            ctx.register_file(file_path, format!("\n{}\n", $source));
 
-    convert_values(path, values, &value::Symbols::new(ctx))
+            let (objects, errors) = ctx.load_all();
+
+            if !errors.is_empty() {
+                $crate::print_errors(Err::<(), _>(errors), &ctx);
+
+                panic!("Error converting");
+            }
+
+            let re_source = $crate::display_formatted(objects.as_slice(), ctx.type_registry(), &$crate::DisplayConfig {
+                ..$crate::DisplayConfig::default()
+            });
+
+            let (re_objects, errors) = ctx.reload_paths([(file_path, re_source.as_str())]);
+
+            if !errors.is_empty() {
+                $crate::print_errors(Err::<(), _>(errors), &ctx);
+
+                println!("{re_source}");
+
+                panic!("Error re-converting");
+            }
+
+            let compare_objects = |mut objects: Vec<$crate::Object>| {
+                let mut objects = objects.into_iter();
+
+                $(
+                    let value = objects.next().expect("Not as many objects as test expr in bauble test?");
+                    let mut read_value = $expr;
+                    let test_value = ::std::mem::replace(&mut read_value, $crate::print_errors(Bauble::from_bauble(value.value, &::bauble::DefaultAllocator), &ctx).unwrap());
+
+
+                    assert_eq!(
+                        read_value,
+                        test_value,
+                    );
+                )*
+            };
+
+            assert_eq!(objects, re_objects);
+
+            compare_objects(objects);
+            compare_objects(re_objects);
+        }
+    };
 }

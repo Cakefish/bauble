@@ -1,25 +1,28 @@
-use std::{borrow::Cow, fmt::Debug, sync::Arc};
+use std::{borrow::Cow, fmt::Debug};
 
 use chumsky::{prelude::*, text::Char};
 use indexmap::IndexMap;
 
 use crate::{
+    Attributes, BaubleContext, FieldsKind, PrimitiveValue, Value,
+    context::FileId,
     parse::{
-        Binding, Ident, Object,
-        value::{Attributes, Path, PathEnd, PathTreeEnd, PathTreeNode, Value, Values},
+        Binding, ParseVal,
+        value::{ParseValues, Path, PathEnd, PathTreeEnd, PathTreeNode},
     },
     spanned::{SpanExt, Spanned},
+    value::Ident,
 };
 
 type Extra<'a> = extra::Err<Rich<'a, char, crate::Span>>;
 
 #[derive(Clone)]
-pub struct ParserSource<'a, A> {
-    pub path: &'a str,
-    pub ctx: &'a A,
+pub struct ParserSource<'a> {
+    pub file_id: FileId,
+    pub ctx: &'a BaubleContext,
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::Input<'a> for ParserSource<'a> {
     type Span = crate::Span;
 
     type Token = char;
@@ -28,17 +31,12 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
 
     type Cursor = usize;
 
-    type Cache = (&'a str, Arc<str>);
+    type Cache = (&'a str, FileId);
 
     fn begin(self) -> (Self::Cursor, Self::Cache) {
-        let (cursor, cache) = <&'a str as Input>::begin(
-            self.ctx
-                .get_source(self.path)
-                .map(|source| source.text())
-                .unwrap_or(""),
-        );
+        let (cursor, cache) = <&'a str as Input>::begin(self.ctx.get_source(self.file_id).text());
 
-        (cursor, (cache, self.path.into()))
+        (cursor, (cache, self.file_id))
     }
 
     fn cursor_location(cursor: &Self::Cursor) -> usize {
@@ -59,11 +57,11 @@ impl<'a, A: crate::AssetContext> chumsky::input::Input<'a> for ParserSource<'a, 
         (_, file): &mut Self::Cache,
         range: std::ops::Range<&Self::Cursor>,
     ) -> Self::Span {
-        crate::Span::new(file.clone(), *range.start..*range.end)
+        crate::Span::new(*file, *range.start..*range.end)
     }
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::ValueInput<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::ValueInput<'a> for ParserSource<'a> {
     unsafe fn next(cache: &mut Self::Cache, cursor: &mut Self::Cursor) -> Option<Self::Token> {
         // SAFETY: Requirements passed to caller since we used `<&str as Input>::begin` in our
         // `begin` function.
@@ -71,16 +69,16 @@ impl<'a, A: crate::AssetContext> chumsky::input::ValueInput<'a> for ParserSource
     }
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::ExactSizeInput<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::ExactSizeInput<'a> for ParserSource<'a> {
     unsafe fn span_from(
         cache: &mut Self::Cache,
         range: std::ops::RangeFrom<&Self::Cursor>,
     ) -> Self::Span {
-        crate::Span::new(cache.1.clone(), *range.start..cache.0.len())
+        crate::Span::new(cache.1, *range.start..cache.0.len())
     }
 }
 
-impl<'a, A: crate::AssetContext> chumsky::input::SliceInput<'a> for ParserSource<'a, A> {
+impl<'a> chumsky::input::SliceInput<'a> for ParserSource<'a> {
     type Slice = &'a str;
 
     fn full_slice(cache: &mut Self::Cache) -> Self::Slice {
@@ -162,17 +160,26 @@ impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for S
 }
 
 // TODO Re-add error recovery
-pub fn parser<'a, A: crate::AssetContext + 'a>()
--> impl Parser<'a, ParserSource<'a, A>, Values, Extra<'a>> {
-    let comment_end = just::<_, ParserSource<'a, A>, Extra<'a>>('\n').or(end().map(|_| '\0'));
-    let comments = just("//")
-        .ignore_then(recursive::<'_, '_, ParserSource<'a, A>, char, _, _, _>(
-            |more_comment| comment_end.or(any().ignore_then(more_comment)),
-        ))
-        .ignored()
-        .padded()
-        .repeated()
-        .padded(); // Have to pad again in case there are no repetitions
+pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>> {
+    let line_comment_end = just::<_, ParserSource<'a>, Extra<'a>>('\n').or(end().map(|_| '\0'));
+    let line_comment = just("//")
+        .ignore_then(
+            any()
+                .and_is(line_comment_end.not())
+                .repeated()
+                .then_ignore(line_comment_end),
+        )
+        .ignored();
+    // This is a naive block comment. It doesn't handle nested block comments.
+    let block_comment = just("/*")
+        .ignore_then(
+            any()
+                .and_is(just("*/").not())
+                .repeated()
+                .then_ignore(just("*/")),
+        )
+        .ignored();
+    let comments = line_comment.or(block_comment).padded().repeated().padded(); // Have to pad again in case there are no repetitions
 
     // A rust identifier, use snake case.
     let ident = any()
@@ -181,7 +188,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 Ok(c)
             } else {
                 Err(
-                    chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                    chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                         [TextExpected::IdentifierPart],
                         Some(chumsky::util::MaybeRef::Val(c)),
                         span,
@@ -196,7 +203,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                         Ok(c)
                     } else {
                         Err(
-                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                            chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                 [TextExpected::IdentifierPart],
                                 Some(chumsky::util::MaybeRef::Val(c)),
                                 span,
@@ -219,11 +226,11 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         .map(|(leading, last)| Path { leading, last });
 
     let uses = just("use")
-        .padded_by(comments.clone())
+        .padded_by(comments)
         .ignore_then(recursive::<
             '_,
             '_,
-            ParserSource<'a, A>,
+            ParserSource<'a>,
             Spanned<PathTreeNode>,
             _,
             _,
@@ -233,14 +240,11 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
             let everything = just('*').map(|_| PathTreeEnd::Everything);
 
             let group = node
-                .padded_by(comments.clone())
-                .separated_by(just(',').padded_by(comments.clone()))
+                .padded_by(comments)
+                .separated_by(just(',').padded_by(comments))
                 .allow_trailing()
                 .collect()
-                .delimited_by(
-                    just('{').padded_by(comments.clone()),
-                    just('}').padded_by(comments.clone()),
-                )
+                .delimited_by(just('{').padded_by(comments), just('}').padded_by(comments))
                 .map(PathTreeEnd::Group);
             path_start
                 .map_with(|v, e| v.spanned(e.span()))
@@ -258,36 +262,40 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                     .spanned(e.span())
                 })
         }))
-        .then_ignore(just(';').padded_by(comments.clone()))
+        .then_ignore(just(';').padded_by(comments))
         .repeated()
         .collect();
 
     let object = recursive(
-        |object: Recursive<dyn Parser<'a, ParserSource<'a, A>, Object, Extra<'a>>>| {
-            let attribute = just('#').ignore_then(
-                ident
-                    .padded()
-                    .padded_by(comments.clone())
-                    .then_ignore(just('='))
-                    .then(object.clone())
-                    .separated_by(just(','))
-                    .allow_trailing()
-                    .collect()
-                    .delimited_by(just('['), just(']')),
-            );
+        |object: Recursive<dyn Parser<'a, ParserSource<'a>, ParseVal, Extra<'a>>>| {
+            let attribute = just("#[")
+                .padded()
+                .padded_by(comments)
+                .ignore_then(
+                    ident
+                        .padded()
+                        .padded_by(comments)
+                        .then_ignore(just('='))
+                        .then(object.clone())
+                        .separated_by(just(','))
+                        .allow_trailing()
+                        .collect(),
+                )
+                .then_ignore(just("]").padded().padded_by(comments));
 
             let attributes = attribute
-                .padded_by(comments.clone())
+                .padded()
+                .padded_by(comments)
                 .repeated()
                 .collect()
-                .map_with(|value: Vec<Vec<(Ident, Object)>>, e| {
+                .map_with(|value: Vec<Vec<(Ident, ParseVal)>>, e| {
                     value
                         .into_iter()
                         .flatten()
                         .collect::<IndexMap<_, _>>()
                         .spanned(e.span())
                 })
-                .map(|attributes| Attributes(attributes.value).spanned(attributes.span))
+                .map(|attributes| Attributes::from(attributes.value).spanned(attributes.span))
                 .boxed();
 
             let int = any()
@@ -296,7 +304,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                         Ok(c)
                     } else {
                         Err(
-                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                            chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                 [TextExpected::Digit(1..10)],
                                 Some(chumsky::util::MaybeRef::Val(c)),
                                 span,
@@ -310,7 +318,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                             if c.is_ascii_digit() {
                                 Ok(())
                             } else {
-                                Err(chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                                Err(chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                     [TextExpected::Digit(0..10)],
                                     Some(chumsky::util::MaybeRef::Val(c)),
                                     span,
@@ -329,7 +337,7 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                         Ok(c)
                     } else {
                         Err(
-                            chumsky::label::LabelError::<ParserSource<'a, A>, _>::expected_found(
+                            chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
                                 [TextExpected::Digit(0..10)],
                                 Some(chumsky::util::MaybeRef::Val(c)),
                                 span,
@@ -347,9 +355,9 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 .then(just('.').ignore_then(digits.to_slice()).or_not())
                 .to_slice()
                 .try_map(|s: &str, span| {
-                    Ok(Value::Num(s.parse().map_err(|_| {
-                        Rich::custom(span, "Failed to parse number")
-                    })?))
+                    Ok(Value::Primitive(PrimitiveValue::Num(s.parse().map_err(
+                        |_| Rich::custom(span, "Failed to parse number"),
+                    )?)))
                 });
 
             // A parser for strings, with escape characters
@@ -383,29 +391,31 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
             let string = just('"')
                 .ignore_then(none_of("\\\"").or(escape).repeated().collect::<String>())
                 .then_ignore(just('"'))
-                .map(Value::Str);
+                .map(|v| Value::Primitive(PrimitiveValue::Str(v)));
 
             let literal = just('#').ignore_then(
-                select! {
-                    c if c.is_alphanumeric() => (),
-                    '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' | '/' | '\\' => (),
-                }
+                chumsky::primitive::select(|c, _| allowed_in_raw_literal(c).then_some(c))
                     .repeated()
                     .to_slice()
                     .map(str::to_string)
-                    .map(Value::Raw),
+                    .map(|v| Value::Primitive(PrimitiveValue::Raw(v))),
             );
 
             // Parser for bools
             let bool_ = just("true")
-                .map(|_| Value::Bool(true))
-                .or(just("false").map(|_| Value::Bool(false)));
+                .map(|_| Value::Primitive(PrimitiveValue::Bool(true)))
+                .or(just("false").map(|_| Value::Primitive(PrimitiveValue::Bool(false))));
 
-            let separator = just(',').padded_by(comments.clone());
+            let transparent = object
+                .clone()
+                .map(|v| Value::Transparent(Box::new(v)))
+                .delimited_by(just('(').padded_by(comments), just(')').padded_by(comments));
+
+            let separator = just(',').padded_by(comments);
 
             let sequence = object
                 .clone()
-                .separated_by(separator.clone())
+                .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded();
@@ -413,17 +423,11 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
             // Parser for arrays.
             let array = sequence
                 .clone()
-                .delimited_by(
-                    just('[').padded_by(comments.clone()),
-                    just(']').padded_by(comments.clone()),
-                )
+                .delimited_by(just('[').padded_by(comments), just(']').padded_by(comments))
                 .map(Value::Array);
 
             let tuple = sequence
-                .delimited_by(
-                    just('(').padded_by(comments.clone()),
-                    just(')').padded_by(comments.clone()),
-                )
+                .delimited_by(just('(').padded_by(comments), just(')').padded_by(comments))
                 .recover_with(via_parser(nested_delimiters(
                     '(',
                     ')',
@@ -432,18 +436,15 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 )));
 
             let structure = ident
-                .padded_by(comments.clone())
+                .padded_by(comments)
                 .padded()
-                .then_ignore(just(':').padded().padded_by(comments.clone()))
+                .then_ignore(just(':').padded().padded_by(comments))
                 .then(object.clone())
-                .separated_by(separator.clone())
+                .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
-                .delimited_by(
-                    just('{').padded_by(comments.clone()),
-                    just('}').padded_by(comments.clone()),
-                )
+                .delimited_by(just('{').padded_by(comments), just('}').padded_by(comments))
                 .map(|fields| fields.into_iter().collect())
                 .recover_with(via_parser(nested_delimiters(
                     '{',
@@ -452,49 +453,34 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                     |_| crate::parse::Fields::new(),
                 )));
 
-            let reference = just('$').ignore_then(path).map_with(|path, e| {
+            let reference = just('$').ignore_then(path).map(|path| {
                 // We have at least 1 element in the path.
-                Value::Ref(path.spanned(e.span()))
+                Value::Ref(path)
             });
 
-            let path_p = path
-                .map_with(|path, e| path.spanned(e.span()))
-                .padded_by(comments.clone())
-                .padded();
+            let path_p = path.padded_by(comments).padded();
 
             // Parser for tuple structs
-            let named_tuple =
-                path_p
-                    .clone()
-                    .then(tuple.clone())
-                    .map(|(name, fields)| Value::Tuple {
-                        name: Some(name),
-                        fields,
-                    });
+            let unnamed_struct = path_p
+                .then(tuple.clone())
+                .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Unnamed(fields))));
 
-            // Parser for Structs
+            // Parser for structs
             let named_struct = path_p
-                .clone()
                 .then(structure.clone())
-                .map(|(name, fields)| Value::Struct {
-                    name: Some(name),
-                    fields,
-                });
+                .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Named(fields))));
 
             // Parser for a structure, without an identifier
             let map = object
                 .clone()
-                .padded_by(comments.clone())
+                .padded_by(comments)
                 .then_ignore(just(':'))
-                .then(object.padded_by(comments.clone()))
+                .then(object.padded_by(comments))
                 .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()
                 .padded()
-                .delimited_by(
-                    just('{').padded_by(comments.clone()),
-                    just('}').padded_by(comments.clone()),
-                )
+                .delimited_by(just('{').padded_by(comments), just('}').padded_by(comments))
                 .recover_with(via_parser(nested_delimiters(
                     '{',
                     '}',
@@ -504,15 +490,26 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 .map(Value::Map);
 
             // Parser for a tuple.
-            let tuple = tuple.map(|fields| Value::Tuple { name: None, fields });
+            let tuple = tuple.map(Value::Tuple);
 
+            // `Or` type,
+            //
+            // Examples:
+            // - `path::A | path::B | path::C`
+            // - `| Path::B`
+            // - `|`
             let path_or = path_p
-                .separated_by(just('|').padded_by(comments.clone()))
+                .map_with(|path, e| path.spanned(e.span()))
+                .separated_by(just('|').padded_by(comments))
+                .allow_leading()
                 .at_least(2)
                 .collect()
+                .or(just('|')
+                    .ignore_then(path_p.map_with(|p, e| p.spanned(e.span())).or_not())
+                    .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 
-            let path = path.map_with(|path, e| Value::Path(path.spanned(e.span())));
+            let path = path.map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
 
             // The start of a raw string: count the number of open braces
             let start_raw = just('{').repeated().at_least(1).count();
@@ -532,22 +529,24 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                     ),
                 )
                 .map(str::to_string)
-                .map(Value::Raw);
+                .map(|v| Value::Primitive(PrimitiveValue::Raw(v)));
 
+            let no_type = |t| (None, t);
             let value = choice((
-                bool_,
-                num,
-                string,
-                reference,
-                array,
-                tuple,
-                map,
-                named_tuple,
+                bool_.map(no_type),
+                num.map(no_type),
+                string.map(no_type),
+                reference.map(no_type),
+                transparent.map(no_type),
+                array.map(no_type),
+                tuple.map(no_type),
+                map.map(no_type),
+                unnamed_struct,
                 named_struct,
-                path_or,
+                path_or.map(no_type),
                 path,
-                raw,
-                literal,
+                raw.map(no_type),
+                literal.map(no_type),
             ))
             // TODO Get this recovery method working again
             //
@@ -560,29 +559,45 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
                 .then(
                     value
                         .map_with(|value, e| value.spanned(e.span()))
-                        .padded_by(comments.clone())
+                        .padded_by(comments)
                         .padded()
                         .boxed(),
                 )
-                .map(|(attributes, value)| Object { attributes, value })
+                .map(
+                    #[expect(clippy::type_complexity)]
+                    |(attributes, spanned): (
+                        _,
+                        Spanned<(Option<Path>, crate::Value<ParseVal, Path, Path>)>,
+                    )| {
+                        let Spanned {
+                            span,
+                            value: (ty, value),
+                        } = spanned;
+                        ParseVal {
+                            ty,
+                            attributes,
+                            value: value.spanned(span),
+                        }
+                    },
+                )
         },
     );
 
-    fn binding<'a, V: 'a + Debug, A: crate::AssetContext + 'a>(
-        ident: impl 'a + Parser<'a, ParserSource<'a, A>, Ident, Extra<'a>>,
-        value: impl 'a + Parser<'a, ParserSource<'a, A>, V, Extra<'a>>,
-        path: impl 'a + Parser<'a, ParserSource<'a, A>, Spanned<Path>, Extra<'a>> + Clone,
-        comments: impl 'a + Clone + Parser<'a, ParserSource<'a, A>, (), Extra<'a>>,
-    ) -> impl Parser<'a, ParserSource<'a, A>, (Ident, Option<Spanned<Path>>, V), Extra<'a>> {
+    fn binding<'a, V: 'a + Debug>(
+        ident: impl 'a + Parser<'a, ParserSource<'a>, Ident, Extra<'a>>,
+        value: impl 'a + Parser<'a, ParserSource<'a>, V, Extra<'a>>,
+        path: impl 'a + Parser<'a, ParserSource<'a>, Path, Extra<'a>>,
+        comments: impl 'a + Copy + Parser<'a, ParserSource<'a>, (), Extra<'a>>,
+    ) -> impl Parser<'a, ParserSource<'a>, (Ident, Option<Path>, V), Extra<'a>> {
         ident
-            .padded_by(comments.clone())
+            .padded_by(comments)
             .padded()
             .then(
                 just(':')
-                    .padded_by(comments.clone())
+                    .padded_by(comments)
                     .padded()
                     .ignore_then(path)
-                    .padded_by(comments.clone())
+                    .padded_by(comments)
                     .padded()
                     .or_not(),
             )
@@ -597,12 +612,10 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         Copy,
     }
 
-    let path = path.map_with(|p, e| p.spanned(e.span()));
-
     uses.then(
         just("copy")
             .padded()
-            .ignore_then(binding(ident, object.clone(), path, comments.clone()))
+            .ignore_then(binding(ident, object.clone(), path, comments))
             .map(|binding| (binding, ItemType::Copy))
             .or(binding(ident, object, path, comments).map(|binding| (binding, ItemType::Value)))
             .repeated()
@@ -610,18 +623,19 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
     )
     .map(|(uses, values)| {
         values.into_iter().fold(
-            Values {
+            ParseValues {
                 uses,
                 values: IndexMap::default(),
                 copies: IndexMap::default(),
             },
-            |mut values, ((ident, type_path, object), ty)| {
+            |mut values, ((ident, type_path, value), ty)| {
+                let binding = Binding { type_path, value };
                 match ty {
                     ItemType::Value => {
-                        values.values.insert(ident, Binding { type_path, object });
+                        values.values.insert(ident, binding);
                     }
                     ItemType::Copy => {
-                        values.copies.insert(ident, object);
+                        values.copies.insert(ident, binding);
                     }
                 }
                 values
@@ -629,4 +643,15 @@ pub fn parser<'a, A: crate::AssetContext + 'a>()
         )
     })
     .then_ignore(end())
+    .padded()
+    .padded_by(comments)
+}
+
+pub fn allowed_in_raw_literal(c: char) -> bool {
+    match c {
+        c if c.is_alphanumeric() => true,
+        '!' | '#' | '@' | '%' | '&' | '?' | '.' | '=' | '<' | '>' | '_' | '-' | '+' | '*' | '/'
+        | '\\' => true,
+        _ => false,
+    }
 }

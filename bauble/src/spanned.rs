@@ -4,42 +4,29 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     ops::{Deref, DerefMut, Range},
-    sync::Arc,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+use crate::context::FileId;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
-    path: Arc<str>,
+    file: FileId,
 }
 
-impl std::fmt::Display for Span {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{}>:{}..{}", self.path, self.start, self.end)
-    }
-}
-
-impl From<Span> for Arc<str> {
+impl From<Span> for FileId {
     fn from(value: Span) -> Self {
-        value.path
+        value.file
     }
 }
 
 impl Span {
-    pub fn new(file: impl Into<Arc<str>>, range: Range<usize>) -> Self {
+    pub fn new(file: impl Into<FileId>, range: Range<usize>) -> Self {
         Self {
             start: range.start,
             end: range.end,
-            path: file.into(),
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            start: 0,
-            end: 0,
-            path: "".into(),
+            file: file.into(),
         }
     }
 
@@ -54,26 +41,30 @@ impl Span {
 
     pub fn sub_span(&self, range: Range<usize>) -> Span {
         Span {
-            path: self.path.clone(),
+            file: self.file,
             start: self.start + range.start,
             end: self.end + range.end,
         }
     }
+
+    pub fn file(&self) -> FileId {
+        self.file
+    }
 }
 
 impl chumsky::span::Span for crate::Span {
-    type Context = Arc<str>;
+    type Context = FileId;
     type Offset = usize;
 
     fn new(context: Self::Context, range: Range<Self::Offset>) -> Self {
         Self {
             start: range.start,
             end: range.end,
-            path: context,
+            file: context,
         }
     }
     fn context(&self) -> Self::Context {
-        self.path.clone()
+        self.file
     }
     fn start(&self) -> Self::Offset {
         self.start
@@ -84,10 +75,10 @@ impl chumsky::span::Span for crate::Span {
 }
 
 impl ariadne::Span for Span {
-    type SourceId = Arc<str>;
+    type SourceId = FileId;
 
     fn source(&self) -> &Self::SourceId {
-        &self.path
+        &self.file
     }
 
     fn start(&self) -> usize {
@@ -99,10 +90,22 @@ impl ariadne::Span for Span {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Spanned<T> {
     pub span: Span,
     pub value: T,
+}
+
+impl<T: PartialOrd> PartialOrd for Spanned<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.value.partial_cmp(&other.value)
+    }
+}
+
+impl<T: Ord> Ord for Spanned<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.value.cmp(&other.value)
+    }
 }
 
 impl<T: PartialEq> PartialEq for Spanned<T> {
@@ -150,14 +153,8 @@ impl<T> Spanned<T> {
         Self { span, value }
     }
 
-    pub fn empty() -> Self
-    where
-        T: Default,
-    {
-        Self {
-            span: Span::empty(),
-            value: T::default(),
-        }
+    pub fn as_ref(&self) -> Spanned<&T> {
+        Spanned::new(self.span, &self.value)
     }
 
     pub fn map<U>(self, mut map: impl FnMut(T) -> U) -> Spanned<U> {
@@ -166,10 +163,6 @@ impl<T> Spanned<T> {
 
     pub fn to_inner(self) -> T {
         self.value
-    }
-
-    pub fn span(&self) -> Span {
-        self.span.clone()
     }
 }
 impl<T: Debug> Debug for Spanned<T> {
@@ -193,10 +186,6 @@ impl<T: Error> Error for Spanned<T> {
 
 pub trait SpanExt: Sized {
     fn spanned(self, span: Span) -> Spanned<Self>;
-
-    fn empty(self) -> Spanned<Self> {
-        Spanned::new(Span::empty(), self)
-    }
 }
 
 impl<T: Sized> SpanExt for T {
