@@ -814,11 +814,11 @@ fn derive_struct(
                             if let Some(default) = default {
                                 let v = from_bauble(quote! { __val });
                                 quote! {
-                                    __attributes.swap_remove(#ident).map(|__val| #v).transpose()?.unwrap_or_else(|| #default)
+                                    __attributes.take(#ident).map(|__val| #v).transpose()?.unwrap_or_else(|| #default)
                                 }
                             } else {
                                 let v = from_bauble(quote! {
-                                    __attributes.swap_remove(#ident).ok_or_else(|| {
+                                    __attributes.take(#ident).ok_or_else(|| {
                                         Self::error(__span, ::bauble::ToRustErrorKind::MissingAttribute {
                                             attribute: ::std::borrow::ToOwned::to_owned(#ident),
                                             attributes_span: __attributes_span,
@@ -1009,7 +1009,7 @@ fn derive_variants<'a>(
                 ::bauble::Value::Enum(__variant, __value) => {
                     let ::bauble::Val {
                         attributes: ::bauble::Spanned {
-                            value: ::bauble::Attributes(mut __attributes),
+                            value: mut __attributes,
                             span: __attributes_span,
                         },
                         value: ::bauble::Spanned { span: __span, value: __value },
@@ -1213,7 +1213,7 @@ pub fn derive_bauble_derive_input(
             fn from_bauble(
                 ::bauble::Val {
                     attributes: ::bauble::Spanned {
-                        value: ::bauble::Attributes(mut __attributes),
+                        value: mut __attributes,
                         span: __attributes_span,
                     },
                     value: ::bauble::Spanned { span: __span, value: __value },

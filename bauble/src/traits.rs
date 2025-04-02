@@ -6,11 +6,10 @@ use crate::{
     CustomError, Val, Value,
     context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
-    parse::Ident,
     path::{TypePath, TypePathElem},
     spanned::{Span, Spanned},
     types::{self, FieldType, TypeId},
-    value::PrimitiveValue,
+    value::{Ident, PrimitiveValue},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,7 +72,7 @@ pub enum ToRustErrorKind {
         variant: Ident,
     },
     WrongType {
-        found: TypeId,
+        found: Spanned<TypeId>,
     },
     WrongVariantType {
         variant: TypePathElem,
@@ -185,10 +184,10 @@ impl BaubleError for ToRustError {
             ToRustErrorKind::WrongType { found } => {
                 vec![(
                     Spanned::new(
-                        value_span,
+                        found.span,
                         Cow::Owned(format!(
-                            "Expected the kind {ty}, found {}",
-                            types.key_type(*found).meta.path
+                            "Expected the type {ty}, found {}",
+                            types.key_type(found.value).meta.path
                         )),
                     ),
                     Level::Error,
@@ -657,7 +656,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                     val.value.span,
                     ToRustErrorKind::WrongVariantType {
                         variant: variant.value,
-                        found: val.ty,
+                        found: *val.ty,
                     },
                 )),
             },

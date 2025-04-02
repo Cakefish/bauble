@@ -367,7 +367,7 @@ impl TypeRegistry {
                     }
                 }
             }
-            TypeKind::BitFlags(bitflag) => {
+            TypeKind::Or(bitflag) => {
                 for variant in &bitflag.variants {
                     self.register_type(|this, variant_id| Type {
                                 meta: TypeMeta {
@@ -585,6 +585,19 @@ impl TypeRegistry {
         }
     }
 
+    pub fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
+        let p = self.key_type(ty).meta.path.borrow();
+
+        if p.is_writable() {
+            Some(p)
+        } else if let Some(t) = self.key_type(ty).meta.generic_base_type {
+            let p = self.key_type(t).meta.path.borrow();
+            p.is_writable().then_some(p)
+        } else {
+            None
+        }
+    }
+
     pub fn can_infer_from(&self, output_id: TypeId, input_id: TypeId) -> bool {
         if output_id == input_id {
             return true;
@@ -788,7 +801,7 @@ pub struct MapType {
 }
 
 #[derive(Debug, Clone)]
-pub struct BitFlagsType {
+pub struct OrType {
     pub variants: Vec<TypePathElem>,
 }
 
@@ -802,7 +815,7 @@ pub enum TypeKind {
     Enum {
         variants: EnumVariants,
     },
-    BitFlags(BitFlagsType),
+    Or(OrType),
     Ref(TypeId),
     Primitive(Primitive),
     Transparent(TypeId),
@@ -843,7 +856,7 @@ impl TypeKind {
             | TypeKind::Map(_)
             | TypeKind::Struct(_)
             | TypeKind::Enum { .. }
-            | TypeKind::BitFlags(..)
+            | TypeKind::Or(..)
             | TypeKind::Ref(..)
             | TypeKind::Transparent(..)
             | TypeKind::EnumVariant { .. } => true,
