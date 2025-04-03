@@ -54,7 +54,7 @@ macro_rules! bauble_test {
             let mut ctx = $crate::BaubleContextBuilder::new();
             $(ctx.register_type::<$ty, _>();)*
             let mut ctx = ctx.build();
-            assert!(ctx.type_registry().validate(true), "Invalid type registry");
+            ctx.type_registry().validate(true).expect("Invalid type registry");
             let file_path = $crate::path::TypePath::new("test").unwrap();
             ctx.register_file(file_path, format!("\n{}\n", $source));
 

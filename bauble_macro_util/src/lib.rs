@@ -112,6 +112,7 @@ struct ContainerAttrs {
     path: Option<String>,
     allocator: Option<TokenStream>,
     bounds: Option<Punctuated<WherePredicate, syn::token::Comma>>,
+    nullable: Option<TokenStream>,
 
     // On Container
     tuple: bool,
@@ -292,6 +293,25 @@ impl ContainerAttrs {
                             bounds.push(meta.input.parse()?);
                             Ok(())
                         })?;
+                    }
+                    "nullable" => {
+                        if !kind.is_type() {
+                            Err(meta.error("The `bounds` attribute can only be used on types"))?
+                        }
+                        if this.nullable.is_some() {
+                            Err(meta.error("Duplicate `nullable` attribute"))?
+                        }
+
+                        this.nullable = Some(
+                            meta.value()?
+                                .parse::<syn::Expr>()
+                                .map_or(quote! {
+                                    // SAFETY: If this compiles we're using the default allocator, which is safe.
+                                    |a| unsafe { ::bauble::DefaultAllocator::wrap(a, ::core::default::Default::default()) }
+                                }, |e| {
+                                    e.into_token_stream()
+                                }),
+                        );
                     }
 
                     "tuple" => {
@@ -1053,7 +1073,7 @@ fn derive_variants<'a>(
         quote! {
             {
                 let variants = [#(#type_variants),*];
-                registry.build_enum(variants)
+                ::bauble::types::TypeKind::Enum { variants: registry.build_enum(variants) }
             }
         },
         quote! {
@@ -1243,6 +1263,15 @@ pub fn derive_bauble_derive_input(
         None => quote! { ::core::option::Option::None },
     };
 
+    let nullable_bool = ty_attrs.nullable.is_some();
+    let nullable_expr = ty_attrs.nullable.map(|e| {
+        quote! {
+            if let ::bauble::Value::Primitive(::bauble::PrimitiveValue::Null) = &__value {
+                return Ok((#e)(__allocator));
+            }
+        }
+    });
+
     // Assemble the implementation
     quote! {
         #[automatically_derived]
@@ -1261,6 +1290,7 @@ pub fn derive_bauble_derive_input(
                         extra: #extra,
                         attributes: #type_attributes,
                         default: #default,
+                        nullable: #nullable_bool,
                         traits: ::std::vec![#(registry.get_or_register_trait::<dyn #traits>()),*],
                         extra_validation: #extra_validation,
                     },
@@ -1282,6 +1312,8 @@ pub fn derive_bauble_derive_input(
                 <#allocator as ::bauble::BaubleAllocator<#lifetime>>::Out<Self>,
                 ::bauble::ToRustError,
             > {
+                #nullable_expr
+
                 let res = #construct_value;
 
                 // SAFETY: We only use this allocator when  constructing values.

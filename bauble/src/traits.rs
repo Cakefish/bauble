@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display};
 
 use crate::{
-    CustomError, SpannedValue, Val, Value,
+    CustomError, SpannedValue, UnspannedVal, Val, Value,
     context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
     path::{TypePath, TypePathElem},
@@ -282,6 +282,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
             meta: types::TypeMeta {
                 path: TypePath::new("bauble::Val").unwrap().to_owned(),
                 attributes: types::NamedFields::any(),
+                default: Some(UnspannedVal::new(Value::Primitive(PrimitiveValue::Null))),
                 ..Default::default()
             },
             kind: types::TypeKind::Primitive(types::Primitive::Any),
@@ -594,7 +595,9 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
         let generic_path = TypePath::new("std::Option").unwrap();
         let generic = registry.get_or_register_generic_type(generic_path);
 
-        let kind = registry.build_enum([
+        let none = TypePathElem::new("None").unwrap();
+        let variants = registry.build_enum([
+            types::Variant::explicit(none, types::Fields::Unit),
             types::Variant::explicit(
                 TypePathElem::new("Some").unwrap(),
                 types::Fields::Unnamed(types::UnnamedFields {
@@ -602,7 +605,6 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                     ..Default::default()
                 }),
             ),
-            types::Variant::explicit(TypePathElem::new("None").unwrap(), types::Fields::Unit),
         ]);
 
         types::Type {
@@ -613,9 +615,17 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                 ))
                 .unwrap(),
                 generic_base_type: Some(generic),
+                default: Some(UnspannedVal::new(Value::Enum(
+                    none.to_owned(),
+                    Box::new(
+                        registry
+                            .instantiate(variants.get(none).expect("We just added this variant"))
+                            .expect("We should be able to instantiate unit fields"),
+                    ),
+                ))),
                 ..Default::default()
             },
-            kind,
+            kind: types::TypeKind::Enum { variants },
         }
     }
 

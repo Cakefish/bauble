@@ -156,10 +156,9 @@ impl BaubleContextBuilder {
     ///
     /// Panics if `TypeRegistry::validate` is false.
     pub fn build(self) -> BaubleContext {
-        assert!(
-            self.registry.validate(false),
-            "The type system should be valid"
-        );
+        self.registry
+            .validate(false)
+            .expect("The type system should be valid");
         let mut root_node = CtxNode::new(TypePath::empty());
         for (id, path) in self.default_uses.0 {
             root_node.add_node(id.borrow()).reference.redirect = Some(path);

@@ -156,6 +156,17 @@ impl Variant {
     }
 }
 
+#[derive(Debug)]
+pub enum TypeSystemError<'a> {
+    ToBeAssigned(Vec<(TypeId, TypePath<&'a str>)>),
+    NotInstantiable {
+        ty_id: TypeId,
+        ty: TypePath<&'a str>,
+    },
+    InstantiableErrors,
+    ConstructInequality(UnspannedVal, UnspannedVal),
+}
+
 impl TypeRegistry {
     pub(crate) fn new() -> Self {
         let mut this = Self {
@@ -270,44 +281,42 @@ impl TypeRegistry {
     }
 
     #[must_use]
-    /// Build a `TypeKind::Enum`.
-    pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> TypeKind {
-        TypeKind::Enum {
-            variants: EnumVariants(
-                variants
-                    .into_iter()
-                    .map(|variant| {
-                        let ty = self.register_type(|this, id| {
-                            this.to_be_assigned.insert(id);
+    /// Build `EnumVariants`.
+    pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> EnumVariants {
+        EnumVariants(
+            variants
+                .into_iter()
+                .map(|variant| {
+                    let ty = self.register_type(|this, id| {
+                        this.to_be_assigned.insert(id);
 
-                            Type {
-                                meta: TypeMeta {
-                                    // We assign this later.
-                                    path: TypePath::empty(),
-                                    attributes: variant.attributes,
-                                    extra: variant.extra,
-                                    extra_validation: variant.extra_validation,
-                                    ..Default::default()
-                                },
-                                kind: match variant.kind {
-                                    VariantKind::Explicit(fields)
-                                    | VariantKind::Flattened(TypeKind::Struct(fields)) => {
-                                        TypeKind::EnumVariant {
-                                            variant: variant.ident.clone(),
-                                            // This gets assigned later.
-                                            enum_type: Self::any_type(),
-                                            fields,
-                                        }
+                        Type {
+                            meta: TypeMeta {
+                                // We assign this later.
+                                path: TypePath::empty(),
+                                attributes: variant.attributes,
+                                extra: variant.extra,
+                                extra_validation: variant.extra_validation,
+                                ..Default::default()
+                            },
+                            kind: match variant.kind {
+                                VariantKind::Explicit(fields)
+                                | VariantKind::Flattened(TypeKind::Struct(fields)) => {
+                                    TypeKind::EnumVariant {
+                                        variant: variant.ident.clone(),
+                                        // This gets assigned later.
+                                        enum_type: Self::any_type(),
+                                        fields,
                                     }
-                                    VariantKind::Flattened(type_kind) => type_kind,
-                                },
-                            }
-                        });
-                        (variant.ident, ty)
-                    })
-                    .collect(),
-            ),
-        }
+                                }
+                                VariantKind::Flattened(type_kind) => type_kind,
+                            },
+                        }
+                    });
+                    (variant.ident, ty)
+                })
+                .collect(),
+        )
     }
 
     pub(crate) fn get_or_register_asset_ref(&mut self, inner: TypeId) -> TypeId {
@@ -316,7 +325,7 @@ impl TypeRegistry {
         } else {
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
-                let ty = Type {
+                let mut ty = Type {
                     meta: TypeMeta {
                         path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
                             .expect("Invariant"),
@@ -326,14 +335,17 @@ impl TypeRegistry {
                     kind: TypeKind::Ref(inner),
                 };
 
-                this.on_register_type(id, &ty);
+                this.on_register_type(id, &mut ty);
 
                 ty
             })
         }
     }
 
-    fn on_register_type(&mut self, id: TypeId, ty: &Type) {
+    fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
+        if let Some(d) = ty.meta.default.as_mut() {
+            d.ty = id;
+        }
         for tr in ty.meta.traits.iter() {
             let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
                 panic!("Invariant")
@@ -418,9 +430,9 @@ impl TypeRegistry {
     }
 
     #[must_use]
-    pub fn register_dummy_type(&mut self, ty: Type) -> TypeId {
+    pub fn register_dummy_type(&mut self, mut ty: Type) -> TypeId {
         self.register_type(|this, id| {
-            this.on_register_type(id, &ty);
+            this.on_register_type(id, &mut ty);
 
             ty
         })
@@ -431,9 +443,14 @@ impl TypeRegistry {
     /// Currently this checks:
     /// - Are there any unassigned registered types?
     /// - If `assert_instanciable` is true then if all `instanciable` types have valid bauble representations.
-    pub fn validate(&self, assert_instanciable: bool) -> bool {
+    pub fn validate(&self, assert_instanciable: bool) -> Result<(), TypeSystemError> {
         if !self.to_be_assigned.is_empty() {
-            return false;
+            return Err(TypeSystemError::ToBeAssigned(
+                self.to_be_assigned
+                    .iter()
+                    .map(|ty_id| (*ty_id, self.key_type(*ty_id).meta.path.borrow()))
+                    .collect(),
+            ));
         }
 
         if assert_instanciable {
@@ -443,14 +460,20 @@ impl TypeRegistry {
                 .enumerate()
             {
                 let ty = self.key_type(ty_id);
-                if !ty.kind.instanciable() || !ty.meta.path.is_writable() {
+                if !ty.kind.instanciable()
+                    || !ty.meta.path.is_writable()
+                    || !ty.meta.traits.contains(&self.top_level_trait_dependency)
+                {
                     continue;
                 }
 
                 let object_path = TypePath::new(format!("{}_{i}", ty.meta.path)).unwrap();
 
                 let Some(value) = self.instantiate(ty_id) else {
-                    return false;
+                    return Err(TypeSystemError::NotInstantiable {
+                        ty_id,
+                        ty: ty.meta.path.borrow(),
+                    });
                 };
 
                 objects.push(crate::Object { object_path, value })
@@ -475,17 +498,18 @@ impl TypeRegistry {
             if !errors.is_empty() {
                 crate::print_errors(Err::<(), _>(errors), &ctx);
 
-                return false;
+                return Err(TypeSystemError::InstantiableErrors);
             }
 
             for (a, b) in objects.into_iter().zip(loaded_objects) {
-                if a.value != b.value.into_unspanned() {
-                    return false;
+                let unspanned = b.value.into_unspanned();
+                if a.value != unspanned {
+                    return Err(TypeSystemError::ConstructInequality(a.value, unspanned));
                 }
             }
         }
 
-        true
+        Ok(())
     }
 
     pub fn reserve_type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
@@ -506,8 +530,8 @@ impl TypeRegistry {
 
         match id {
             Some(id) if self.to_be_assigned.remove(&id) => {
-                let ty = T::construct_type(self);
-                self.on_register_type(id, &ty);
+                let mut ty = T::construct_type(self);
+                self.on_register_type(id, &mut ty);
                 self.types[id.0] = ty;
 
                 id
@@ -515,8 +539,8 @@ impl TypeRegistry {
             Some(id) => id,
             None => self.register_type(|this, id| {
                 this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
-                let ty = T::construct_type(this);
-                this.on_register_type(id, &ty);
+                let mut ty = T::construct_type(this);
+                this.on_register_type(id, &mut ty);
 
                 ty
             }),
@@ -803,6 +827,7 @@ pub struct TypeMeta {
     pub generic_base_type: Option<GenericTypeId>,
     pub traits: Vec<TraitId>,
     pub default: Option<UnspannedVal>,
+    pub nullable: bool,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.

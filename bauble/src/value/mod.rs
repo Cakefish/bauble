@@ -457,6 +457,7 @@ pub enum PrimitiveValue {
     Str(String),
     Bool(bool),
     Unit,
+    Null,
     Raw(String),
 }
 
@@ -490,6 +491,7 @@ impl<T: ValueTrait> Value<T> {
                 PrimitiveValue::Bool(_) => types::Primitive::Bool,
                 PrimitiveValue::Unit => types::Primitive::Unit,
                 PrimitiveValue::Raw(_) => types::Primitive::Raw,
+                PrimitiveValue::Null => return None,
             }),
             _ => None,
         }

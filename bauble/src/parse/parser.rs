@@ -406,6 +406,10 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 .map(|_| Value::Primitive(PrimitiveValue::Bool(true)))
                 .or(just("false").map(|_| Value::Primitive(PrimitiveValue::Bool(false))));
 
+            let unit = just("()").map(|_| Value::Primitive(PrimitiveValue::Unit));
+
+            let null = just("null").map(|_| Value::Primitive(PrimitiveValue::Null));
+
             let transparent = object
                 .clone()
                 .map(|v| Value::Transparent(Box::new(v)))
@@ -533,6 +537,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             let no_type = |t| (None, t);
             let value = choice((
                 bool_.map(no_type),
+                unit.map(no_type),
+                null.map(no_type),
                 num.map(no_type),
                 string.map(no_type),
                 reference.map(no_type),

@@ -674,6 +674,13 @@ where
         };
 
         let value = match (&ty.kind, &value.value) {
+            (_, Value::Primitive(PrimitiveValue::Null)) => {
+                if ty.meta.nullable {
+                    Value::Primitive(PrimitiveValue::Null)
+                } else {
+                    Err(ConversionError::NotNullable(*ty_id).spanned(span))?
+                }
+            }
             (types::TypeKind::Tuple(fields), Value::Tuple(values)) => {
                 Value::Tuple(parse_unnamed!(fields, values))
             }
