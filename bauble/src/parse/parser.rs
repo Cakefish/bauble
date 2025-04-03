@@ -563,10 +563,9 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                         .boxed(),
                 )
                 .map(
-                    #[expect(clippy::type_complexity)]
                     |(attributes, spanned): (
                         _,
-                        Spanned<(Option<Path>, crate::Value<ParseVal, Path, Path>)>,
+                        Spanned<(Option<Path>, crate::Value<ParseVal>)>,
                     )| {
                         let Spanned {
                             span,

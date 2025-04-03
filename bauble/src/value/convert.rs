@@ -1,13 +1,16 @@
 use crate::{
     ConversionError, FieldsKind, PrimitiveValue, Span,
-    parse::{ParseVal, Path},
+    parse::ParseVal,
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
     value::Fields,
 };
 
-use super::{Attributes, CopyVal, Ident, Result, Symbols, Val, Value};
+use super::{
+    Attributes, CopyVal, CopyValInner, Ident, Result, SpannedValue, Symbols, UnspannedVal, Val,
+    Value, ValueContainer, ValueTrait,
+};
 
 pub fn no_attr() -> Option<&'static Attributes<Val>> {
     None
@@ -22,6 +25,7 @@ fn set_attributes<C: ConvertValue, F: FnMut(TypePathElem<&str>, Val, &Symbols) -
     let ty = types.key_type(val.ty.value);
 
     for (ident, value) in attributes.iter() {
+        let ident = C::get_spanned_field(ident, &meta);
         let Some(ty) = ty.meta.attributes.get(ident.as_str()) else {
             return Err(ConversionError::UnexpectedField {
                 attribute: true,
@@ -41,7 +45,7 @@ fn set_attributes<C: ConvertValue, F: FnMut(TypePathElem<&str>, Val, &Symbols) -
 
         let value = value.convert(meta.reborrow(), ty.id, no_attr())?;
 
-        val.attributes.insert(ident.clone(), value);
+        val.attributes.insert(ident, value);
     }
 
     Ok(val)
@@ -219,16 +223,18 @@ pub(super) fn default_value_type(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) enum AnyVal<'a> {
+pub enum AnyVal<'a> {
     Parse(&'a ParseVal),
-    Copy(&'a CopyVal),
+    Copy(&'a CopyValInner),
     Complete(&'a Val),
+    Unspanned(&'a UnspannedVal),
 }
 
 pub struct ConvertMeta<'a, F> {
     pub symbols: &'a Symbols<'a>,
     pub add_value: &'a mut F,
     pub object_name: TypePathElem<&'a str>,
+    pub default_span: Span,
 }
 
 impl<F> ConvertMeta<'_, F> {
@@ -237,6 +243,7 @@ impl<F> ConvertMeta<'_, F> {
             symbols: self.symbols,
             add_value: self.add_value,
             object_name: self.object_name,
+            default_span: self.default_span,
         }
     }
 
@@ -245,16 +252,21 @@ impl<F> ConvertMeta<'_, F> {
             symbols: self.symbols,
             add_value: self.add_value,
             object_name: name,
+            default_span: self.default_span,
         }
     }
 }
 
 /// This trait has an implementation to convert any `Value` into a finished `Val`.
-trait ConvertValueInner: ConvertValue {
-    type Ref: std::fmt::Debug;
-    type Variant: std::fmt::Debug;
-
-    fn variant_span(variant: &Self::Variant) -> Span;
+trait ConvertValueInner:
+    ConvertValue + ValueTrait + ValueContainer<ContainerField = Self::Field>
+where
+    Self::Inner: ConvertValue<ContainerField = <Self as ValueTrait>::Field>,
+{
+    fn variant_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        variant: &Self::Variant,
+        meta: &ConvertMeta<F>,
+    ) -> Span;
 
     fn get_variant(ident: &Self::Variant, symbols: &Symbols) -> Result<TypePathElem>;
 
@@ -267,8 +279,8 @@ trait ConvertValueInner: ConvertValue {
         C: ConvertValue,
         F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
     >(
-        value: &Spanned<Value<Self, Self::Ref, Self::Variant>>,
-        attributes: &Spanned<Attributes<Self>>,
+        value: Spanned<&Value<Self>>,
+        attributes: Spanned<&Attributes<Self::Inner>>,
         val_ty: Option<Spanned<TypeId>>,
         mut meta: ConvertMeta<'a, F>,
         expected_type: TypeId,
@@ -281,9 +293,10 @@ trait ConvertValueInner: ConvertValue {
         {
             return match extra_attributes {
                 Some(s) if !s.0.is_empty() => {
-                    let mut extra = ConvertValue::to_any_attributes(s);
+                    let mut extra = ConvertValue::to_any_attributes(s, &meta);
 
                     for (i, v) in attributes.iter() {
+                        let i = Self::get_spanned_field(i, &meta);
                         if let Some((ident, _)) = extra.0.get_key_value(i.as_str()) {
                             Err(ConversionError::DuplicateAttribute {
                                 first: ident.clone(),
@@ -292,7 +305,7 @@ trait ConvertValueInner: ConvertValue {
                             .spanned(i.span))?
                         }
 
-                        extra.0.insert(i.clone(), v.to_any());
+                        extra.0.insert(i, v.container_to_any());
                     }
 
                     val.convert(meta.reborrow(), expected_type, Some(&extra))
@@ -303,7 +316,7 @@ trait ConvertValueInner: ConvertValue {
                     if attributes.is_empty() {
                         None
                     } else {
-                        Some(&attributes.value)
+                        Some(attributes.value)
                     },
                 ),
             }
@@ -367,7 +380,8 @@ trait ConvertValueInner: ConvertValue {
                 for value in values {
                     let (_, ty) = types.next().ok_or_else(|| {
                         // input tuple too long.
-                        ConversionError::WrongLength { got: l, ty: *ty_id }.spanned(value.span())
+                        ConversionError::WrongLength { got: l, ty: *ty_id }
+                            .spanned(value.get_span(&meta))
                     })?;
 
                     seq.push(value.convert(meta.reborrow(), ty, no_attr())?);
@@ -378,7 +392,7 @@ trait ConvertValueInner: ConvertValue {
         }
 
         /// A struct to store extra attributes, this is mostly to avoid allocations in most cases.
-        enum ExtraAttributes<'a, C0, C1> {
+        enum ExtraAttributes<'a, C0: ConvertValue, C1: ConvertValue> {
             None,
             BorrowedA(&'a Attributes<C0>),
             BorrowedB(&'a Attributes<C1>),
@@ -387,37 +401,44 @@ trait ConvertValueInner: ConvertValue {
         }
 
         impl<'a, C0: ConvertValue, C1: ConvertValue> ExtraAttributes<'a, C0, C1> {
-            fn get_mut(&mut self) -> &mut Attributes<AnyVal<'a>> {
+            fn get_mut<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+                &mut self,
+                meta: &ConvertMeta<F_>,
+            ) -> &mut Attributes<AnyVal<'a>> {
                 match self {
                     ExtraAttributes::None => {
                         *self = ExtraAttributes::Owned(Attributes::default());
 
-                        self.get_mut()
+                        self.get_mut(meta)
                     }
                     ExtraAttributes::BorrowedA(attributes) => {
-                        *self = ExtraAttributes::Owned(C0::to_any_attributes(attributes));
+                        *self = ExtraAttributes::Owned(C0::to_any_attributes(attributes, meta));
 
-                        self.get_mut()
+                        self.get_mut(meta)
                     }
                     ExtraAttributes::BorrowedB(attributes) => {
-                        *self = ExtraAttributes::Owned(C1::to_any_attributes(attributes));
+                        *self = ExtraAttributes::Owned(C1::to_any_attributes(attributes, meta));
 
-                        self.get_mut()
+                        self.get_mut(meta)
                     }
                     ExtraAttributes::BorrowedC(attributes) => {
-                        *self = ExtraAttributes::Owned(Val::to_any_attributes(attributes));
+                        *self = ExtraAttributes::Owned(Val::to_any_attributes(attributes, meta));
 
-                        self.get_mut()
+                        self.get_mut(meta)
                     }
                     ExtraAttributes::Owned(attributes) => attributes,
                 }
             }
 
-            pub fn extend(&mut self, attributes: &'a Attributes<Val>) {
+            pub fn extend<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+                &mut self,
+                attributes: &'a Attributes<Val>,
+                meta: &ConvertMeta<F_>,
+            ) {
                 if self.is_empty() {
                     *self = ExtraAttributes::BorrowedC(attributes);
                 } else {
-                    self.get_mut().0.extend(
+                    self.get_mut(meta).0.extend(
                         attributes
                             .iter()
                             .map(|(ident, v)| (ident.clone(), v.to_any())),
@@ -430,7 +451,10 @@ trait ConvertValueInner: ConvertValue {
                 value: &C1,
                 meta: ConvertMeta<F_>,
                 expected_type: TypeId,
-            ) -> Result<Val> {
+            ) -> Result<Val>
+            where
+                C1: ConvertValue,
+            {
                 match std::mem::replace(self, ExtraAttributes::None) {
                     ExtraAttributes::None => value.convert(meta, expected_type, no_attr()),
                     ExtraAttributes::BorrowedA(attributes) => {
@@ -448,22 +472,30 @@ trait ConvertValueInner: ConvertValue {
                 }
             }
 
-            fn convert_inner_with<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+            fn convert_inner_with<
+                Outer: ConvertValueInner<Inner = C1, Field = C1::ContainerField>,
+                F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
+            >(
                 &mut self,
-                value: &Spanned<Value<C1, C1::Ref, C1::Variant>>,
-                attributes: &Spanned<Attributes<C1>>,
+                value: Spanned<&Value<Outer>>,
+                attributes: Spanned<&Attributes<C1>>,
                 val_ty: Option<Spanned<TypeId>>,
                 meta: ConvertMeta<F_>,
                 expected_type: TypeId,
             ) -> Result<Val>
             where
-                C1: ConvertValueInner,
+                C1: ConvertValue,
             {
                 match std::mem::replace(self, ExtraAttributes::None) {
-                    ExtraAttributes::None => {
-                        C1::convert_inner(value, attributes, val_ty, meta, expected_type, no_attr())
-                    }
-                    ExtraAttributes::BorrowedA(extra_attributes) => C1::convert_inner(
+                    ExtraAttributes::None => Outer::convert_inner(
+                        value,
+                        attributes,
+                        val_ty,
+                        meta,
+                        expected_type,
+                        no_attr(),
+                    ),
+                    ExtraAttributes::BorrowedA(extra_attributes) => Outer::convert_inner(
                         value,
                         attributes,
                         val_ty,
@@ -471,7 +503,7 @@ trait ConvertValueInner: ConvertValue {
                         expected_type,
                         Some(extra_attributes),
                     ),
-                    ExtraAttributes::BorrowedB(extra_attributes) => C1::convert_inner(
+                    ExtraAttributes::BorrowedB(extra_attributes) => Outer::convert_inner(
                         value,
                         attributes,
                         val_ty,
@@ -479,7 +511,7 @@ trait ConvertValueInner: ConvertValue {
                         expected_type,
                         Some(extra_attributes),
                     ),
-                    ExtraAttributes::BorrowedC(extra_attributes) => C1::convert_inner(
+                    ExtraAttributes::BorrowedC(extra_attributes) => Outer::convert_inner(
                         value,
                         attributes,
                         val_ty,
@@ -487,7 +519,7 @@ trait ConvertValueInner: ConvertValue {
                         expected_type,
                         Some(extra_attributes),
                     ),
-                    ExtraAttributes::Owned(extra_attributes) => C1::convert_inner(
+                    ExtraAttributes::Owned(extra_attributes) => Outer::convert_inner(
                         value,
                         attributes,
                         val_ty,
@@ -508,13 +540,24 @@ trait ConvertValueInner: ConvertValue {
                 }
             }
 
-            fn first(&self) -> Option<&Ident> {
+            fn first<F_: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+                &self,
+                meta: &ConvertMeta<F_>,
+            ) -> Option<Ident> {
                 match self {
                     ExtraAttributes::None => None,
-                    ExtraAttributes::BorrowedA(attributes) => attributes.first().map(|(k, _)| k),
-                    ExtraAttributes::BorrowedB(attributes) => attributes.first().map(|(k, _)| k),
-                    ExtraAttributes::BorrowedC(attributes) => attributes.first().map(|(k, _)| k),
-                    ExtraAttributes::Owned(attributes) => attributes.first().map(|(k, _)| k),
+                    ExtraAttributes::BorrowedA(attributes) => attributes
+                        .first()
+                        .map(|(k, _)| C0::get_spanned_field(k, meta)),
+                    ExtraAttributes::BorrowedB(attributes) => attributes
+                        .first()
+                        .map(|(k, _)| C1::get_spanned_field(k, meta)),
+                    ExtraAttributes::BorrowedC(attributes) => {
+                        attributes.first().map(|(k, _)| k.clone())
+                    }
+                    ExtraAttributes::Owned(attributes) => {
+                        attributes.first().map(|(k, _)| k.clone())
+                    }
                 }
             }
         }
@@ -528,45 +571,54 @@ trait ConvertValueInner: ConvertValue {
 
             let mut new_attrs = Attributes::default();
             // We prioritise taking from `extra_attributes`. Putting extra stuff in a new `extra_attributes`.
-            let mut extra_attributes = if let Some(extra_attributes) = extra_attributes {
-                for (ident, v) in extra_attributes {
-                    let Some(ty) = ty.meta.attributes.get(ident.as_str()) else {
-                        continue;
-                    };
+            let mut extra_attributes: ExtraAttributes<C, Self::Inner> =
+                if let Some(extra_attributes) = extra_attributes {
+                    for (ident, v) in extra_attributes {
+                        let ident = C::get_spanned_field(ident, &meta);
+                        let Some(ty) = ty.meta.attributes.get(ident.as_str()) else {
+                            continue;
+                        };
 
-                    new_attrs.insert(ident.clone(), v.convert(meta.reborrow(), ty.id, no_attr())?);
-                }
+                        new_attrs.insert(ident, v.convert(meta.reborrow(), ty.id, no_attr())?);
+                    }
 
-                if new_attrs.is_empty() {
-                    // All of the extra attributes left.
-                    ExtraAttributes::BorrowedA(extra_attributes)
-                } else if new_attrs.len() == extra_attributes.len() {
-                    // None of the extra attributes left.
-                    ExtraAttributes::None
+                    if new_attrs.is_empty() {
+                        // All of the extra attributes left.
+                        ExtraAttributes::BorrowedA(extra_attributes)
+                    } else if new_attrs.len() == extra_attributes.len() {
+                        // None of the extra attributes left.
+                        ExtraAttributes::None
+                    } else {
+                        // Part of the extra attributes left.
+                        ExtraAttributes::Owned(Attributes(
+                            extra_attributes
+                                .iter()
+                                .filter(|(i, _)| {
+                                    new_attrs
+                                        .get(C::get_spanned_field(i, &meta).as_str())
+                                        .is_none()
+                                })
+                                .map(|(i, v)| {
+                                    (C::get_spanned_field(i, &meta), v.container_to_any())
+                                })
+                                .collect(),
+                        ))
+                    }
                 } else {
-                    // Part of the extra attributes left.
-                    ExtraAttributes::Owned(Attributes(
-                        extra_attributes
-                            .iter()
-                            .filter(|(i, _)| new_attrs.get(i.as_str()).is_none())
-                            .map(|(i, v)| (i.clone(), v.to_any()))
-                            .collect(),
-                    ))
-                }
-            } else {
-                ExtraAttributes::None
-            };
+                    ExtraAttributes::None
+                };
 
             let old_len = new_attrs.len();
             let empty = extra_attributes.is_empty();
             // And then we take from our own attributes, putting duplicates and extra stuff in `extra_attributes`.
-            for (ident, v) in &attributes.value {
+            for (ident, v) in attributes.value {
+                let ident = Self::get_spanned_field(ident, &meta);
                 let (Some(ty), false) = (
                     ty.meta.attributes.get(ident.as_str()),
                     new_attrs.get(ident.as_str()).is_some(),
                 ) else {
                     if !empty {
-                        let extra = extra_attributes.get_mut();
+                        let extra = extra_attributes.get_mut(&meta);
                         if let Some((first, _)) = extra.get(ident.as_str()) {
                             Err(ConversionError::DuplicateAttribute {
                                 first: first.clone(),
@@ -575,7 +627,7 @@ trait ConvertValueInner: ConvertValue {
                             .spanned(ident.span))?
                         }
 
-                        extra.insert(ident.clone(), v.to_any());
+                        extra.insert(ident.clone(), v.container_to_any());
                     }
                     continue;
                 };
@@ -586,7 +638,7 @@ trait ConvertValueInner: ConvertValue {
             if empty {
                 extra_attributes = if new_attrs.len() == old_len {
                     // All of the extra attributes left.
-                    ExtraAttributes::BorrowedB(&attributes.value)
+                    ExtraAttributes::BorrowedB(attributes.value)
                 } else if new_attrs.len() == old_len + attributes.len() {
                     // None of the extra attributes left.
                     ExtraAttributes::None
@@ -595,8 +647,12 @@ trait ConvertValueInner: ConvertValue {
                     ExtraAttributes::Owned(Attributes(
                         attributes
                             .iter()
-                            .filter(|(i, _)| new_attrs.get(i.as_str()).is_none())
-                            .map(|(i, v)| (i.clone(), v.to_any()))
+                            .filter(|(i, _)| {
+                                new_attrs
+                                    .get(Self::get_spanned_field(i, &meta).as_str())
+                                    .is_none()
+                            })
+                            .map(|(i, v)| (Self::get_spanned_field(i, &meta), v.container_to_any()))
                             .collect(),
                     ))
                 }
@@ -687,6 +743,7 @@ trait ConvertValueInner: ConvertValue {
 
                     let mut new_fields = Fields::with_capacity(value_fields.len());
                     for (field, value) in value_fields {
+                        let field = Self::get_spanned_field(field, &meta);
                         let Some(ty) = fields.get(field.as_str()) else {
                             Err(ConversionError::UnexpectedField {
                                 attribute: false,
@@ -696,10 +753,7 @@ trait ConvertValueInner: ConvertValue {
                             .spanned(span))?
                         };
 
-                        new_fields.insert(
-                            field.clone(),
-                            value.convert(meta.reborrow(), ty.id, no_attr())?,
-                        );
+                        new_fields.insert(field, value.convert(meta.reborrow(), ty.id, no_attr())?);
                     }
 
                     FieldsKind::Named(new_fields)
@@ -712,7 +766,7 @@ trait ConvertValueInner: ConvertValue {
                     && raw_val_type.is_some_and(|ty| ty.value == ty_id.value)
                 {
                     let variant = Self::get_variant(variant, meta.symbols)?
-                        .spanned(Self::variant_span(variant));
+                        .spanned(Self::variant_span(variant, &meta));
                     let ty = variants.get(variant.borrow()).ok_or(
                         ConversionError::UnknownVariant {
                             variant: variant.clone(),
@@ -739,7 +793,7 @@ trait ConvertValueInner: ConvertValue {
                         variant.to_owned().spanned(raw_val_type.span),
                         extra_attributes.convert_inner_with(
                             value,
-                            &Spanned::new(attributes_span, Default::default()),
+                            Spanned::new(attributes_span, &Default::default()),
                             Some(raw_val_type),
                             meta.reborrow(),
                             variant_ty,
@@ -760,7 +814,7 @@ trait ConvertValueInner: ConvertValue {
                                 extra_attributes
                                     .convert_inner_with(
                                         value,
-                                        &Spanned::new(attributes_span, Default::default()),
+                                        Spanned::new(attributes_span, &Default::default()),
                                         raw_val_type,
                                         meta.reborrow(),
                                         ty,
@@ -832,7 +886,7 @@ trait ConvertValueInner: ConvertValue {
                     .map(|ident| {
                         Ok(Self::get_variant(ident, meta.symbols)?
                             .to_owned()
-                            .spanned(Self::variant_span(ident)))
+                            .spanned(Self::variant_span(ident, &meta)))
                     })
                     .collect::<Result<_>>()?;
 
@@ -848,7 +902,7 @@ trait ConvertValueInner: ConvertValue {
                     .expect("We didn't add any ::");
                 let val = extra_attributes.convert_inner_with(
                     value,
-                    &Spanned::new(attributes_span, Default::default()),
+                    Spanned::new(attributes_span, &Default::default()),
                     raw_val_type,
                     meta.with_object_name(object_name.borrow()),
                     *ty,
@@ -890,7 +944,7 @@ trait ConvertValueInner: ConvertValue {
             (types::TypeKind::Transparent(ty), _) => {
                 let val = extra_attributes.convert_inner_with(
                     value,
-                    &Spanned::new(attributes_span, Default::default()),
+                    Spanned::new(attributes_span, &Default::default()),
                     raw_val_type,
                     meta.reborrow(),
                     *ty,
@@ -900,14 +954,14 @@ trait ConvertValueInner: ConvertValue {
             }
             (_, Value::Transparent(value)) => {
                 // Try again as if it wasn't a transparent value.
-                extra_attributes.extend(&attributes);
+                extra_attributes.extend(&attributes, &meta);
                 return extra_attributes.convert_with(value, meta.reborrow(), expected_type);
             }
             _ => Err(expected_err())?,
         };
 
         // Report errors for unexpected attributes
-        if let Some(ident) = extra_attributes.first() {
+        if let Some(ident) = extra_attributes.first(&meta) {
             Err(ConversionError::UnexpectedField {
                 attribute: true,
                 field: ident.clone(),
@@ -938,20 +992,31 @@ trait ConvertValueInner: ConvertValue {
 /// 1. `ParseVal`, which we get when we parse bauble from types.
 /// 2. `CopyVal`, an intermediate value that we convert all copy values to.
 /// 3. `Val`, the fully resolved type, which is always correct to convert to rust.
-pub(super) trait ConvertValue: Clone + std::fmt::Debug {
-    fn to_any(&self) -> AnyVal;
+pub(super) trait ConvertValue: ValueContainer {
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        meta: &ConvertMeta<F>,
+    ) -> Ident;
 
-    fn to_any_attributes(attributes: &Attributes<Self>) -> Attributes<AnyVal<'_>> {
+    fn to_any_attributes<'a, F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        attributes: &'a Attributes<Self>,
+        meta: &ConvertMeta<F>,
+    ) -> Attributes<AnyVal<'a>> {
         Attributes(
             attributes
                 .0
                 .iter()
-                .map(|(i, v)| (i.clone(), v.to_any()))
+                .map(|(i, v)| (Self::get_spanned_field(i, meta), v.container_to_any()))
                 .collect(),
         )
     }
 
-    fn span(&self) -> Span;
+    fn get_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        &self,
+        meta: &ConvertMeta<F>,
+    ) -> Span {
+        meta.default_span
+    }
 
     fn convert<'a, C: ConvertValue, F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
         &self,
@@ -961,11 +1026,58 @@ pub(super) trait ConvertValue: Clone + std::fmt::Debug {
     ) -> Result<Val>;
 }
 
+impl ConvertValueInner for UnspannedVal {
+    fn get_variant(ident: &Self::Variant, _symbols: &Symbols) -> Result<TypePathElem> {
+        Ok(ident.clone())
+    }
+
+    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
+        Ok(asset.clone())
+    }
+
+    fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
+        TypePathElem::try_from(path.borrow()).ok()
+    }
+
+    fn variant_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        _variant: &Self::Variant,
+        meta: &ConvertMeta<F>,
+    ) -> Span {
+        meta.default_span
+    }
+}
+
+impl ConvertValue for UnspannedVal {
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        meta: &ConvertMeta<F>,
+    ) -> Ident {
+        field.clone().spanned(meta.default_span)
+    }
+
+    fn convert<
+        'a,
+        C: ConvertValue,
+        F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
+    >(
+        &self,
+        meta: ConvertMeta<'a, F>,
+        expected_type: TypeId,
+        extra_attributes: Option<&'a Attributes<C>>,
+    ) -> Result<Val> {
+        let val_ty = Some(self.ty.spanned(meta.default_span));
+        Self::convert_inner(
+            (&self.value).spanned(meta.default_span),
+            (&self.attributes).spanned(meta.default_span),
+            val_ty,
+            meta,
+            expected_type,
+            extra_attributes,
+        )
+    }
+}
+
 impl ConvertValueInner for Val {
-    type Ref = TypePath;
-
-    type Variant = Spanned<TypePathElem>;
-
     fn get_variant(ident: &Self::Variant, _symbols: &Symbols) -> Result<TypePathElem> {
         Ok(ident.value.clone())
     }
@@ -978,17 +1090,26 @@ impl ConvertValueInner for Val {
         TypePathElem::try_from(path.borrow()).ok()
     }
 
-    fn variant_span(variant: &Self::Variant) -> Span {
+    fn variant_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        variant: &Self::Variant,
+        _meta: &ConvertMeta<F>,
+    ) -> Span {
         variant.span
     }
 }
 
 impl ConvertValue for Val {
-    fn to_any(&self) -> AnyVal {
-        AnyVal::Complete(self)
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        _meta: &ConvertMeta<F>,
+    ) -> Ident {
+        field.clone()
     }
 
-    fn span(&self) -> Span {
+    fn get_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        &self,
+        _meta: &ConvertMeta<F>,
+    ) -> Span {
         self.span()
     }
 
@@ -1018,8 +1139,8 @@ impl ConvertValue for Val {
                 types::TypeKind::Ref(_)
                 | types::TypeKind::Transparent(_)
                 | types::TypeKind::Enum { .. } => Self::convert_inner(
-                    &self.value,
-                    &self.attributes,
+                    self.value.as_ref(),
+                    self.attributes.as_ref(),
                     Some(self.ty),
                     meta,
                     expected_type,
@@ -1060,11 +1181,7 @@ impl ConvertValue for Val {
     }
 }
 
-impl ConvertValueInner for CopyVal {
-    type Ref = TypePath;
-
-    type Variant = Spanned<TypePathElem>;
-
+impl ConvertValueInner for CopyValInner {
     fn get_variant(ident: &Self::Variant, _symbols: &Symbols) -> Result<TypePathElem> {
         Ok(ident.value.clone())
     }
@@ -1077,18 +1194,59 @@ impl ConvertValueInner for CopyVal {
         TypePathElem::try_from(path.borrow()).ok()
     }
 
-    fn variant_span(variant: &Self::Variant) -> Span {
+    fn variant_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        variant: &Self::Variant,
+        _meta: &ConvertMeta<F>,
+    ) -> Span {
         variant.span
     }
 }
 
-impl ConvertValue for CopyVal {
-    fn to_any(&self) -> AnyVal {
-        AnyVal::Copy(self)
+impl ConvertValue for CopyValInner {
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        _meta: &ConvertMeta<F>,
+    ) -> Ident {
+        field.clone()
     }
 
-    fn span(&self) -> Span {
-        self.span()
+    fn convert<
+        'a,
+        C: ConvertValue,
+        F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>,
+    >(
+        &self,
+        meta: ConvertMeta<'a, F>,
+        expected_type: TypeId,
+        extra_attributes: Option<&'a Attributes<C>>,
+    ) -> Result<Val> {
+        Self::convert_inner(
+            self.value.as_ref(),
+            self.attributes.as_ref(),
+            self.ty,
+            meta,
+            expected_type,
+            extra_attributes,
+        )
+    }
+}
+
+impl ConvertValue for CopyVal {
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        _meta: &ConvertMeta<F>,
+    ) -> Ident {
+        field.clone()
+    }
+
+    fn get_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        &self,
+        meta: &ConvertMeta<F>,
+    ) -> Span {
+        match self {
+            CopyVal::Copy(v) => v.get_span(meta),
+            CopyVal::Resolved(v) => v.get_span(meta),
+        }
     }
 
     fn convert<
@@ -1102,28 +1260,13 @@ impl ConvertValue for CopyVal {
         extra_attributes: Option<&Attributes<C>>,
     ) -> Result<Val> {
         match self {
-            CopyVal::Copy {
-                ty,
-                value,
-                attributes,
-            } => Self::convert_inner(
-                value,
-                attributes,
-                *ty,
-                meta,
-                expected_type,
-                extra_attributes,
-            ),
+            CopyVal::Copy(val) => val.convert(meta, expected_type, extra_attributes),
             CopyVal::Resolved(val) => val.convert(meta, expected_type, extra_attributes),
         }
     }
 }
 
 impl ConvertValueInner for ParseVal {
-    type Ref = Path;
-
-    type Variant = Path;
-
     fn get_variant(ident: &Self::Variant, symbols: &Symbols) -> Result<TypePathElem> {
         Ok(symbols
             .ctx
@@ -1146,21 +1289,27 @@ impl ConvertValueInner for ParseVal {
             .and_then(|p| TypePathElem::new(p.value).ok())
     }
 
-    fn variant_span(variant: &Self::Variant) -> Span {
+    fn variant_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        variant: &Self::Variant,
+        _meta: &ConvertMeta<F>,
+    ) -> Span {
         variant.span()
     }
 }
 
 impl ConvertValue for ParseVal {
-    fn to_any(&self) -> AnyVal {
-        AnyVal::Parse(self)
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        _meta: &ConvertMeta<F>,
+    ) -> Ident {
+        field.clone()
     }
 
-    fn span(&self) -> Span {
-        Span::new(
-            self.value.span,
-            self.attributes.span.start..self.value.span.end,
-        )
+    fn get_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        &self,
+        _meta: &ConvertMeta<F>,
+    ) -> Span {
+        self.span()
     }
 
     fn convert<
@@ -1176,8 +1325,8 @@ impl ConvertValue for ParseVal {
         let ty = value_type(self, meta.symbols)?;
 
         Self::convert_inner(
-            &self.value,
-            &self.attributes,
+            self.value.as_ref(),
+            self.attributes.as_ref(),
             ty,
             meta,
             expected_type,
@@ -1187,19 +1336,22 @@ impl ConvertValue for ParseVal {
 }
 
 impl ConvertValue for AnyVal<'_> {
-    fn to_any(&self) -> AnyVal {
-        *self
+    fn get_spanned_field<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        field: &Self::ContainerField,
+        _meta: &ConvertMeta<F>,
+    ) -> Ident {
+        field.clone()
     }
 
-    fn to_any_attributes(attributes: &Attributes<Self>) -> Attributes<AnyVal<'_>> {
-        attributes.clone()
-    }
-
-    fn span(&self) -> Span {
+    fn get_span<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+        &self,
+        meta: &ConvertMeta<F>,
+    ) -> Span {
         match self {
-            AnyVal::Parse(v) => v.span(),
-            AnyVal::Copy(v) => v.span(),
-            AnyVal::Complete(v) => v.span(),
+            AnyVal::Parse(v) => v.get_span(meta),
+            AnyVal::Copy(v) => v.get_span(meta),
+            AnyVal::Complete(v) => v.get_span(meta),
+            AnyVal::Unspanned(v) => v.get_span(meta),
         }
     }
 
@@ -1213,6 +1365,7 @@ impl ConvertValue for AnyVal<'_> {
             AnyVal::Parse(v) => v.convert(meta, expected_type, extra_attributes),
             AnyVal::Copy(v) => v.convert(meta, expected_type, extra_attributes),
             AnyVal::Complete(v) => v.convert(meta, expected_type, extra_attributes),
+            AnyVal::Unspanned(v) => v.convert(meta, expected_type, extra_attributes),
         }
     }
 }
@@ -1249,7 +1402,7 @@ pub(super) fn convert_copy_value<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> 
         };
 
         let attributes = parse_attributes()?;
-        let inner: Value<CopyVal> = match &value.value.value {
+        let inner: Value<CopyValInner> = match &value.value.value {
             Value::Primitive(p) => Value::Primitive(p.clone()),
             Value::Ref(_) => todo!(),
             Value::Tuple(seq) => Value::Tuple(
@@ -1306,10 +1459,10 @@ pub(super) fn convert_copy_value<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> 
             Value::Enum(_, _) => unimplemented!("We don't get enums from parsing"),
         };
 
-        Ok(CopyVal::Copy {
+        Ok(CopyVal::Copy(CopyValInner {
             ty: val_type,
             value: inner.spanned(value.value.span),
             attributes: Attributes(attributes).spanned(value.attributes.span),
-        })
+        }))
     }
 }

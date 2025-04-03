@@ -1,4 +1,4 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use crate::{
     Spanned,
@@ -7,7 +7,7 @@ use crate::{
     types::{TypeId, TypeRegistry},
 };
 
-use super::{Attributes, FieldsKind, Ident, Object, UnspannedVal, Val, Value};
+use super::{Attributes, FieldsKind, Object, UnspannedVal, Val, Value, ValueContainer, ValueTrait};
 /// Config to be used when formatting bauble.
 pub struct DisplayConfig {
     /// String inserted for tabs.
@@ -189,13 +189,12 @@ fn slice_display<CTX, T: IndentedDisplay<CTX>>(slice: &[T], mut w: LineWriter<CT
     }
 }
 
-impl<
-    CTX: ValueCtx<Inner, Ref = Ref, Field = Field>,
-    Inner: IndentedDisplay<CTX>,
-    Ref: std::fmt::Display,
-    Variant: std::fmt::Display,
-    Field: std::fmt::Display + Hash + Eq,
-> IndentedDisplay<CTX> for Value<Inner, Ref, Variant, Field>
+impl<CTX: ValueCtx<V>, V: ValueTrait> IndentedDisplay<CTX> for Value<V>
+where
+    V::Ref: std::fmt::Display,
+    V::Variant: std::fmt::Display,
+    V::Field: std::fmt::Display,
+    V::Inner: IndentedDisplay<CTX> + ValueContainer,
 {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         match self {
@@ -332,7 +331,7 @@ impl<
                 }
             },
             Value::Transparent(inner) => {
-                if !w.ctx().attributes(inner).is_empty() {
+                if inner.has_attributes() {
                     w.write("(");
                     inner.indented_display(w.reborrow());
                     w.write(")");
@@ -347,8 +346,9 @@ impl<
     }
 }
 
-impl<CTX, Inner: IndentedDisplay<CTX>, I: Hash + Eq + std::fmt::Display> IndentedDisplay<CTX>
-    for Attributes<Inner, I>
+impl<CTX, V: IndentedDisplay<CTX> + ValueContainer> IndentedDisplay<CTX> for Attributes<V>
+where
+    V::ContainerField: std::fmt::Display,
 {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         match self.len() {
@@ -427,9 +427,7 @@ impl IndentedDisplay<ValueDisplayCtx<'_, Val>> for Val {
     }
 }
 
-impl<CTX: ValueCtx<ParseVal, Ref = crate::parse::Path, Field = Ident>> IndentedDisplay<CTX>
-    for ParseVal
-{
+impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseVal {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         if !self.attributes.is_empty() {
             self.attributes.indented_display(w.reborrow());
@@ -442,7 +440,7 @@ impl<CTX: ValueCtx<ParseVal, Ref = crate::parse::Path, Field = Ident>> IndentedD
     }
 }
 
-impl<CTX: ValueCtx<Inner>, Inner: IndentedDisplay<CTX>> IndentedDisplay<CTX> for Object<Inner> {
+impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX> for Object<V> {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         let Some((_, ident)) = self.object_path.get_end() else {
             return;
@@ -450,7 +448,7 @@ impl<CTX: ValueCtx<Inner>, Inner: IndentedDisplay<CTX>> IndentedDisplay<CTX> for
 
         w.write(ident.as_str());
 
-        let ty = w.ctx().ty(&self.value);
+        let ty = self.value.ty();
         if let Some(path) = w.ctx().get_writable_path(ty) {
             let path = path.to_owned();
             w.write(": ");
@@ -462,56 +460,30 @@ impl<CTX: ValueCtx<Inner>, Inner: IndentedDisplay<CTX>> IndentedDisplay<CTX> for
     }
 }
 
-struct ValueDisplayCtx<'a, Inner> {
-    inlined_refs: HashMap<TypePath<&'a str>, &'a Inner>,
+struct ValueDisplayCtx<'a, V: ValueTrait> {
+    inlined_refs: HashMap<TypePath<&'a str>, &'a V::Inner>,
     types: &'a TypeRegistry,
 }
 
-trait ValueCtx<Inner> {
-    type Ref;
-    type Field: Hash + Eq;
-    fn inline(&self, path: &Self::Ref) -> Option<&Inner>;
+trait ValueCtx<V: ValueTrait> {
+    fn inline(&self, path: &V::Ref) -> Option<&V::Inner>;
 
-    fn attributes<'a>(&self, val: &'a Inner) -> &'a Attributes<Inner, Self::Field>;
+    fn get_writable_path(&self, _ty: TypeId) -> Option<TypePath<&str>>;
+}
 
-    fn ty(&self, val: &Inner) -> TypeId;
+impl ValueCtx<ParseVal> for () {
+    fn inline(&self, _path: &crate::parse::Path) -> Option<&ParseVal> {
+        None
+    }
 
     fn get_writable_path(&self, _ty: TypeId) -> Option<TypePath<&str>> {
         None
     }
 }
 
-impl ValueCtx<ParseVal> for () {
-    type Ref = crate::parse::Path;
-    type Field = Ident;
-
-    fn inline(&self, _path: &crate::parse::Path) -> Option<&ParseVal> {
-        None
-    }
-
-    fn attributes<'a>(&self, val: &'a ParseVal) -> &'a Attributes<ParseVal> {
-        &val.attributes
-    }
-
-    fn ty(&self, _val: &ParseVal) -> TypeId {
-        TypeRegistry::any_type()
-    }
-}
-
 impl ValueCtx<Val> for ValueDisplayCtx<'_, Val> {
-    type Ref = TypePath;
-    type Field = Ident;
-
     fn inline(&self, path: &TypePath) -> Option<&Val> {
         self.inlined_refs.get(path.as_str()).copied()
-    }
-
-    fn attributes<'a>(&self, val: &'a Val) -> &'a Attributes<Val> {
-        &val.attributes
-    }
-
-    fn ty(&self, val: &Val) -> TypeId {
-        *val.ty
     }
 
     fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
@@ -520,19 +492,8 @@ impl ValueCtx<Val> for ValueDisplayCtx<'_, Val> {
 }
 
 impl ValueCtx<UnspannedVal> for ValueDisplayCtx<'_, UnspannedVal> {
-    type Ref = TypePath;
-    type Field = String;
-
     fn inline(&self, path: &TypePath) -> Option<&UnspannedVal> {
         self.inlined_refs.get(path.as_str()).copied()
-    }
-
-    fn attributes<'a>(&self, val: &'a UnspannedVal) -> &'a Attributes<UnspannedVal, Self::Field> {
-        &val.attributes
-    }
-
-    fn ty(&self, val: &UnspannedVal) -> TypeId {
-        val.ty
     }
 
     fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
@@ -540,10 +501,10 @@ impl ValueCtx<UnspannedVal> for ValueDisplayCtx<'_, UnspannedVal> {
     }
 }
 
-impl<Inner: for<'a> IndentedDisplay<ValueDisplayCtx<'a, Inner>>> IndentedDisplay<TypeRegistry>
-    for [Object<Inner>]
+impl<V: ValueTrait<Inner = V> + for<'a> IndentedDisplay<ValueDisplayCtx<'a, V>>>
+    IndentedDisplay<TypeRegistry> for [Object<V>]
 where
-    for<'a> ValueDisplayCtx<'a, Inner>: ValueCtx<Inner>,
+    for<'a> ValueDisplayCtx<'a, V>: ValueCtx<V>,
 {
     fn indented_display(&self, mut w: LineWriter<TypeRegistry>) {
         let mut inlined_refs = HashMap::new();
@@ -604,9 +565,7 @@ impl<CTX, T: IndentedDisplay<CTX>> IndentedDisplay<CTX> for Spanned<T> {
     }
 }
 
-impl<CTX: ValueCtx<ParseVal, Ref = crate::parse::Path, Field = Ident>> IndentedDisplay<CTX>
-    for ParseValues
-{
+impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseValues {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         let mut written = false;
         for u in self.uses.iter() {

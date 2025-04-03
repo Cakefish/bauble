@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display};
 
 use crate::{
-    CustomError, Val, Value,
+    CustomError, SpannedValue, Val, Value,
     context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
     path::{TypePath, TypePathElem},

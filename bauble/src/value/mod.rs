@@ -21,28 +21,139 @@ mod display;
 mod error;
 mod symbols;
 
+pub(crate) use convert::AnyVal;
 use convert::{ConvertMeta, ConvertValue, no_attr, value_type};
 pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Attributes<Inner = Val, I: Hash + Eq = Ident>(IndexMap<I, Inner>);
+pub trait ValueTrait: Clone + std::fmt::Debug {
+    type Inner: ValueContainer;
+    type Ref;
+    type Variant;
+    type Field: Hash + Eq + std::borrow::Borrow<str>;
 
-impl<Inner, I: Hash + Eq> From<IndexMap<I, Inner>> for Attributes<Inner, I> {
-    fn from(value: IndexMap<I, Inner>) -> Self {
+    fn ty(&self) -> TypeId;
+
+    fn attributes(&self) -> &Attributes<Self::Inner>;
+
+    fn value(&self) -> &Value<Self>;
+
+    fn to_any(&self) -> AnyVal;
+}
+
+pub trait SpannedValue: ValueTrait {
+    fn type_span(&self) -> crate::Span;
+
+    fn value_span(&self) -> crate::Span;
+
+    fn attributes_span(&self) -> crate::Span;
+
+    fn span(&self) -> crate::Span {
+        let attributes_span = self.attributes_span();
+        let value_span = self.value_span();
+        if attributes_span.file() == value_span.file() {
+            crate::Span::new(value_span.file(), attributes_span.start..value_span.end)
+        } else {
+            value_span
+        }
+    }
+}
+
+pub trait ValueContainer: Clone + std::fmt::Debug {
+    type ContainerField: Hash + Eq + std::borrow::Borrow<str>;
+
+    fn has_attributes(&self) -> bool;
+
+    fn container_ty(&self) -> TypeId;
+
+    fn container_to_any(&self) -> AnyVal;
+}
+
+impl<V: ValueTrait> ValueContainer for V {
+    type ContainerField = V::Field;
+
+    fn has_attributes(&self) -> bool {
+        !self.attributes().is_empty()
+    }
+
+    fn container_ty(&self) -> TypeId {
+        ValueTrait::ty(self)
+    }
+
+    fn container_to_any(&self) -> AnyVal {
+        self.to_any()
+    }
+}
+
+impl ValueContainer for CopyVal {
+    type ContainerField = Ident;
+
+    fn has_attributes(&self) -> bool {
+        match self {
+            CopyVal::Copy(v) => v.has_attributes(),
+            CopyVal::Resolved(v) => v.has_attributes(),
+        }
+    }
+
+    fn container_ty(&self) -> TypeId {
+        match self {
+            CopyVal::Copy(v) => v.ty(),
+            CopyVal::Resolved(v) => v.ty(),
+        }
+    }
+
+    fn container_to_any(&self) -> AnyVal {
+        match self {
+            CopyVal::Copy(v) => v.to_any(),
+            CopyVal::Resolved(v) => v.to_any(),
+        }
+    }
+}
+
+impl ValueContainer for AnyVal<'_> {
+    type ContainerField = Ident;
+
+    fn has_attributes(&self) -> bool {
+        match self {
+            AnyVal::Parse(v) => v.has_attributes(),
+            AnyVal::Copy(v) => v.has_attributes(),
+            AnyVal::Complete(v) => v.has_attributes(),
+            AnyVal::Unspanned(v) => v.has_attributes(),
+        }
+    }
+
+    fn container_ty(&self) -> TypeId {
+        match self {
+            AnyVal::Parse(v) => v.ty(),
+            AnyVal::Copy(v) => v.ty(),
+            AnyVal::Complete(v) => v.ty(),
+            AnyVal::Unspanned(v) => v.ty(),
+        }
+    }
+
+    fn container_to_any(&self) -> AnyVal {
+        *self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Attributes<V: ValueContainer = Val>(IndexMap<V::ContainerField, V>);
+
+impl<V: ValueContainer> From<IndexMap<V::ContainerField, V>> for Attributes<V> {
+    fn from(value: IndexMap<V::ContainerField, V>) -> Self {
         Self(value)
     }
 }
 
-impl<T, I: Hash + Eq> Default for Attributes<T, I> {
+impl<V: ValueContainer> Default for Attributes<V> {
     fn default() -> Self {
         Self(Default::default())
     }
 }
 
-impl<T, I: Hash + Eq> Attributes<T, I> {
+impl<V: ValueContainer> Attributes<V> {
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -51,51 +162,45 @@ impl<T, I: Hash + Eq> Attributes<T, I> {
         self.0.is_empty()
     }
 
-    pub fn get(&self, s: &str) -> Option<(&I, &T)>
-    where
-        str: indexmap::Equivalent<I>,
-    {
+    pub fn get(&self, s: &str) -> Option<(&V::ContainerField, &V)> {
         self.0.get_key_value(s)
     }
 
-    pub fn values(&self) -> impl ExactSizeIterator<Item = &T> {
+    pub fn values(&self) -> impl ExactSizeIterator<Item = &V> {
         self.0.values()
     }
 
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&I, &T)> {
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&V::ContainerField, &V)> {
         self.0.iter()
     }
 
-    pub fn first(&self) -> Option<(&I, &T)> {
+    pub fn first(&self) -> Option<(&V::ContainerField, &V)> {
         self.0.first()
     }
 
-    pub fn insert(&mut self, ident: I, v: T) {
+    pub fn insert(&mut self, ident: V::ContainerField, v: V) {
         self.0.insert(ident, v);
     }
 
-    pub fn take(&mut self, ident: &str) -> Option<T>
-    where
-        str: indexmap::Equivalent<I>,
-    {
+    pub fn take(&mut self, ident: &str) -> Option<V> {
         self.0.swap_remove(ident)
     }
 }
 
-impl<T> IntoIterator for Attributes<T> {
-    type Item = (Ident, T);
+impl<T: ValueContainer> IntoIterator for Attributes<T> {
+    type Item = (T::ContainerField, T);
 
-    type IntoIter = <IndexMap<Ident, T> as IntoIterator>::IntoIter;
+    type IntoIter = <IndexMap<T::ContainerField, T> as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
 
-impl<'a, T> IntoIterator for &'a Attributes<T> {
-    type Item = (&'a Ident, &'a T);
+impl<'a, T: ValueContainer> IntoIterator for &'a Attributes<T> {
+    type Item = (&'a T::ContainerField, &'a T);
 
-    type IntoIter = indexmap::map::Iter<'a, Ident, T>;
+    type IntoIter = indexmap::map::Iter<'a, T::ContainerField, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
@@ -108,6 +213,46 @@ pub struct Val {
     pub ty: Spanned<TypeId>,
     pub value: Spanned<Value>,
     pub attributes: Spanned<Attributes>,
+}
+
+impl ValueTrait for Val {
+    type Inner = Self;
+
+    type Ref = TypePath;
+
+    type Variant = Spanned<TypePathElem>;
+
+    type Field = Ident;
+
+    fn ty(&self) -> TypeId {
+        self.ty.value
+    }
+
+    fn attributes(&self) -> &Attributes<Self::Inner> {
+        &self.attributes
+    }
+
+    fn value(&self) -> &Value<Self> {
+        &self.value
+    }
+
+    fn to_any(&self) -> AnyVal {
+        AnyVal::Complete(self)
+    }
+}
+
+impl SpannedValue for Val {
+    fn type_span(&self) -> crate::Span {
+        self.ty.span
+    }
+
+    fn value_span(&self) -> crate::Span {
+        self.value.span
+    }
+
+    fn attributes_span(&self) -> crate::Span {
+        self.attributes.span
+    }
 }
 
 impl Val {
@@ -161,8 +306,34 @@ impl Val {
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnspannedVal {
     pub ty: TypeId,
-    pub value: Value<UnspannedVal, TypePath, TypePathElem, String>,
-    pub attributes: Attributes<UnspannedVal, String>,
+    pub value: Value<UnspannedVal>,
+    pub attributes: Attributes<UnspannedVal>,
+}
+
+impl ValueTrait for UnspannedVal {
+    type Inner = Self;
+
+    type Ref = TypePath;
+
+    type Variant = TypePathElem;
+
+    type Field = String;
+
+    fn ty(&self) -> TypeId {
+        self.ty
+    }
+
+    fn attributes(&self) -> &Attributes<Self::Inner> {
+        &self.attributes
+    }
+
+    fn value(&self) -> &Value<Self> {
+        &self.value
+    }
+
+    fn to_any(&self) -> AnyVal {
+        AnyVal::Unspanned(self)
+    }
 }
 
 impl UnspannedVal {
@@ -171,7 +342,7 @@ impl UnspannedVal {
     /// In contexts where you have a `TypeRegistry`, for example in `Bauble::construct_type`,
     /// prefer using `TypeRegistry::instantiate` to construct this for types for which
     /// `TypeId` is known.
-    pub fn new(value: Value<UnspannedVal, TypePath, TypePathElem, String>) -> Self {
+    pub fn new(value: Value<UnspannedVal>) -> Self {
         Self {
             ty: types::TypeRegistry::any_type(),
             value,
@@ -191,32 +362,67 @@ impl UnspannedVal {
 }
 
 #[derive(Clone, Debug)]
-enum CopyVal {
-    Copy {
-        ty: Option<Spanned<TypeId>>,
-        value: Spanned<Value<CopyVal>>,
-        attributes: Spanned<Attributes<CopyVal>>,
-    },
+pub struct CopyValInner {
+    ty: Option<Spanned<TypeId>>,
+    value: Spanned<Value<CopyValInner>>,
+    attributes: Spanned<Attributes<CopyVal>>,
+}
+
+impl ValueTrait for CopyValInner {
+    type Inner = CopyVal;
+
+    type Ref = TypePath;
+
+    type Variant = Spanned<TypePathElem>;
+
+    type Field = Ident;
+
+    fn ty(&self) -> TypeId {
+        *self
+            .ty
+            .as_deref()
+            .unwrap_or(&types::TypeRegistry::any_type())
+    }
+
+    fn attributes(&self) -> &Attributes<Self::Inner> {
+        &self.attributes
+    }
+
+    fn value(&self) -> &Value<Self> {
+        &self.value
+    }
+
+    fn to_any(&self) -> AnyVal {
+        AnyVal::Copy(self)
+    }
+}
+
+impl SpannedValue for CopyValInner {
+    fn type_span(&self) -> crate::Span {
+        self.ty.map(|s| s.span).unwrap_or(self.value.span)
+    }
+
+    fn value_span(&self) -> crate::Span {
+        self.value.span
+    }
+
+    fn attributes_span(&self) -> crate::Span {
+        self.attributes.span
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum CopyVal {
+    Copy(CopyValInner),
     Resolved(Val),
 }
 
 impl CopyVal {
     fn span(&self) -> crate::Span {
         match self {
-            CopyVal::Copy {
-                value, attributes, ..
-            } => crate::Span::new(value.span, attributes.span.start..value.span.end),
+            CopyVal::Copy(val) => val.span(),
             CopyVal::Resolved(val) => val.span(),
         }
-    }
-}
-
-impl Val {
-    pub fn span(&self) -> crate::Span {
-        crate::Span::new(
-            self.value.span,
-            self.attributes.span.start..self.value.span.end,
-        )
     }
 }
 
@@ -255,32 +461,27 @@ pub enum PrimitiveValue {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Value<
-    Inner = Val,
-    AssetRef = TypePath,
-    Variant = Spanned<TypePathElem>,
-    Field: Hash + Eq = Ident,
-> {
+pub enum Value<V: ValueTrait = Val> {
     // Fully resolved path.
-    Ref(AssetRef),
+    Ref(V::Ref),
 
-    Tuple(Sequence<Inner>),
-    Array(Sequence<Inner>),
-    Map(Map<Inner>),
+    Tuple(Sequence<V::Inner>),
+    Array(Sequence<V::Inner>),
+    Map(Map<V::Inner>),
 
     /// Either struct or enum variant
-    Struct(FieldsKind<Inner, Field>),
+    Struct(FieldsKind<V::Inner, V::Field>),
 
-    Or(Vec<Variant>),
+    Or(Vec<V::Variant>),
 
     Primitive(PrimitiveValue),
 
-    Transparent(Box<Inner>),
+    Transparent(Box<V::Inner>),
 
-    Enum(Variant, Box<Inner>),
+    Enum(V::Variant, Box<V::Inner>),
 }
 
-impl<T, P, I> Value<T, P, I> {
+impl<T: ValueTrait> Value<T> {
     pub fn primitive_type(&self) -> Option<types::Primitive> {
         match self {
             Self::Primitive(p) => Some(match p {
@@ -659,12 +860,15 @@ pub(crate) fn convert_values(
         copy_graph.remove_node(removal);
     }
 
+    let default_span = crate::Span::new(file, 0..0);
+
     macro_rules! meta {
         ($name:expr) => {
             ConvertMeta {
                 symbols: &symbols,
                 add_value: &mut add_value,
                 object_name: $name,
+                default_span,
             }
         };
     }

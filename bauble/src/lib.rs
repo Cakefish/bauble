@@ -20,7 +20,8 @@ pub use traits::{
 pub use types::path;
 pub use value::{
     Attributes, ConversionError, DisplayConfig, FieldsKind, IndentedDisplay, Object,
-    PrimitiveValue, UnspannedVal, Val, Value, display_formatted,
+    PrimitiveValue, SpannedValue, UnspannedVal, Val, Value, ValueContainer, ValueTrait,
+    display_formatted,
 };
 
 #[doc(hidden)]
@@ -53,6 +54,7 @@ macro_rules! bauble_test {
             let mut ctx = $crate::BaubleContextBuilder::new();
             $(ctx.register_type::<$ty, _>();)*
             let mut ctx = ctx.build();
+            assert!(ctx.type_registry().validate(true), "Invalid type registry");
             let file_path = $crate::path::TypePath::new("test").unwrap();
             ctx.register_file(file_path, format!("\n{}\n", $source));
 

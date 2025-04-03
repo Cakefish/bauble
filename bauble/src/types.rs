@@ -430,8 +430,62 @@ impl TypeRegistry {
     ///
     /// Currently this checks:
     /// - Are there any unassigned registered types?
-    pub fn validate(&self) -> bool {
-        self.to_be_assigned.is_empty()
+    /// - If `assert_instanciable` is true then if all `instanciable` types have valid bauble representations.
+    pub fn validate(&self, assert_instanciable: bool) -> bool {
+        if !self.to_be_assigned.is_empty() {
+            return false;
+        }
+
+        if assert_instanciable {
+            let mut objects = Vec::new();
+            for (i, ty_id) in self
+                .iter_type_set(self.key_trait(Self::any_trait()))
+                .enumerate()
+            {
+                let ty = self.key_type(ty_id);
+                if !ty.kind.instanciable() || !ty.meta.path.is_writable() {
+                    continue;
+                }
+
+                let object_path = TypePath::new(format!("{}_{i}", ty.meta.path)).unwrap();
+
+                let Some(value) = self.instantiate(ty_id) else {
+                    return false;
+                };
+
+                objects.push(crate::Object { object_path, value })
+            }
+
+            let source = crate::display_formatted(
+                objects.as_slice(),
+                self,
+                &crate::DisplayConfig {
+                    debug_types: true,
+
+                    ..Default::default()
+                },
+            );
+
+            let mut ctx = crate::BaubleContext::from(self.clone());
+
+            ctx.register_file(TypePath::new("validate").unwrap(), source);
+
+            let (loaded_objects, errors) = ctx.load_all();
+
+            if !errors.is_empty() {
+                crate::print_errors(Err::<(), _>(errors), &ctx);
+
+                return false;
+            }
+
+            for (a, b) in objects.into_iter().zip(loaded_objects) {
+                if a.value != b.value.into_unspanned() {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 
     pub fn reserve_type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {

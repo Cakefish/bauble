@@ -1,6 +1,10 @@
 use core::fmt;
 
-use crate::{SpanExt, spanned::Spanned, value::Ident};
+use crate::{
+    SpanExt,
+    spanned::Spanned,
+    value::{AnyVal, Ident, SpannedValue, ValueTrait},
+};
 use indexmap::IndexMap;
 
 pub type Fields = IndexMap<Ident, ParseVal>;
@@ -79,13 +83,56 @@ pub struct PathTreeNode {
 }
 
 pub type Attributes = crate::value::Attributes<ParseVal>;
-pub type Value = crate::Value<ParseVal, Path, Path>;
+pub type Value = crate::Value<ParseVal>;
 
 #[derive(Debug, Clone)]
 pub struct ParseVal {
     pub ty: Option<Path>,
     pub attributes: Spanned<Attributes>,
     pub value: Spanned<Value>,
+}
+
+impl ValueTrait for ParseVal {
+    type Inner = Self;
+
+    type Ref = Path;
+
+    type Variant = Path;
+
+    type Field = Ident;
+
+    fn ty(&self) -> crate::types::TypeId {
+        crate::types::TypeRegistry::any_type()
+    }
+
+    fn attributes(&self) -> &crate::Attributes<Self::Inner> {
+        &self.attributes
+    }
+
+    fn value(&self) -> &crate::Value<Self> {
+        &self.value
+    }
+
+    fn to_any(&self) -> AnyVal {
+        AnyVal::Parse(self)
+    }
+}
+
+impl SpannedValue for ParseVal {
+    fn type_span(&self) -> crate::Span {
+        self.ty
+            .as_ref()
+            .map(|s| s.span())
+            .unwrap_or(self.value.span)
+    }
+
+    fn value_span(&self) -> crate::Span {
+        self.value.span
+    }
+
+    fn attributes_span(&self) -> crate::Span {
+        self.attributes.span
+    }
 }
 
 #[derive(Debug, Clone)]
