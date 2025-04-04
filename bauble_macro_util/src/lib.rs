@@ -296,7 +296,7 @@ impl ContainerAttrs {
                     }
                     "nullable" => {
                         if !kind.is_type() {
-                            Err(meta.error("The `bounds` attribute can only be used on types"))?
+                            Err(meta.error("The `nullable` attribute can only be used on types"))?
                         }
                         if this.nullable.is_some() {
                             Err(meta.error("Duplicate `nullable` attribute"))?
