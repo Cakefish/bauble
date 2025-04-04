@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Display,
     ptr::{DynMetadata, Pointee},
 };
 
@@ -165,6 +166,39 @@ pub enum TypeSystemError<'a> {
     },
     InstantiableErrors,
     ConstructInequality(UnspannedVal, UnspannedVal),
+}
+
+impl Display for TypeSystemError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeSystemError::ToBeAssigned(items) => {
+                write!(f, "The following types haven't been assigned to ")?;
+                for (i, (ty_id, ty)) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "`{ty}` ({ty_id:?})")?;
+                }
+
+                Ok(())
+            }
+            TypeSystemError::NotInstantiable { ty_id, ty } => write!(
+                f,
+                "The type `{ty}` ({ty_id:?}) is expected to be instantiable, but it isn't."
+            ),
+            TypeSystemError::InstantiableErrors => write!(
+                f,
+                "Errors while trying to read default instantiated objects"
+            ),
+            TypeSystemError::ConstructInequality(a, b) => {
+                write!(
+                    f,
+                    "The constructed instantiated type, and the value read from the instantiated \
+                    value formatted as text are not equal.\nInstantiated: {a:#?}\nRead: {b:#?}"
+                )
+            }
+        }
+    }
 }
 
 impl TypeRegistry {
