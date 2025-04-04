@@ -1,9 +1,7 @@
 use std::{borrow::Cow, collections::HashMap, fmt::Display};
 
-use indexmap::IndexMap;
-
 use crate::{
-    CustomError, Val, Value,
+    CustomError, SpannedValue, UnspannedVal, Val, Value,
     context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
     path::{TypePath, TypePathElem},
@@ -284,6 +282,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
             meta: types::TypeMeta {
                 path: TypePath::new("bauble::Val").unwrap().to_owned(),
                 attributes: types::NamedFields::any(),
+                default: Some(UnspannedVal::new(Value::Primitive(PrimitiveValue::Null))),
                 ..Default::default()
             },
             kind: types::TypeKind::Primitive(types::Primitive::Any),
@@ -490,10 +489,7 @@ macro_rules! impl_tuple {
                     kind: types::TypeKind::Tuple(
                         types::UnnamedFields::default().with_required([
                             $(
-                                FieldType {
-                                    id: registry.get_or_register_type::<$ident, A>(),
-                                    extra: IndexMap::new(),
-                                }
+                                FieldType::from(registry.get_or_register_type::<$ident, A>())
                             ),+
                         ]),
                     ),
@@ -550,10 +546,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>, const N: usize> Bauble<'a, A>
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: FieldType {
-                    id: inner,
-                    extra: IndexMap::new(),
-                },
+                ty: FieldType::from(inner),
                 len: Some(N),
             }),
         }
@@ -602,18 +595,16 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
         let generic_path = TypePath::new("std::Option").unwrap();
         let generic = registry.get_or_register_generic_type(generic_path);
 
-        let kind = registry.build_enum([
+        let none = TypePathElem::new("None").unwrap();
+        let variants = registry.build_enum([
+            types::Variant::explicit(none, types::Fields::Unit),
             types::Variant::explicit(
                 TypePathElem::new("Some").unwrap(),
                 types::Fields::Unnamed(types::UnnamedFields {
-                    required: vec![types::FieldType {
-                        id: inner,
-                        extra: Default::default(),
-                    }],
+                    required: vec![types::FieldType::from(inner)],
                     ..Default::default()
                 }),
             ),
-            types::Variant::explicit(TypePathElem::new("None").unwrap(), types::Fields::Unit),
         ]);
 
         types::Type {
@@ -624,9 +615,17 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                 ))
                 .unwrap(),
                 generic_base_type: Some(generic),
+                default: Some(UnspannedVal::new(Value::Enum(
+                    none.to_owned(),
+                    Box::new(
+                        registry
+                            .instantiate(variants.get(none).expect("We just added this variant"))
+                            .expect("We should be able to instantiate unit fields"),
+                    ),
+                ))),
                 ..Default::default()
             },
-            kind,
+            kind: types::TypeKind::Enum { variants },
         }
     }
 
@@ -685,10 +684,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: types::FieldType {
-                    id: inner,
-                    extra: Default::default(),
-                },
+                ty: types::FieldType::from(inner),
                 len: None,
             }),
         }
@@ -723,10 +719,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: types::FieldType {
-                    id: inner,
-                    extra: Default::default(),
-                },
+                ty: types::FieldType::from(inner),
                 len: None,
             }),
         }
@@ -759,14 +752,8 @@ macro_rules! impl_map {
                         ..Default::default()
                     },
                     kind: types::TypeKind::Map(types::MapType {
-                        key: FieldType {
-                            id: key,
-                            extra: IndexMap::new(),
-                        },
-                        value: FieldType {
-                            id: value,
-                            extra: IndexMap::new(),
-                        },
+                        key: FieldType::from(key),
+                        value: FieldType::from(value),
                         len: None,
                     }),
                 }

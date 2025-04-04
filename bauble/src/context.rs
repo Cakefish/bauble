@@ -154,9 +154,11 @@ impl BaubleContextBuilder {
 
     /// # Panics
     ///
-    /// Panics if `TypeRegistry::validate` is false.
+    /// Panics if `TypeRegistry::validate(false)` returns false.
     pub fn build(self) -> BaubleContext {
-        assert!(self.registry.validate(), "The type system should be valid");
+        if let Err(e) = self.registry.validate(false) {
+            panic!("Type system error: {e}");
+        }
         let mut root_node = CtxNode::new(TypePath::empty());
         for (id, path) in self.default_uses.0 {
             root_node.add_node(id.borrow()).reference.redirect = Some(path);
@@ -407,6 +409,16 @@ pub struct BaubleContext {
     files: Vec<(TypePath, Source)>,
 
     retry_files: Vec<FileId>,
+}
+
+impl From<TypeRegistry> for BaubleContext {
+    fn from(registry: TypeRegistry) -> Self {
+        BaubleContextBuilder {
+            registry,
+            default_uses: DefaultUses::default(),
+        }
+        .build()
+    }
 }
 
 fn preprocess_path(path: TypePath<&str>) -> TypePath<&str> {

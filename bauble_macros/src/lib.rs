@@ -17,6 +17,10 @@ use proc_macro::TokenStream;
 /// - `bounds`: Adds extra bounds to the `Bauble` implementation.
 /// - `from`: Parse this type as if it was flattening to the specified type.
 ///   Specified like `from = T` and this type has to implement `From<T>`.
+/// - `nullable`: Mark this type as nullable, so it can parse from `null` values.
+///   This will by default use the types `Default` implementation which only
+///   works with the default allocator, but a certain value can be specified like
+///   `nullable = |allocator| unsafe { allocator.wrap(some_expr()) }`
 ///
 /// # Container or type attributes
 ///
@@ -31,6 +35,7 @@ use proc_macro::TokenStream;
 /// - `validate`: Adds extra validation to this type or variant. Expects a function
 ///   like `fn(&Val, &TypeRegistry) -> Result<(), ConversionError>`. Can either
 ///   be a defined function, or a closure.
+/// - `value_default`: Used to give the bauble type a default.
 ///
 /// # Only container attributes
 ///
@@ -54,6 +59,7 @@ use proc_macro::TokenStream;
 /// - `attribute`: This field is instead deserialized from bauble attributes. By
 ///   doing `attribute = <ident>` it can be assigned to read from a specific
 ///   attribute. By default it uses the field's name.
+/// - `value_default`: Used to give the field type a default in the bauble type system.
 #[proc_macro_derive(Bauble, attributes(bauble))]
 pub fn derive(input: TokenStream) -> TokenStream {
     derive_bauble(input.into()).into()

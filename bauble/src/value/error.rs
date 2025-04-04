@@ -70,6 +70,7 @@ pub enum ConversionError {
         ty: TypeId,
     },
     RefError(Box<RefError>),
+    NotNullable(TypeId),
     ExpectedExactType {
         expected: TypeId,
         got: Option<TypeId>,
@@ -143,6 +144,10 @@ impl BaubleError for Spanned<ConversionError> {
                 RefKind::Type => "Failed to resolve type",
                 RefKind::Any => "Failed to resolve path",
             }),
+            ConversionError::NotNullable(ty) => Cow::Owned(format!(
+                "The type `{}` is not nullable",
+                types.key_type(*ty).meta.path
+            )),
             ConversionError::ExpectedExactType { expected, .. } => Cow::Owned(format!(
                 "Expected the type `{}`",
                 types.key_type(*expected).meta.path
@@ -612,6 +617,7 @@ impl BaubleError for Spanned<ConversionError> {
 
                 return errs;
             }
+            ConversionError::NotNullable(_) => Cow::Borrowed("This value is `null`"),
             ConversionError::ExpectedExactType { expected, got } => {
                 let s = if let Some(got) = got {
                     format!(

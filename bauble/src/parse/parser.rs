@@ -406,6 +406,10 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 .map(|_| Value::Primitive(PrimitiveValue::Bool(true)))
                 .or(just("false").map(|_| Value::Primitive(PrimitiveValue::Bool(false))));
 
+            let unit = just("()").map(|_| Value::Primitive(PrimitiveValue::Unit));
+
+            let null = just("null").map(|_| Value::Primitive(PrimitiveValue::Null));
+
             let transparent = object
                 .clone()
                 .map(|v| Value::Transparent(Box::new(v)))
@@ -499,13 +503,12 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             // - `| Path::B`
             // - `|`
             let path_or = path_p
-                .map_with(|path, e| path.spanned(e.span()))
                 .separated_by(just('|').padded_by(comments))
                 .allow_leading()
                 .at_least(2)
                 .collect()
                 .or(just('|')
-                    .ignore_then(path_p.map_with(|p, e| p.spanned(e.span())).or_not())
+                    .ignore_then(path_p.or_not())
                     .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 
@@ -534,6 +537,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             let no_type = |t| (None, t);
             let value = choice((
                 bool_.map(no_type),
+                unit.map(no_type),
+                null.map(no_type),
                 num.map(no_type),
                 string.map(no_type),
                 reference.map(no_type),
@@ -564,10 +569,9 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                         .boxed(),
                 )
                 .map(
-                    #[expect(clippy::type_complexity)]
                     |(attributes, spanned): (
                         _,
-                        Spanned<(Option<Path>, crate::Value<ParseVal, Path, Path>)>,
+                        Spanned<(Option<Path>, crate::Value<ParseVal>)>,
                     )| {
                         let Spanned {
                             span,
