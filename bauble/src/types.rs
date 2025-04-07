@@ -762,7 +762,7 @@ impl TypeRegistry {
             return Some(UnspannedVal {
                 ty: ty_id,
                 value: crate::Value::Primitive(crate::PrimitiveValue::Null),
-                // TODO: We probably want to include attributes here?
+                // Null values don't have attributes.
                 attributes: crate::Attributes::default(),
             });
         }
