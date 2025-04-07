@@ -674,12 +674,8 @@ where
         };
 
         let value = match (&ty.kind, &value.value) {
-            (_, Value::Primitive(PrimitiveValue::Null)) => {
-                if ty.meta.nullable {
-                    Value::Primitive(PrimitiveValue::Null)
-                } else {
-                    Err(ConversionError::NotNullable(*ty_id).spanned(span))?
-                }
+            (_, Value::Primitive(PrimitiveValue::Null)) if ty.meta.nullable => {
+                Value::Primitive(PrimitiveValue::Null)
             }
             (types::TypeKind::Tuple(fields), Value::Tuple(values)) => {
                 Value::Tuple(parse_unnamed!(fields, values))
@@ -963,6 +959,9 @@ where
                 // Try again as if it wasn't a transparent value.
                 extra_attributes.extend(&attributes, &meta);
                 return extra_attributes.convert_with(value, meta.reborrow(), expected_type);
+            }
+            (_, Value::Primitive(PrimitiveValue::Null)) => {
+                Err(ConversionError::NotNullable(*ty_id).spanned(span))?
             }
             _ => Err(expected_err())?,
         };

@@ -796,10 +796,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A> + enumset::EnumSetType> Bauble
                 ..Default::default()
             },
             kind: types::TypeKind::Array(types::ArrayType {
-                ty: FieldType {
-                    id: registry.get_or_register_type::<T, A>(),
-                    extra: IndexMap::new(),
-                },
+                ty: registry.get_or_register_type::<T, A>().into(),
                 len: None,
             }),
         }

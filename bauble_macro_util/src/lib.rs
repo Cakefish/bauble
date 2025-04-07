@@ -158,6 +158,7 @@ impl ContainerAttrs {
         kind: ContainerType,
         flatten: bool,
         from: Option<Type>,
+        default: fn(TokenStream) -> TokenStream,
     ) -> syn::Result<Self> {
         let mut this = Self {
             flatten,
@@ -302,16 +303,19 @@ impl ContainerAttrs {
                             Err(meta.error("Duplicate `nullable` attribute"))?
                         }
 
-                        this.nullable = Some(
-                            meta.value()?
-                                .parse::<syn::Expr>()
-                                .map_or(quote! {
+                        this.nullable = Some(match meta.value() {
+                            Ok(meta) => {
+                                let e: syn::Expr = meta.parse()?;
+                                e.into_token_stream()
+                            }
+                            Err(_) => {
+                                let default = default(quote! { Self });
+                                quote! {
                                     // SAFETY: If this compiles we're using the default allocator, which is safe.
-                                    |a| unsafe { ::bauble::DefaultAllocator::wrap(a, ::core::default::Default::default()) }
-                                }, |e| {
-                                    e.into_token_stream()
-                                }),
-                        );
+                                    |a| unsafe { ::bauble::BaubleAllocator::wrap(a, #default) }
+                                }
+                            }
+                        });
                     }
 
                     "tuple" => {
@@ -356,6 +360,7 @@ fn parse_fields(
     fields: &Fields,
     tuple: bool,
     has_from: bool,
+    construct_default: fn(TokenStream) -> TokenStream,
 ) -> syn::Result<FieldsInfo> {
     let mut val_count = 0;
     let kind = match fields {
@@ -408,12 +413,13 @@ fn parse_fields(
                                     Err(meta.error("duplicate `default` attribute"))?
                                 }
 
-                                if meta.input.parse::<Token![=]>().is_ok() {
-                                    let expr = meta.input.parse::<Expr>()?;
-                                    default = Some(quote! { #expr });
-                                } else {
-                                    default = Some(quote! { ::std::default::Default::default() });
-                                }
+                                default = Some(match meta.value() {
+                                    Ok(input) => {
+                                        let expr = input.parse::<Expr>()?;
+                                        quote! { #expr }
+                                    },
+                                    Err(_) => construct_default(field.ty.to_token_stream()),
+                                });
 
                                 Ok(())
                             }
@@ -427,7 +433,7 @@ fn parse_fields(
                                         let expr = input.parse::<Expr>()?;
                                         quote! { #expr }
                                     },
-                                    Err(_) => quote! { ::std::default::Default::default() },
+                                    Err(_) => construct_default(field.ty.to_token_stream()),
                                 });
 
                                 Ok(())
@@ -970,6 +976,7 @@ fn derive_variants_from<'a>(
     variants: impl IntoIterator<Item = &'a syn::Variant>,
     flatten: bool,
     allocator: TokenStream,
+    default: fn(TokenStream) -> TokenStream,
     from: Type,
 ) -> syn::Result<(TokenStream, TokenStream, TokenStream)> {
     for variant in variants.into_iter() {
@@ -978,9 +985,10 @@ fn derive_variants_from<'a>(
             ContainerType::Container,
             flatten,
             Some(from.clone()),
+            default,
         )?;
 
-        let fields = parse_fields(&variant.fields, variant_attrs.tuple, true)?;
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple, true, default)?;
 
         for field in fields.fields {
             if !matches!(field.ty, FieldTy::Val {
@@ -1023,12 +1031,18 @@ fn derive_variants<'a>(
     variants: impl IntoIterator<Item = &'a syn::Variant>,
     flatten: bool,
     allocator: TokenStream,
+    default: fn(TokenStream) -> TokenStream,
 ) -> syn::Result<(TokenStream, TokenStream, TokenStream)> {
     let mut type_variants = Vec::new();
     let mut match_construct = Vec::new();
     for variant in variants.into_iter() {
-        let variant_attrs =
-            ContainerAttrs::parse(&variant.attrs, ContainerType::Container, flatten, None)?;
+        let variant_attrs = ContainerAttrs::parse(
+            &variant.attrs,
+            ContainerType::Container,
+            flatten,
+            None,
+            default,
+        )?;
 
         let ident = variant.ident.clone();
         let name = variant_attrs
@@ -1036,7 +1050,7 @@ fn derive_variants<'a>(
             .map(|s| s.to_string())
             .unwrap_or(ident.to_string());
 
-        let fields = parse_fields(&variant.fields, variant_attrs.tuple, false)?;
+        let fields = parse_fields(&variant.fields, variant_attrs.tuple, false, default)?;
 
         let (type_attrs, type_kind, construct_variant) = derive_struct(
             TypeInfo {
@@ -1109,8 +1123,10 @@ fn derive_variants<'a>(
 pub fn derive_bauble_derive_input(
     ast: &DeriveInput,
     allocator: Option<TokenStream>,
+    default: Option<fn(TokenStream) -> TokenStream>,
     mut traits: Vec<TokenStream>,
 ) -> TokenStream {
+    let default = default.unwrap_or(|ty| quote! { <#ty as ::core::default::Default>::default() });
     let ty_attrs = match ContainerAttrs::parse(
         &ast.attrs,
         match ast.data {
@@ -1120,6 +1136,7 @@ pub fn derive_bauble_derive_input(
         },
         false,
         None,
+        default,
     ) {
         Ok(a) => a,
         Err(e) => return e.into_compile_error(),
@@ -1210,7 +1227,12 @@ pub fn derive_bauble_derive_input(
     // Generate code to deserialize this type
     let (type_attributes, construct_type, construct_value) = match &ast.data {
         Data::Struct(data) => {
-            let fields = match parse_fields(&data.fields, ty_attrs.tuple, ty_attrs.from.is_some()) {
+            let fields = match parse_fields(
+                &data.fields,
+                ty_attrs.tuple,
+                ty_attrs.from.is_some(),
+                default,
+            ) {
                 Ok(fields) => fields,
                 Err(err) => return err.into_compile_error(),
             };
@@ -1236,10 +1258,16 @@ pub fn derive_bauble_derive_input(
                 .into_compile_error();
             }
             match match ty_attrs.from {
-                Some(from) => {
-                    derive_variants_from(&data.variants, ty_attrs.flatten, allocator.clone(), from)
+                Some(from) => derive_variants_from(
+                    &data.variants,
+                    ty_attrs.flatten,
+                    allocator.clone(),
+                    default,
+                    from,
+                ),
+                None => {
+                    derive_variants(&data.variants, ty_attrs.flatten, allocator.clone(), default)
                 }
-                None => derive_variants(&data.variants, ty_attrs.flatten, allocator.clone()),
             } {
                 Ok(res) => res,
                 Err(e) => return e.into_compile_error(),
@@ -1331,5 +1359,5 @@ pub fn derive_bauble(input: TokenStream) -> TokenStream {
         }
     };
 
-    derive_bauble_derive_input(&ast, None, Vec::new())
+    derive_bauble_derive_input(&ast, None, None, Vec::new())
 }
