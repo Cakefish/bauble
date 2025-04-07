@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    fmt::Display,
     ptr::{DynMetadata, Pointee},
 };
 
@@ -8,7 +9,7 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{Bauble, BaubleAllocator};
+use crate::{Bauble, BaubleAllocator, value::UnspannedVal};
 
 pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
     const BAUBLE_PATH: &'static str;
@@ -109,6 +110,7 @@ pub struct Variant {
     pub attributes: NamedFields,
     pub extra_validation: Option<ValidationFunction>,
     pub extra: IndexMap<String, String>,
+    pub default: Option<UnspannedVal>,
 }
 
 impl Variant {
@@ -119,6 +121,7 @@ impl Variant {
             attributes: Default::default(),
             extra_validation: None,
             extra: Default::default(),
+            default: None,
         }
     }
 
@@ -129,6 +132,7 @@ impl Variant {
             attributes: Default::default(),
             extra_validation: None,
             extra: Default::default(),
+            default: None,
         }
     }
 
@@ -145,6 +149,55 @@ impl Variant {
     pub fn with_validation(mut self, validation: ValidationFunction) -> Self {
         self.extra_validation = Some(validation);
         self
+    }
+
+    pub fn with_default(mut self, value: UnspannedVal) -> Self {
+        self.default = Some(value);
+        self
+    }
+}
+
+#[derive(Debug)]
+pub enum TypeSystemError<'a> {
+    ToBeAssigned(Vec<(TypeId, TypePath<&'a str>)>),
+    NotInstantiable {
+        ty_id: TypeId,
+        ty: TypePath<&'a str>,
+    },
+    InstantiableErrors,
+    ConstructInequality(UnspannedVal, UnspannedVal),
+}
+
+impl Display for TypeSystemError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeSystemError::ToBeAssigned(items) => {
+                write!(f, "The following types haven't been assigned to ")?;
+                for (i, (ty_id, ty)) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "`{ty}` ({ty_id:?})")?;
+                }
+
+                Ok(())
+            }
+            TypeSystemError::NotInstantiable { ty_id, ty } => write!(
+                f,
+                "The type `{ty}` ({ty_id:?}) is expected to be instantiable, but it isn't."
+            ),
+            TypeSystemError::InstantiableErrors => write!(
+                f,
+                "Errors while trying to read default instantiated objects"
+            ),
+            TypeSystemError::ConstructInequality(a, b) => {
+                write!(
+                    f,
+                    "The constructed instantiated type, and the value read from the instantiated \
+                    value formatted as text are not equal.\nInstantiated: {a:#?}\nRead: {b:#?}"
+                )
+            }
+        }
     }
 }
 
@@ -262,44 +315,42 @@ impl TypeRegistry {
     }
 
     #[must_use]
-    /// Build a `TypeKind::Enum`.
-    pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> TypeKind {
-        TypeKind::Enum {
-            variants: EnumVariants(
-                variants
-                    .into_iter()
-                    .map(|variant| {
-                        let ty = self.register_type(|this, id| {
-                            this.to_be_assigned.insert(id);
+    /// Build `EnumVariants`.
+    pub fn build_enum(&mut self, variants: impl IntoIterator<Item = Variant>) -> EnumVariants {
+        EnumVariants(
+            variants
+                .into_iter()
+                .map(|variant| {
+                    let ty = self.register_type(|this, id| {
+                        this.to_be_assigned.insert(id);
 
-                            Type {
-                                meta: TypeMeta {
-                                    // We assign this later.
-                                    path: TypePath::empty(),
-                                    attributes: variant.attributes,
-                                    extra: variant.extra,
-                                    extra_validation: variant.extra_validation,
-                                    ..Default::default()
-                                },
-                                kind: match variant.kind {
-                                    VariantKind::Explicit(fields)
-                                    | VariantKind::Flattened(TypeKind::Struct(fields)) => {
-                                        TypeKind::EnumVariant {
-                                            variant: variant.ident.clone(),
-                                            // This gets assigned later.
-                                            enum_type: Self::any_type(),
-                                            fields,
-                                        }
+                        Type {
+                            meta: TypeMeta {
+                                // We assign this later.
+                                path: TypePath::empty(),
+                                attributes: variant.attributes,
+                                extra: variant.extra,
+                                extra_validation: variant.extra_validation,
+                                ..Default::default()
+                            },
+                            kind: match variant.kind {
+                                VariantKind::Explicit(fields)
+                                | VariantKind::Flattened(TypeKind::Struct(fields)) => {
+                                    TypeKind::EnumVariant {
+                                        variant: variant.ident.clone(),
+                                        // This gets assigned later.
+                                        enum_type: Self::any_type(),
+                                        fields,
                                     }
-                                    VariantKind::Flattened(type_kind) => type_kind,
-                                },
-                            }
-                        });
-                        (variant.ident, ty)
-                    })
-                    .collect(),
-            ),
-        }
+                                }
+                                VariantKind::Flattened(type_kind) => type_kind,
+                            },
+                        }
+                    });
+                    (variant.ident, ty)
+                })
+                .collect(),
+        )
     }
 
     pub(crate) fn get_or_register_asset_ref(&mut self, inner: TypeId) -> TypeId {
@@ -308,7 +359,7 @@ impl TypeRegistry {
         } else {
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
-                let ty = Type {
+                let mut ty = Type {
                     meta: TypeMeta {
                         path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
                             .expect("Invariant"),
@@ -318,14 +369,17 @@ impl TypeRegistry {
                     kind: TypeKind::Ref(inner),
                 };
 
-                this.on_register_type(id, &ty);
+                this.on_register_type(id, &mut ty);
 
                 ty
             })
         }
     }
 
-    fn on_register_type(&mut self, id: TypeId, ty: &Type) {
+    fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
+        if let Some(d) = ty.meta.default.as_mut() {
+            d.ty = id;
+        }
         for tr in ty.meta.traits.iter() {
             let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
                 panic!("Invariant")
@@ -410,9 +464,9 @@ impl TypeRegistry {
     }
 
     #[must_use]
-    pub fn register_dummy_type(&mut self, ty: Type) -> TypeId {
+    pub fn register_dummy_type(&mut self, mut ty: Type) -> TypeId {
         self.register_type(|this, id| {
-            this.on_register_type(id, &ty);
+            this.on_register_type(id, &mut ty);
 
             ty
         })
@@ -422,8 +476,74 @@ impl TypeRegistry {
     ///
     /// Currently this checks:
     /// - Are there any unassigned registered types?
-    pub fn validate(&self) -> bool {
-        self.to_be_assigned.is_empty()
+    /// - If `assert_instanciable` is true then if all `instanciable` types have valid bauble representations.
+    pub fn validate(&self, assert_instanciable: bool) -> Result<(), TypeSystemError> {
+        if !self.to_be_assigned.is_empty() {
+            return Err(TypeSystemError::ToBeAssigned(
+                self.to_be_assigned
+                    .iter()
+                    .map(|ty_id| (*ty_id, self.key_type(*ty_id).meta.path.borrow()))
+                    .collect(),
+            ));
+        }
+
+        if assert_instanciable {
+            let mut objects = Vec::new();
+            for (i, ty_id) in self
+                .iter_type_set(self.key_trait(Self::any_trait()))
+                .enumerate()
+            {
+                let ty = self.key_type(ty_id);
+                if !ty.kind.instanciable()
+                    || !ty.meta.path.is_writable()
+                    || !ty.meta.traits.contains(&self.top_level_trait_dependency)
+                {
+                    continue;
+                }
+
+                let object_path = TypePath::new(format!("{}_{i}", ty.meta.path)).unwrap();
+
+                let Some(value) = self.instantiate(ty_id) else {
+                    return Err(TypeSystemError::NotInstantiable {
+                        ty_id,
+                        ty: ty.meta.path.borrow(),
+                    });
+                };
+
+                objects.push(crate::Object { object_path, value })
+            }
+
+            let source = crate::display_formatted(
+                objects.as_slice(),
+                self,
+                &crate::DisplayConfig {
+                    debug_types: true,
+
+                    ..Default::default()
+                },
+            );
+
+            let mut ctx = crate::BaubleContext::from(self.clone());
+
+            ctx.register_file(TypePath::new("validate").unwrap(), source);
+
+            let (loaded_objects, errors) = ctx.load_all();
+
+            if !errors.is_empty() {
+                crate::print_errors(Err::<(), _>(errors), &ctx);
+
+                return Err(TypeSystemError::InstantiableErrors);
+            }
+
+            for (a, b) in objects.into_iter().zip(loaded_objects) {
+                let unspanned = b.value.into_unspanned();
+                if a.value != unspanned {
+                    return Err(TypeSystemError::ConstructInequality(a.value, unspanned));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn reserve_type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
@@ -444,8 +564,8 @@ impl TypeRegistry {
 
         match id {
             Some(id) if self.to_be_assigned.remove(&id) => {
-                let ty = T::construct_type(self);
-                self.on_register_type(id, &ty);
+                let mut ty = T::construct_type(self);
+                self.on_register_type(id, &mut ty);
                 self.types[id.0] = ty;
 
                 id
@@ -453,8 +573,8 @@ impl TypeRegistry {
             Some(id) => id,
             None => self.register_type(|this, id| {
                 this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
-                let ty = T::construct_type(this);
-                this.on_register_type(id, &ty);
+                let mut ty = T::construct_type(this);
+                this.on_register_type(id, &mut ty);
 
                 ty
             }),
@@ -629,6 +749,106 @@ impl TypeRegistry {
             _ => false,
         }
     }
+
+    /// Create a value with this type.
+    pub fn instantiate(&self, ty_id: TypeId) -> Option<UnspannedVal> {
+        let ty = self.key_type(ty_id);
+
+        if let Some(default) = &ty.meta.default {
+            return Some(default.clone().with_type(ty_id));
+        }
+
+        let construct_unnamed = |fields: &UnnamedFields| {
+            fields
+                .required
+                .iter()
+                .map(|f| {
+                    if let Some(d) = &f.default {
+                        Some(d.clone())
+                    } else {
+                        self.instantiate(f.id)
+                    }
+                })
+                .collect::<Option<Vec<_>>>()
+        };
+
+        let construct_named = |fields: &NamedFields| {
+            fields
+                .required
+                .iter()
+                .map(|(s, f)| {
+                    Some((
+                        s.clone(),
+                        if let Some(d) = &f.default {
+                            d.clone()
+                        } else {
+                            self.instantiate(f.id)?
+                        },
+                    ))
+                })
+                .collect::<Option<IndexMap<String, UnspannedVal>>>()
+        };
+
+        let value = match &ty.kind {
+            TypeKind::Tuple(fields) => crate::Value::Tuple(construct_unnamed(fields)?),
+            TypeKind::Array(array) => crate::Value::Array(if let Some(l) = array.len {
+                vec![self.instantiate(array.ty.id)?; l]
+            } else {
+                Vec::new()
+            }),
+            TypeKind::Map(map) => crate::Value::Map(if let Some(l) = map.len {
+                // TODO: Is it a problem that the keys will be duplicates?
+                vec![
+                    (
+                        self.instantiate(map.key.id)?,
+                        self.instantiate(map.value.id)?
+                    );
+                    l
+                ]
+            } else {
+                Vec::new()
+            }),
+            TypeKind::Struct(fields) | TypeKind::EnumVariant { fields, .. } => {
+                crate::Value::Struct(match fields {
+                    Fields::Unit => crate::FieldsKind::Unit,
+                    Fields::Unnamed(fields) => {
+                        crate::FieldsKind::Unnamed(construct_unnamed(fields)?)
+                    }
+                    Fields::Named(fields) => crate::FieldsKind::Named(construct_named(fields)?),
+                })
+            }
+            TypeKind::Enum { variants } => variants.iter().find_map(|(variant, ty)| {
+                self.instantiate(ty)
+                    .map(|v| crate::Value::Enum(variant.to_owned(), Box::new(v)))
+            })?,
+            TypeKind::Or(_) => crate::Value::Or(Vec::new()),
+            TypeKind::Ref(_) => return None,
+            TypeKind::Primitive(primitive) => crate::Value::Primitive(match primitive {
+                Primitive::Any => crate::PrimitiveValue::Unit,
+                Primitive::Num => crate::PrimitiveValue::Num(rust_decimal::Decimal::ZERO),
+                Primitive::Str => crate::PrimitiveValue::Str(String::new()),
+                Primitive::Bool => crate::PrimitiveValue::Bool(false),
+                Primitive::Unit => crate::PrimitiveValue::Unit,
+                Primitive::Raw => crate::PrimitiveValue::Raw(String::new()),
+            }),
+            TypeKind::Transparent(ty) => {
+                let inner = self.key_type(*ty);
+                crate::Value::Transparent(Box::new(if let TypeKind::Trait(tr) = &inner.kind {
+                    self.iter_type_set(tr).find_map(|ty| self.instantiate(ty))?
+                } else {
+                    self.instantiate(*ty)?
+                }))
+            }
+            TypeKind::Trait(_) => return None,
+            TypeKind::Generic(_) => return None,
+        };
+
+        Some(UnspannedVal {
+            ty: ty_id,
+            value,
+            attributes: crate::Attributes::from(construct_named(&ty.meta.attributes)?),
+        })
+    }
 }
 
 pub type ValidationFunction =
@@ -640,6 +860,8 @@ pub struct TypeMeta {
     /// If this is `Some` the type is generic.
     pub generic_base_type: Option<GenericTypeId>,
     pub traits: Vec<TraitId>,
+    pub default: Option<UnspannedVal>,
+    pub nullable: bool,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
@@ -651,6 +873,7 @@ pub struct TypeMeta {
 pub struct FieldType {
     pub id: TypeId,
     pub extra: IndexMap<String, String>,
+    pub default: Option<UnspannedVal>,
 }
 
 impl From<TypeId> for FieldType {
@@ -658,6 +881,7 @@ impl From<TypeId> for FieldType {
         Self {
             id: value,
             extra: Default::default(),
+            default: None,
         }
     }
 }
@@ -699,10 +923,7 @@ impl UnnamedFields {
 
     pub fn any() -> Self {
         Self {
-            allow_additional: Some(FieldType {
-                id: TypeRegistry::any_type(),
-                extra: Default::default(),
-            }),
+            allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
             ..Self::empty()
         }
     }
@@ -756,10 +977,7 @@ impl NamedFields {
 
     pub fn any() -> Self {
         Self {
-            allow_additional: Some(FieldType {
-                id: TypeRegistry::any_type(),
-                extra: Default::default(),
-            }),
+            allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
             ..Self::empty()
         }
     }
