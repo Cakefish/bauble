@@ -356,6 +356,25 @@ where
             Err(expected_err())?
         }
 
+        if ty.meta.nullable && matches!(value.value, Value::Primitive(PrimitiveValue::Null)) {
+            if let Some(s) = attributes
+                .first()
+                .map(|v| Self::get_spanned_field(v.0, &meta))
+                .or_else(|| Some(C::get_spanned_field(extra_attributes?.first()?.0, &meta)))
+            {
+                Err(ConversionError::AttributeOnNull {
+                    attribute: s,
+                    ty: *ty_id,
+                }
+                .spanned(span))?
+            }
+            return Ok(Val {
+                ty: ty_id,
+                value: Value::Primitive(PrimitiveValue::Null).spanned(span),
+                attributes: Attributes::default().spanned(span.sub_span(0..0)),
+            });
+        }
+
         /// Macro to parse unnamed fields.
         macro_rules! parse_unnamed {
             ($fields:expr, $values:expr $(,)?) => {{
@@ -674,13 +693,6 @@ where
         };
 
         let value = match (&ty.kind, &value.value) {
-            (_, Value::Primitive(PrimitiveValue::Null)) => {
-                if ty.meta.nullable {
-                    Value::Primitive(PrimitiveValue::Null)
-                } else {
-                    Err(ConversionError::NotNullable(*ty_id).spanned(span))?
-                }
-            }
             (types::TypeKind::Tuple(fields), Value::Tuple(values)) => {
                 Value::Tuple(parse_unnamed!(fields, values))
             }
@@ -963,6 +975,9 @@ where
                 // Try again as if it wasn't a transparent value.
                 extra_attributes.extend(&attributes, &meta);
                 return extra_attributes.convert_with(value, meta.reborrow(), expected_type);
+            }
+            (_, Value::Primitive(PrimitiveValue::Null)) => {
+                Err(ConversionError::NotNullable(*ty_id).spanned(span))?
             }
             _ => Err(expected_err())?,
         };

@@ -758,6 +758,15 @@ impl TypeRegistry {
             return Some(default.clone().with_type(ty_id));
         }
 
+        if ty.meta.nullable {
+            return Some(UnspannedVal {
+                ty: ty_id,
+                value: crate::Value::Primitive(crate::PrimitiveValue::Null),
+                // Null values don't have attributes.
+                attributes: crate::Attributes::default(),
+            });
+        }
+
         let construct_unnamed = |fields: &UnnamedFields| {
             fields
                 .required
@@ -829,7 +838,8 @@ impl TypeRegistry {
                 Primitive::Str => crate::PrimitiveValue::Str(String::new()),
                 Primitive::Bool => crate::PrimitiveValue::Bool(false),
                 Primitive::Unit => crate::PrimitiveValue::Unit,
-                Primitive::Raw => crate::PrimitiveValue::Raw(String::new()),
+                // We have no idea at this point what these should look like since it's user defined.
+                Primitive::Raw => return None,
             }),
             TypeKind::Transparent(ty) => {
                 let inner = self.key_type(*ty);
