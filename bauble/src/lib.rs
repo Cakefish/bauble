@@ -21,6 +21,8 @@
 //!
 //! Here is a following example of using `#[derive(Bauble)]` to create a Bauble parsable type.
 //! ```
+//! # use bauble::Bauble;
+//!
 //! #[derive(Bauble)]
 //! struct TypeInBauble {
 //!    a_number: u32,
