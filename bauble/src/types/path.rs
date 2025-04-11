@@ -65,6 +65,7 @@ impl<S: AsRef<str>> TryFrom<TypePath<S>> for TypePathElem<S> {
     }
 }
 
+#[allow(missing_docs)]
 impl<S: AsRef<str>> TypePathElem<S> {
     pub fn new(s: S) -> Result<Self> {
         let l = path_len(s.as_ref())?;
@@ -134,6 +135,8 @@ impl<S: AsRef<str>> std::fmt::Display for TypePath<S> {
     }
 }
 
+/// An error when forming paths.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathError {
     EmptyElem(usize),
@@ -143,6 +146,7 @@ pub enum PathError {
     ZeroElements,
 }
 
+/// A result type with an implicit `PathError`.
 pub type Result<T> = std::result::Result<T, PathError>;
 
 /// Iterates through a path, counting elements.
@@ -212,6 +216,7 @@ fn path_len(path: &str) -> Result<usize> {
 }
 
 impl TypePath {
+    /// Insert `other` at the start of `self`.
     pub fn push_start(&mut self, other: TypePath<impl AsRef<str>>) {
         if self.is_empty() {
             self.0.push_str(other.as_str());
@@ -221,6 +226,7 @@ impl TypePath {
         }
     }
 
+    /// Insert `other` at the end of `self`.
     pub fn push(&mut self, other: TypePath<impl AsRef<str>>) {
         if self.is_empty() {
             self.0.push_str(other.as_str());
@@ -230,6 +236,9 @@ impl TypePath {
         }
     }
 
+    /// Insert `other` at the end of `self`.
+    ///
+    /// This fails if `other` is not a valid path.
     pub fn push_str(&mut self, other: &str) -> Result<()> {
         self.push(TypePath::new(other)?);
         Ok(())
@@ -243,6 +252,7 @@ impl<S: AsRef<str>> AsRef<str> for TypePath<S> {
 }
 
 impl<S: AsRef<str>> TypePath<S> {
+    #[allow(missing_docs)]
     pub fn empty() -> Self
     where
         S: From<&'static str>,
@@ -250,44 +260,57 @@ impl<S: AsRef<str>> TypePath<S> {
         Self("".into())
     }
 
+    #[allow(missing_docs)]
     pub fn new(s: S) -> Result<Self> {
         path_len(s.as_ref())?;
 
         Ok(Self(s))
     }
 
+    #[allow(missing_docs)]
     pub fn try_into_elem(self) -> Result<TypePathElem<S>> {
         TypePathElem::try_from(self)
     }
 
+    #[allow(missing_docs)]
     pub fn into_inner(self) -> S {
         self.0
     }
 
+    #[allow(missing_docs)]
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
     }
 
+    #[allow(missing_docs)]
     pub fn borrow(&self) -> TypePath<&str> {
         TypePath(self.as_str())
     }
 
+    /// The amount of segments in a path.
     pub fn len(&self) -> usize {
         path_len(self.as_str()).expect("Invariant")
     }
 
+    /// If the path is empty.
     pub fn is_empty(&self) -> bool {
         self.as_str().is_empty()
     }
 
+    /// The amount of bytes inside of the path.
     pub fn byte_len(&self) -> usize {
         self.as_str().len()
     }
 
+    #[allow(missing_docs)]
     pub fn to_owned(&self) -> TypePath {
         TypePath(self.as_str().to_string())
     }
 
+    /// Appends `other` to the end of `self`.
+    /// If `self` is empty, return `other`.
+    /// If `other` is empty, return `self`.
+    /// If both are empty, return an empty path.
     pub fn join<T: AsRef<str>>(&self, other: &TypePath<T>) -> TypePath {
         match (self.is_empty(), other.is_empty()) {
             (true, true) => TypePath::empty(),
@@ -297,20 +320,24 @@ impl<S: AsRef<str>> TypePath<S> {
         }
     }
 
+    /// Split the start segment with the remaining segments.
     pub fn get_start(&self) -> Option<(TypePathElem<&str>, TypePath<&str>)> {
         self.borrow().split_start()
     }
 
+    /// Split the end segment with the remaining segments.
     pub fn get_end(&self) -> Option<(TypePath<&str>, TypePathElem<&str>)> {
         self.borrow().split_end()
     }
 
+    /// Create an iterator for iterating the segments of `self`.
     pub fn iter(&self) -> PathIter {
         PathIter {
             path: self.borrow(),
         }
     }
 
+    /// Check if `self` ends with the path `other`.
     pub fn ends_with(&self, other: TypePath<&str>) -> bool {
         self.as_str().ends_with(other.as_str())
             && (self.byte_len() == other.byte_len()
@@ -319,6 +346,7 @@ impl<S: AsRef<str>> TypePath<S> {
                     .is_some_and(|i| &self.as_str()[i..i + PATH_SEPERATOR.len()] == PATH_SEPERATOR))
     }
 
+    /// Check if `self` start with the path `other`.
     pub fn starts_with(&self, other: TypePath<&str>) -> bool {
         self.as_str().starts_with(other.as_str())
             && (self.byte_len() == other.byte_len()
@@ -328,6 +356,8 @@ impl<S: AsRef<str>> TypePath<S> {
                     == Some(PATH_SEPERATOR))
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn is_writable(&self) -> bool {
         !self.is_empty()
             && self.iter().all(|part| {
@@ -476,6 +506,7 @@ impl<'a> TypePath<&'a str> {
     }
 }
 
+/// An iterator of segments in a path.
 pub struct PathIter<'a> {
     path: TypePath<&'a str>,
 }

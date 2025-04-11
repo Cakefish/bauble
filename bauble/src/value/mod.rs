@@ -28,6 +28,8 @@ use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
 
+// TODO(@docs)
+#[allow(missing_docs)]
 pub trait ValueTrait: Clone + std::fmt::Debug {
     type Inner: ValueContainer;
     type Ref;
@@ -43,13 +45,18 @@ pub trait ValueTrait: Clone + std::fmt::Debug {
     fn to_any(&self) -> AnyVal;
 }
 
+/// A helper trait for extracting the spans out of a Bauble value.
 pub trait SpannedValue: ValueTrait {
+    /// The span of the type of the value.
     fn type_span(&self) -> crate::Span;
 
+    /// The span of the parsed Bauble value.
     fn value_span(&self) -> crate::Span;
 
+    /// The span of the attributes to the Bauble value.
     fn attributes_span(&self) -> crate::Span;
 
+    #[allow(missing_docs)]
     fn span(&self) -> crate::Span {
         let attributes_span = self.attributes_span();
         let value_span = self.value_span();
@@ -61,6 +68,8 @@ pub trait SpannedValue: ValueTrait {
     }
 }
 
+// TODO(@docs)
+#[allow(missing_docs)]
 pub trait ValueContainer: Clone + std::fmt::Debug {
     type ContainerField: Hash + Eq + std::borrow::Borrow<str>;
 
@@ -138,6 +147,7 @@ impl ValueContainer for AnyVal<'_> {
     }
 }
 
+/// A map of Bauble attributes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attributes<V: ValueContainer = Val>(IndexMap<V::ContainerField, V>);
 
@@ -154,34 +164,42 @@ impl<V: ValueContainer> Default for Attributes<V> {
 }
 
 impl<V: ValueContainer> Attributes<V> {
+    #[allow(missing_docs)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    #[allow(missing_docs)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Get the key and value of the attribute `s`.
     pub fn get(&self, s: &str) -> Option<(&V::ContainerField, &V)> {
         self.0.get_key_value(s)
     }
 
+    /// Iterate the values of all attributes.
     pub fn values(&self) -> impl ExactSizeIterator<Item = &V> {
         self.0.values()
     }
 
+    /// Iterate the key and value of all attributes and their fields.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&V::ContainerField, &V)> {
         self.0.iter()
     }
 
+    /// Get the first attribute key and value.
     pub fn first(&self) -> Option<(&V::ContainerField, &V)> {
         self.0.first()
     }
 
+    /// Inserts an attribute `ident` with a value `v`.
     pub fn insert(&mut self, ident: V::ContainerField, v: V) {
         self.0.insert(ident, v);
     }
 
+    /// Remove and return the value of the attribute `ident` if such an attribute exists.
     pub fn take(&mut self, ident: &str) -> Option<V> {
         self.0.swap_remove(ident)
     }
@@ -208,10 +226,13 @@ impl<'a, T: ValueContainer> IntoIterator for &'a Attributes<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-/// A value with attributes
+/// A [`Value`] with type information and attributes.
 pub struct Val {
+    /// The type of the parsed Bauble value.
     pub ty: Spanned<TypeId>,
+    /// The parsed Bauble value.
     pub value: Spanned<Value>,
+    /// Attributes associated with the parsed Bauble value.
     pub attributes: Spanned<Attributes>,
 }
 
@@ -256,6 +277,7 @@ impl SpannedValue for Val {
 }
 
 impl Val {
+    /// Return a version of `self` without span.
     pub fn into_unspanned(self) -> UnspannedVal {
         UnspannedVal {
             ty: *self.ty,
@@ -303,10 +325,14 @@ impl Val {
     }
 }
 
+/// A [`Val`] without span information.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnspannedVal {
+    /// The type of the parsed Bauble value.
     pub ty: TypeId,
+    /// The parsed Bauble value.
     pub value: Value<UnspannedVal>,
+    /// Attributes associated with the parsed Bauble value.
     pub attributes: Attributes<UnspannedVal>,
 }
 
@@ -350,11 +376,13 @@ impl UnspannedVal {
         }
     }
 
+    #[allow(missing_docs)]
     pub fn with_type(mut self, ty: TypeId) -> Self {
         self.ty = ty;
         self
     }
 
+    #[allow(missing_docs)]
     pub fn with_attribute(mut self, ty: TypeId) -> Self {
         self.ty = ty;
         self
@@ -434,14 +462,18 @@ pub type Fields<Inner = Val, Field = Ident> = IndexMap<Field, Inner>;
 
 pub type Sequence<Inner = Val> = Vec<Inner>;
 
+/// The kind of a field inside of Bauble.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum FieldsKind<Inner = Val, Field: Hash + Eq = Ident> {
+    // TODO(@docs)
     Unit,
     Unnamed(Sequence<Inner>),
     Named(Fields<Inner, Field>),
 }
 
 impl FieldsKind {
+    #[allow(missing_docs)]
     pub fn variant_kind(&self) -> VariantKind {
         match self {
             FieldsKind::Unit => VariantKind::Path,
@@ -451,6 +483,8 @@ impl FieldsKind {
     }
 }
 
+/// A value of a primitive type inside of Bauble.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum PrimitiveValue {
     Num(Decimal),
@@ -461,6 +495,11 @@ pub enum PrimitiveValue {
     Raw(String),
 }
 
+/// A parsed but untyped value from Bauble.
+///
+/// This is the fundemtnal building block of interpreteting Bauble.
+/// For a typed version with attributes, see [`Val`].
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value<V: ValueTrait = Val> {
     // Fully resolved path.
@@ -483,6 +522,7 @@ pub enum Value<V: ValueTrait = Val> {
 }
 
 impl<T: ValueTrait> Value<T> {
+    /// If the value can be described by a primitive type.
     pub fn primitive_type(&self) -> Option<types::Primitive> {
         match self {
             Self::Primitive(p) => Some(match p {
@@ -498,6 +538,8 @@ impl<T: ValueTrait> Value<T> {
     }
 }
 
+/// Represents a value tied to a specific path.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Object<Inner = Val> {
     pub object_path: TypePath,
@@ -505,6 +547,7 @@ pub struct Object<Inner = Val> {
 }
 
 impl Object<Val> {
+    #[allow(missing_docs)]
     pub fn into_unspanned(self) -> Object<UnspannedVal> {
         Object {
             object_path: self.object_path,

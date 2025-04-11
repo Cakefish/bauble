@@ -1,3 +1,8 @@
+//! Provides helper functions for displaying Bauble values.
+
+// NOTE(@docs) the display API is self-explanatory.
+#![allow(missing_docs)]
+
 use std::collections::HashMap;
 
 use crate::{
