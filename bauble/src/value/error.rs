@@ -25,6 +25,8 @@ impl From<crate::path::PathError> for ConversionError {
     }
 }
 
+/// An error type for conversions that happen inside of Bauble.
+#[allow(missing_docs)]
 #[derive(Clone, Debug)]
 pub enum ConversionError {
     UnregisteredAsset,

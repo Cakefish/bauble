@@ -8,9 +8,14 @@ use std::{
 
 use crate::context::FileId;
 
+/// Represents a span in the parsed source of the Bauble context.
+/// This type correspond to the byte offset of the first character and the byte offset of the last character
+/// in a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
+    /// The offset to the first character covered by the span.
     pub start: usize,
+    /// The offset to the delimiting character covered by the span (non-inclusive).
     pub end: usize,
     file: FileId,
 }
@@ -22,6 +27,7 @@ impl From<Span> for FileId {
 }
 
 impl Span {
+    #[allow(missing_docs)]
     pub fn new(file: impl Into<FileId>, range: Range<usize>) -> Self {
         Self {
             start: range.start,
@@ -30,23 +36,37 @@ impl Span {
         }
     }
 
+    /// This is equivalent to `self.end - self.start`.
     pub fn len(&self) -> usize {
         self.end - self.start
     }
 
+    /// An empty span is when `self.start == self.end` or `self.len() == 0`
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.start == self.end
     }
 
+    /// Creates a sub span of the current span.
+    ///
+    /// The subspan will be offset by the start of `self` and must exists within the bounds of `self`.
+    ///
+    /// # Panic
+    ///
+    /// This function will panic if `range.start` or `range.end` exists outside the bounds of `self`,
+    /// that is to say, if `range.start` is greater or equal to `self.len()` or `range.end` is greater
+    /// than `self.len()`.
     pub fn sub_span(&self, range: Range<usize>) -> Span {
+        assert!(range.start < self.len());
+        assert!(range.end <= self.len());
         Span {
             file: self.file,
             start: self.start + range.start,
-            end: self.end + range.end,
+            end: self.start + range.end,
         }
     }
 
+    #[allow(missing_docs)]
     pub fn file(&self) -> FileId {
         self.file
     }
@@ -90,6 +110,8 @@ impl ariadne::Span for Span {
     }
 }
 
+/// Represents a value associated with a span, meaning it is tied with some part of a Bauble source.
+#[allow(missing_docs)]
 #[derive(Clone, Copy)]
 pub struct Spanned<T> {
     pub span: Span,
@@ -148,6 +170,7 @@ impl<T> DerefMut for Spanned<T> {
     }
 }
 
+#[allow(missing_docs)]
 impl<T> Spanned<T> {
     pub fn new(span: Span, value: T) -> Self {
         Self { span, value }
@@ -184,7 +207,9 @@ impl<T: Error> Error for Spanned<T> {
     }
 }
 
+/// A helper trait for creating spanned values. It is implemented for all sized types.
 pub trait SpanExt: Sized {
+    /// Wraps `self` into a [`Spanned`] type.
     fn spanned(self, span: Span) -> Spanned<Self>;
 }
 
