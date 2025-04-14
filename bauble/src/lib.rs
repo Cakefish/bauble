@@ -19,8 +19,8 @@ pub use traits::{
 };
 pub use types::path;
 pub use value::{
-    Attributes, ConversionError, DisplayConfig, FieldsKind, IndentedDisplay, Object,
-    PrimitiveValue, SpannedValue, UnspannedVal, Val, Value, ValueContainer, ValueTrait,
+    Attributes, ConversionError, DisplayConfig, Fields, FieldsKind, IndentedDisplay, Map, Object,
+    PrimitiveValue, Sequence, SpannedValue, UnspannedVal, Val, Value, ValueContainer, ValueTrait,
     display_formatted,
 };
 
