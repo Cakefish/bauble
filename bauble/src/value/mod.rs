@@ -141,7 +141,7 @@ impl ValueContainer for AnyVal<'_> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attributes<V: ValueContainer = Val>(Fields<V>);
 
-impl<V: ValueContainer> From<IndexMap<V::ContainerField, V>> for Attributes<V> {
+impl<V: ValueContainer> From<Fields<V>> for Attributes<V> {
     fn from(value: IndexMap<V::ContainerField, V>) -> Self {
         Self(value)
     }
