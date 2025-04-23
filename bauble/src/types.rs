@@ -515,12 +515,15 @@ impl TypeRegistry {
                 objects.push(crate::Object { object_path, value })
             }
 
-            let source =
-                crate::display_formatted(objects.as_slice(), self, &crate::DisplayConfig {
+            let source = crate::display_formatted(
+                objects.as_slice(),
+                self,
+                &crate::DisplayConfig {
                     debug_types: true,
 
                     ..Default::default()
-                });
+                },
+            );
 
             let mut ctx = crate::BaubleContext::from(self.clone());
 
