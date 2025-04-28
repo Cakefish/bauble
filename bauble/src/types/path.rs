@@ -33,9 +33,9 @@ impl<S: AsRef<str>> std::hash::Hash for TypePathElem<S> {
     }
 }
 
-impl<S: AsRef<str>> std::fmt::Debug for TypePathElem<S> {
+impl<S: std::fmt::Debug> std::fmt::Debug for TypePathElem<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.as_str(), f)
+        std::fmt::Debug::fmt(self.get_inner(), f)
     }
 }
 
@@ -122,9 +122,9 @@ impl<S: AsRef<str>> std::hash::Hash for TypePath<S> {
     }
 }
 
-impl<S: AsRef<str>> std::fmt::Debug for TypePath<S> {
+impl<S: std::fmt::Debug> std::fmt::Debug for TypePath<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.as_str(), f)
+        std::fmt::Debug::fmt(self.get_inner(), f)
     }
 }
 
@@ -242,6 +242,30 @@ impl<S: AsRef<str>> AsRef<str> for TypePath<S> {
     }
 }
 
+impl<S> TypePath<S> {
+    /// Creates a new type path without checking for correctness.
+    ///
+    /// This isn't unsafe but a lot of logic assumes a `TypePath` to be correct so would
+    /// still cause bugs to use this incorrectly.
+    pub fn new_unchecked(inner: S) -> Self {
+        Self(inner)
+    }
+
+    pub fn into_inner(self) -> S {
+        self.0
+    }
+
+    pub fn get_inner(&self) -> &S {
+        &self.0
+    }
+
+    /// This isn't unsafe but a lot of logic assumes a `TypePath` to be correct so would
+    /// still cause bugs to use this incorrectly.
+    pub fn get_inner_mut(&mut self) -> &mut S {
+        &mut self.0
+    }
+}
+
 impl<S: AsRef<str>> TypePath<S> {
     pub fn empty() -> Self
     where
@@ -258,10 +282,6 @@ impl<S: AsRef<str>> TypePath<S> {
 
     pub fn try_into_elem(self) -> Result<TypePathElem<S>> {
         TypePathElem::try_from(self)
-    }
-
-    pub fn into_inner(self) -> S {
-        self.0
     }
 
     pub fn as_str(&self) -> &str {

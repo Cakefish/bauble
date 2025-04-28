@@ -6,7 +6,7 @@ use crate::{
     error::{BaubleError, ErrorMsg, Level},
     path::{TypePath, TypePathElem},
     spanned::{Span, Spanned},
-    types::{self, FieldType, TypeId},
+    types::{self, Extra, FieldType, TypeId},
     value::{Ident, PrimitiveValue},
 };
 
@@ -329,6 +329,11 @@ macro_rules! impl_ints {
 
                                 Ok(())
                             }),
+                            extra: Extra::from_iter([
+                                ("min".to_string(), <$ty>::MIN.to_string()),
+                                ("max".to_string(), <$ty>::MAX.to_string()),
+                                ("step".to_string(), "1".to_string()),
+                            ]),
                             ..Default::default()
                         },
                         kind: types::TypeKind::Primitive(types::Primitive::Num),

@@ -11,6 +11,8 @@ use path::{TypePath, TypePathElem};
 
 use crate::{Bauble, BaubleAllocator, value::UnspannedVal};
 
+pub type Extra = IndexMap<String, String>;
+
 pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
     const BAUBLE_PATH: &'static str;
 }
@@ -109,7 +111,7 @@ pub struct Variant {
     pub kind: VariantKind,
     pub attributes: NamedFields,
     pub extra_validation: Option<ValidationFunction>,
-    pub extra: IndexMap<String, String>,
+    pub extra: Extra,
     pub default: Option<UnspannedVal>,
 }
 
@@ -141,7 +143,7 @@ impl Variant {
         self
     }
 
-    pub fn with_extra(mut self, extra: IndexMap<String, String>) -> Self {
+    pub fn with_extra(mut self, extra: Extra) -> Self {
         self.extra = extra;
         self
     }
@@ -876,13 +878,13 @@ pub struct TypeMeta {
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
     pub extra_validation: Option<ValidationFunction>,
-    pub extra: IndexMap<String, String>,
+    pub extra: Extra,
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldType {
     pub id: TypeId,
-    pub extra: IndexMap<String, String>,
+    pub extra: Extra,
     pub default: Option<UnspannedVal>,
 }
 
@@ -990,6 +992,11 @@ impl NamedFields {
             allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
             ..Self::empty()
         }
+    }
+
+    /// Returns true if this type can't have attributes
+    pub fn is_empty(&self) -> bool {
+        self.required.is_empty() && self.optional.is_empty() && self.allow_additional.is_none()
     }
 }
 

@@ -32,7 +32,7 @@ pub trait ValueTrait: Clone + std::fmt::Debug {
     type Inner: ValueContainer;
     type Ref;
     type Variant;
-    type Field: Hash + Eq + std::borrow::Borrow<str>;
+    type Field: std::fmt::Debug + Clone + Hash + Eq + std::borrow::Borrow<str>;
 
     fn ty(&self) -> TypeId;
 
@@ -62,7 +62,7 @@ pub trait SpannedValue: ValueTrait {
 }
 
 pub trait ValueContainer: Clone + std::fmt::Debug {
-    type ContainerField: Hash + Eq + std::borrow::Borrow<str>;
+    type ContainerField: std::fmt::Debug + Clone + Hash + Eq + std::borrow::Borrow<str>;
 
     fn has_attributes(&self) -> bool;
 
@@ -139,9 +139,9 @@ impl ValueContainer for AnyVal<'_> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Attributes<V: ValueContainer = Val>(IndexMap<V::ContainerField, V>);
+pub struct Attributes<V: ValueContainer = Val>(Fields<V>);
 
-impl<V: ValueContainer> From<IndexMap<V::ContainerField, V>> for Attributes<V> {
+impl<V: ValueContainer> From<Fields<V>> for Attributes<V> {
     fn from(value: IndexMap<V::ContainerField, V>) -> Self {
         Self(value)
     }
@@ -184,6 +184,10 @@ impl<V: ValueContainer> Attributes<V> {
 
     pub fn take(&mut self, ident: &str) -> Option<V> {
         self.0.swap_remove(ident)
+    }
+
+    pub fn get_inner(&self) -> &Fields<V> {
+        &self.0
     }
 }
 
@@ -430,15 +434,15 @@ pub type Ident = Spanned<String>;
 
 pub type Map<Inner = Val> = Vec<(Inner, Inner)>;
 
-pub type Fields<Inner = Val, Field = Ident> = IndexMap<Field, Inner>;
+pub type Fields<Inner = Val> = IndexMap<<Inner as ValueContainer>::ContainerField, Inner>;
 
 pub type Sequence<Inner = Val> = Vec<Inner>;
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum FieldsKind<Inner = Val, Field: Hash + Eq = Ident> {
+pub enum FieldsKind<Inner: ValueContainer = Val> {
     Unit,
     Unnamed(Sequence<Inner>),
-    Named(Fields<Inner, Field>),
+    Named(Fields<Inner>),
 }
 
 impl FieldsKind {
@@ -471,7 +475,7 @@ pub enum Value<V: ValueTrait = Val> {
     Map(Map<V::Inner>),
 
     /// Either struct or enum variant
-    Struct(FieldsKind<V::Inner, V::Field>),
+    Struct(FieldsKind<V::Inner>),
 
     Or(Vec<V::Variant>),
 
