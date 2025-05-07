@@ -35,7 +35,6 @@ impl CustomError {
     }
 
     /// Highlights a span of code with an accompanying diagnostic message with a diagnostic relevance of `level`.
-    #[allow(missing_docs)]
     pub fn with_label(mut self, s: Spanned<impl Into<Cow<'static, str>>>, level: Level) -> Self {
         self.labels.push((s.map(|s| s.into()), level));
         self
@@ -44,7 +43,6 @@ impl CustomError {
     /// Highlights a span of code with an accompanying message.
     ///
     /// Shorthand for [`with_label`](Self::with_label) with an error level.
-    #[allow(missing_docs)]
     pub fn with_err_label(self, s: Spanned<impl Into<Cow<'static, str>>>) -> Self {
         self.with_label(s, Level::Error)
     }

@@ -55,7 +55,7 @@ struct InnerToRustError {
     kind: ToRustErrorKind,
 }
 
-/// An error that occures during Bauble parsing, represented as a Rust enum.
+/// An error that occures during Bauble parsinoccurs during conversion from bauble to rust, represented as a Rust enum.
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToRustErrorKind {

@@ -1,4 +1,4 @@
-//! Bauble is a types format. This means that Bauble will be able to extract type information from the
+//! Bauble is a typed format. This means that Bauble will be able to extract type information from the
 //! [`BaubleContext`](crate::BaubleContext) and the parsed source files.
 //!
 //! The typed nature of Bauble brings many benefits such as improved error messages, allowing custom values,
@@ -117,7 +117,7 @@ pub enum VariantKind {
     Explicit(Fields),
 }
 
-/// A variant usable by an enum in Bauble.
+/// A variant usable by an enum in Bauble used for [`TypeRegistry::build_enum`].
 pub struct Variant {
     /// The identifier of the variant.
     pub ident: TypePathElem,
@@ -185,7 +185,7 @@ impl Variant {
     }
 }
 
-/// An error that occured within the Bauble context's type-system.
+/// An error that occured within the Bauble context's type-system during [`TypeRegister::validate`].
 #[allow(missing_docs)]
 #[derive(Debug)]
 pub enum TypeSystemError<'a> {
