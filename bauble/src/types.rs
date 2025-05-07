@@ -19,6 +19,9 @@ use path::{TypePath, TypePathElem};
 
 use crate::{Bauble, BaubleAllocator, value::UnspannedVal};
 
+#[allow(missing_docs)]
+pub type Extra = IndexMap<String, String>;
+
 /// A trait that can be represented within a bauble context.
 pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
     /// The path of the trait used by Bauble when parsing.
@@ -127,9 +130,9 @@ pub struct Variant {
     pub attributes: NamedFields,
     /// Additional validation to perform during parsing.
     pub extra_validation: Option<ValidationFunction>,
-    // TODO(@docs)
     #[allow(missing_docs)]
-    pub extra: IndexMap<String, String>,
+    // TODO(@docs)
+    pub extra: Extra,
     /// The default value to be assigned to this variant if a null value was provided.
     pub default: Option<UnspannedVal>,
 }
@@ -167,7 +170,7 @@ impl Variant {
     }
 
     #[allow(missing_docs)]
-    pub fn with_extra(mut self, extra: IndexMap<String, String>) -> Self {
+    pub fn with_extra(mut self, extra: Extra) -> Self {
         self.extra = extra;
         self
     }
@@ -940,7 +943,7 @@ pub struct TypeMeta {
     pub extra_validation: Option<ValidationFunction>,
     // TODO(@docs)
     #[allow(missing_docs)]
-    pub extra: IndexMap<String, String>,
+    pub extra: Extra,
 }
 
 /// A type on a field inside of Bauble.
@@ -949,7 +952,7 @@ pub struct TypeMeta {
 pub struct FieldType {
     pub id: TypeId,
     // TODO(@docs)
-    pub extra: IndexMap<String, String>,
+    pub extra: Extra,
     pub default: Option<UnspannedVal>,
 }
 
@@ -1091,6 +1094,11 @@ impl NamedFields {
             allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
             ..Self::empty()
         }
+    }
+
+    /// Returns true if this type can't have attributes
+    pub fn is_empty(&self) -> bool {
+        self.required.is_empty() && self.optional.is_empty() && self.allow_additional.is_none()
     }
 }
 

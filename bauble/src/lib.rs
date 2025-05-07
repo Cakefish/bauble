@@ -47,7 +47,7 @@ pub mod types;
 
 pub use bauble_macros::Bauble;
 
-pub use context::{BaubleContext, BaubleContextBuilder, FileId, Source};
+pub use context::{BaubleContext, BaubleContextBuilder, FileId, PathReference, Source};
 pub use error::{BaubleError, BaubleErrors, CustomError, Level, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use traits::{
@@ -55,10 +55,13 @@ pub use traits::{
 };
 pub use types::path;
 pub use value::{
-    Attributes, ConversionError, DisplayConfig, FieldsKind, IndentedDisplay, Object,
-    PrimitiveValue, SpannedValue, UnspannedVal, Val, Value, ValueContainer, ValueTrait,
+    Attributes, ConversionError, DisplayConfig, Fields, FieldsKind, IndentedDisplay, Map, Object,
+    PrimitiveValue, Sequence, SpannedValue, UnspannedVal, Val, Value, ValueContainer, ValueTrait,
     display_formatted,
 };
+
+// re-exporting crates from other crates
+pub use rust_decimal as decimal;
 
 #[doc(hidden)]
 pub mod private {

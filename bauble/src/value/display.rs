@@ -199,7 +199,7 @@ where
     V::Ref: std::fmt::Display,
     V::Variant: std::fmt::Display,
     V::Field: std::fmt::Display,
-    V::Inner: IndentedDisplay<CTX> + ValueContainer,
+    V::Inner: IndentedDisplay<CTX> + ValueContainer<ContainerField: std::fmt::Display>,
 {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         match self {

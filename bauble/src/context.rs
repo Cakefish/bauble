@@ -19,14 +19,19 @@ struct InnerReference {
     redirect: Option<TypePath>,
 }
 
+/// A type containing multiple references generally derived from a path.
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
+    /// The type referenced by a path.
     pub ty: Option<TypeId>,
+    /// The asset (and its path) referenced by the path.
     pub asset: Option<(TypeId, TypePath)>,
+    /// If the reference references a module.
     pub module: Option<TypePath>,
 }
 
 impl PathReference {
+    /// Construicts an empty path reference.
     pub fn empty() -> Self {
         Self {
             ty: None,
@@ -34,6 +39,8 @@ impl PathReference {
             module: None,
         }
     }
+
+    /// Constructs a path reference referencing the 'any' type.
     pub fn any(path: TypePath) -> Self {
         Self {
             ty: Some(TypeRegistry::any_type()),
@@ -42,6 +49,8 @@ impl PathReference {
         }
     }
 
+    /// Take the exclusive properties of `self` and `other`, essentially "xor"ing them together by producing
+    /// the combined result where each field where both are `Some` are `None`.
     pub fn combined(self, other: Self) -> Option<Self> {
         fn xor_option<T>(a: Option<T>, b: Option<T>) -> Option<Option<T>> {
             match (a, b) {
