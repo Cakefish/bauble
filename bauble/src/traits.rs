@@ -10,6 +10,8 @@ use crate::{
     value::{Ident, PrimitiveValue},
 };
 
+/// Represents the different kinds of variants on an enum, where `Path` is a unit variant.
+#[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum VariantKind {
     Struct,
@@ -53,6 +55,8 @@ struct InnerToRustError {
     kind: ToRustErrorKind,
 }
 
+/// An error that occures during conversion from bauble to rust, represented as a Rust enum.
+#[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToRustErrorKind {
     MissingField {
@@ -231,7 +235,10 @@ impl BaubleError for ToRustError {
 }
 
 // TODO Maybe `unsafe trait`?
+/// Used by bauble to abstract allocating various types.
 pub trait BaubleAllocator<'a> {
+    // TODO(@docs)
+    #[allow(missing_docs)]
     type Out<T>
     where
         Self: 'a;
@@ -244,6 +251,7 @@ pub trait BaubleAllocator<'a> {
     unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, ToRustError>;
 }
 
+/// The standard Rust allocator when used by Bauble.
 pub struct DefaultAllocator;
 
 impl BaubleAllocator<'_> for DefaultAllocator {
@@ -258,6 +266,7 @@ impl BaubleAllocator<'_> for DefaultAllocator {
     }
 }
 
+/// The trait used by types usable by Bauble. Any type that can be parsed by bauble should implement this trait.
 pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static {
     /// # DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
     ///
@@ -267,6 +276,7 @@ pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static
     /// Construct this type from a bauble value. This function doesn't do any type checking.
     fn from_bauble(val: Val, allocator: &A) -> Result<A::Out<Self>, ToRustError>;
 
+    #[allow(missing_docs)]
     fn error(span: crate::Span, error: impl Into<ToRustErrorKind>) -> ToRustError {
         ToRustError(Box::new(InnerToRustError {
             in_type: std::any::TypeId::of::<Self>(),

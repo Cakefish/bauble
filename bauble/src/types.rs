@@ -1,9 +1,17 @@
+//! Bauble is a typed format. This means that Bauble will be able to extract type information from the
+//! [`BaubleContext`](crate::BaubleContext) and the parsed source files.
+//!
+//! The typed nature of Bauble brings many benefits such as improved error messages, allowing custom values,
+//! type-checked values and gives you greater flexibility to add your own custom validation steps for a
+//! type which implements [`Bauble`](crate::Bauble).
+
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     ptr::{DynMetadata, Pointee},
 };
 
+#[allow(missing_docs)]
 pub mod path;
 
 use indexmap::IndexMap;
@@ -11,9 +19,12 @@ use path::{TypePath, TypePathElem};
 
 use crate::{Bauble, BaubleAllocator, value::UnspannedVal};
 
+#[allow(missing_docs)]
 pub type Extra = IndexMap<String, String>;
 
+/// A trait that can be represented within a bauble context.
 pub trait BaubleTrait: Pointee<Metadata = DynMetadata<Self>> + 'static {
+    /// The path of the trait used by Bauble when parsing.
     const BAUBLE_PATH: &'static str;
 }
 
@@ -25,10 +36,12 @@ impl BaubleTrait for dyn std::fmt::Debug {
     const BAUBLE_PATH: &'static str = "std::Debug";
 }
 
+/// A [`TypeId`] represents a type registed by a Bauble [`TypeRegistry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeId(usize);
 
 impl TypeId {
+    /// Gets the usize representation of the ID.
     pub fn inner(&self) -> usize {
         self.0
     }
@@ -46,9 +59,13 @@ impl From<GenericTypeId> for TypeId {
     }
 }
 
+// TODO(@docs)
+#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GenericTypeId(TypeId);
 
+/// A [`TraitId`] represents a trait registed by a Bauble [`TypeRegistry`].
+///
 /// We maintain the invariant that the type is kind `TypeKind::Trait`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TraitId(TypeId);
@@ -59,10 +76,12 @@ enum SealedTypeSet {
     Certain(HashSet<TypeId>),
 }
 
+/// Represents a set of types impelemnting a specific trait.
 #[derive(Debug, Clone)]
 pub struct TypeSet(SealedTypeSet);
 
 impl TypeSet {
+    #[allow(missing_docs)]
     pub fn insert(&mut self, ty: TypeId) -> bool {
         match &mut self.0 {
             SealedTypeSet::All => false,
@@ -70,6 +89,7 @@ impl TypeSet {
         }
     }
 
+    #[allow(missing_docs)]
     pub fn contains(&self, ty: TypeId) -> bool {
         match &self.0 {
             SealedTypeSet::All => true,
@@ -78,14 +98,7 @@ impl TypeSet {
     }
 }
 
-pub struct Trait {
-    pub path: TypePath,
-    /// A type that can represent this trait.
-    pub ty: TypeId,
-    /// Types we know that implement this trait.
-    pub types: TypeSet,
-}
-
+/// A registry for tracking all registered types and traits inside of a [`BaubleContext`](crate::BaubleContext).
 #[derive(Clone, Debug)]
 pub struct TypeRegistry {
     types: Vec<Type>,
@@ -101,21 +114,31 @@ pub struct TypeRegistry {
     primitive_types: [TypeId; 5],
 }
 
+#[allow(missing_docs)]
 pub enum VariantKind {
     Flattened(TypeKind),
     Explicit(Fields),
 }
 
+/// A variant usable by an enum in Bauble used for [`TypeRegistry::build_enum`].
 pub struct Variant {
+    /// The identifier of the variant.
     pub ident: TypePathElem,
+    #[allow(missing_docs)]
     pub kind: VariantKind,
+    /// Fields in the form of attributes on the variant.
     pub attributes: NamedFields,
+    /// Additional validation to perform during parsing.
     pub extra_validation: Option<ValidationFunction>,
+    #[allow(missing_docs)]
+    // TODO(@docs)
     pub extra: Extra,
+    /// The default value to be assigned to this variant if a null value was provided.
     pub default: Option<UnspannedVal>,
 }
 
 impl Variant {
+    /// Creates a non-flattened variant.
     pub fn explicit(ident: TypePathElem<impl AsRef<str>>, fields: Fields) -> Self {
         Self {
             ident: ident.to_owned(),
@@ -127,6 +150,8 @@ impl Variant {
         }
     }
 
+    /// Creates a flattened variant.
+    /// A flattened variant does not need its name to be explicitly written when creating it.
     pub fn flattened(ident: TypePathElem<impl AsRef<str>>, ty: TypeKind) -> Self {
         Self {
             ident: ident.to_owned(),
@@ -138,27 +163,33 @@ impl Variant {
         }
     }
 
+    #[allow(missing_docs)]
     pub fn with_attributes(mut self, attributes: NamedFields) -> Self {
         self.attributes = attributes;
         self
     }
 
+    #[allow(missing_docs)]
     pub fn with_extra(mut self, extra: Extra) -> Self {
         self.extra = extra;
         self
     }
 
+    #[allow(missing_docs)]
     pub fn with_validation(mut self, validation: ValidationFunction) -> Self {
         self.extra_validation = Some(validation);
         self
     }
 
+    #[allow(missing_docs)]
     pub fn with_default(mut self, value: UnspannedVal) -> Self {
         self.default = Some(value);
         self
     }
 }
 
+/// An error that occured within the Bauble context's type-system during [`TypeRegister::validate`].
+#[allow(missing_docs)]
 #[derive(Debug)]
 pub enum TypeSystemError<'a> {
     ToBeAssigned(Vec<(TypeId, TypePath<&'a str>)>),
@@ -250,6 +281,8 @@ impl TypeRegistry {
         self.key_trait(self.top_level_trait_dependency).contains(id)
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn top_level_trait(&self) -> TraitId {
         self.top_level_trait_dependency
     }
@@ -281,23 +314,28 @@ impl TypeRegistry {
         self.primitive_types[primitive as usize] = id;
     }
 
+    /// Return the type ID of the primitive.
     pub fn primitive_type(&self, primitive: Primitive) -> TypeId {
         self.primitive_types[primitive as usize]
     }
 
+    /// Retrieve the Bauble type ID from the type ID generated by Rust.
     pub fn type_id_of_std_id(&self, id: std::any::TypeId) -> Option<TypeId> {
         self.type_from_rust.get(&id).copied()
     }
 
+    /// Return the type ID from `T` if `T` has been registered.
     pub fn type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&self) -> Option<TypeId> {
         self.type_id_of_std_id(std::any::TypeId::of::<T>())
     }
 
+    /// Return the trait ID based on `T` where `T` derives [`BaubleTrait`].
     pub fn trait_id<T: ?Sized + BaubleTrait>(&self) -> Option<TraitId> {
         self.type_id_of_std_id(std::any::TypeId::of::<T>())
             .map(TraitId)
     }
 
+    /// Iterate over all type IDs.
     pub fn type_ids(&self) -> impl Iterator<Item = TypeId> {
         (0..self.types.len()).map(TypeId)
     }
@@ -465,6 +503,7 @@ impl TypeRegistry {
         }
     }
 
+    /// Makes it possible to register a type which is not represented in Rust.
     #[must_use]
     pub fn register_dummy_type(&mut self, mut ty: Type) -> TypeId {
         self.register_type(|this, id| {
@@ -548,6 +587,7 @@ impl TypeRegistry {
         Ok(())
     }
 
+    /// Reserve an ID for a type which is not yet fully registered.
     pub fn reserve_type_id<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
         self.type_id::<T, A>().unwrap_or_else(|| {
             self.register_type(|this, id| {
@@ -561,6 +601,7 @@ impl TypeRegistry {
         })
     }
 
+    /// Register `T` if it is not registerted already, then get the type ID for `T`.
     pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
         let id = self.type_id::<T, A>();
 
@@ -612,6 +653,7 @@ impl TypeRegistry {
         }
     }
 
+    /// Register `T` if it is not registerted already, then get the trait ID for `T`.
     pub fn get_or_register_trait<T: ?Sized + BaubleTrait>(&mut self) -> TraitId {
         let rust_id = std::any::TypeId::of::<T>();
         if let Some(id) = self.type_from_rust.get(&rust_id) {
@@ -644,10 +686,13 @@ impl TypeRegistry {
         }
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn set_top_level_trait_dependency(&mut self, tr: TraitId) {
         self.top_level_trait_dependency = tr;
     }
 
+    /// Registers `ty` as implementing `tr`.
     pub fn add_trait_dependency(&mut self, ty: TypeId, tr: TraitId) {
         self.types[ty.0].meta.traits.push(tr);
 
@@ -664,6 +709,8 @@ impl TypeRegistry {
         self.types.get(id.into().0).expect("unknown type id")
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn key_trait(&self, id: TraitId) -> &TypeSet {
         match &self.key_type(id).kind {
             TypeKind::Trait(type_set) => type_set,
@@ -671,6 +718,8 @@ impl TypeRegistry {
         }
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn key_generic(&self, id: GenericTypeId) -> &TypeSet {
         match &self.key_type(id).kind {
             TypeKind::Generic(type_set) => type_set,
@@ -678,18 +727,23 @@ impl TypeRegistry {
         }
     }
 
+    /// Get the type information in Bauble from a Rust generated type ID, if the type with the ID `id` has been registered.
     pub fn get_type_by_id(&self, id: std::any::TypeId) -> Option<&Type> {
         self.type_id_of_std_id(id).map(|id| self.key_type(id))
     }
 
+    /// Get the type information of `T` in Bauble, if the type `T` has been registered.
     pub fn get_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&self) -> Option<&Type> {
         self.type_id::<T, A>().map(|id| self.key_type(id))
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn get_trait<T: ?Sized + BaubleTrait>(&self) -> Option<&Type> {
         self.trait_id::<T>().map(|id| self.key_type(id))
     }
 
+    /// Iterates the type set for all of its types.
     pub fn iter_type_set<'a>(&self, type_set: &'a TypeSet) -> impl Iterator<Item = TypeId> + 'a {
         match &type_set.0 {
             SealedTypeSet::All => Some((0..self.types.len()).map(TypeId))
@@ -707,6 +761,8 @@ impl TypeRegistry {
         }
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
         let p = self.key_type(ty).meta.path.borrow();
 
@@ -720,6 +776,7 @@ impl TypeRegistry {
         }
     }
 
+    /// If the output type `output_id` can be inferred from the input type `input_id`.
     pub fn can_infer_from(&self, output_id: TypeId, input_id: TypeId) -> bool {
         if output_id == input_id {
             return true;
@@ -863,27 +920,38 @@ impl TypeRegistry {
     }
 }
 
+#[allow(missing_docs)]
 pub type ValidationFunction =
     fn(val: &crate::Val, registry: &TypeRegistry) -> Result<(), crate::ConversionError>;
 
+/// Meta information on a type registered within a Bauble context.
 #[derive(Default, Clone, Debug)]
 pub struct TypeMeta {
+    /// The path to the type.
     pub path: TypePath,
     /// If this is `Some` the type is generic.
     pub generic_base_type: Option<GenericTypeId>,
+    /// The traits implemented by the type.
     pub traits: Vec<TraitId>,
+    /// The optional default value of the type.
     pub default: Option<UnspannedVal>,
+    /// If the type may be nullable.
     pub nullable: bool,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
     pub extra_validation: Option<ValidationFunction>,
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub extra: Extra,
 }
 
+/// A type on a field inside of Bauble.
+#[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub struct FieldType {
     pub id: TypeId,
+    // TODO(@docs)
     pub extra: Extra,
     pub default: Option<UnspannedVal>,
 }
@@ -898,20 +966,28 @@ impl From<TypeId> for FieldType {
     }
 }
 
+/// A Bauble registered type.
+#[allow(missing_docs)]
 #[derive(Clone, Debug)]
 pub struct Type {
     pub meta: TypeMeta,
     pub kind: TypeKind,
 }
 
+/// Unnamed fields in a Bauble type.
 #[derive(Default, Clone, Debug)]
 pub struct UnnamedFields {
+    /// Fields that must be specified.
     pub required: Vec<FieldType>,
+    /// Optional fields, such as those specified by attributes with default values.
     pub optional: Vec<FieldType>,
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub allow_additional: Option<FieldType>,
 }
 
 impl UnnamedFields {
+    /// Get the type of field with the index `i`.
     pub fn get(&self, i: usize) -> Option<&FieldType> {
         self.required
             .get(i)
@@ -919,20 +995,29 @@ impl UnnamedFields {
             .or(self.allow_additional.as_ref())
     }
 
+    /// Creates an empty set of unnamed fields.
     pub fn empty() -> Self {
         Self::default()
     }
 
+    /// Specify a set of fields which always have to be assigned a value.
+    ///
+    /// This will overwrite the previously set required fields.
     pub fn with_required<F: Into<FieldType>>(mut self, iter: impl IntoIterator<Item = F>) -> Self {
         self.required = iter.into_iter().map(|val| val.into()).collect();
         self
     }
 
+    /// Specify a set of fields which may optionally be assigned a value.
+    ///
+    /// This will overwrite the previously set optional fields.
     pub fn with_optional<F: Into<FieldType>>(mut self, iter: impl IntoIterator<Item = F>) -> Self {
         self.optional = iter.into_iter().map(|val| val.into()).collect();
         self
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn any() -> Self {
         Self {
             allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
@@ -940,14 +1025,20 @@ impl UnnamedFields {
         }
     }
 }
+/// Named fields in a Bauble type.
 #[derive(Default, Clone, Debug)]
 pub struct NamedFields {
+    /// Fields that must be specified.
     pub required: IndexMap<String, FieldType>,
+    /// Optional fields, such as those specified by attributes with default values.
     pub optional: IndexMap<String, FieldType>,
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub allow_additional: Option<FieldType>,
 }
 
 impl NamedFields {
+    /// Get the type of field with the identifier `ident`.
     pub fn get<'a>(&'a self, ident: &str) -> Option<&'a FieldType> {
         self.required
             .get(ident)
@@ -955,10 +1046,14 @@ impl NamedFields {
             .or(self.allow_additional.as_ref())
     }
 
+    /// Creates an empty set of named fields.
     pub fn empty() -> Self {
         Self::default()
     }
 
+    /// Specify a set of fields which always have to be assigned a value.
+    ///
+    /// This will overwrite the previously set required fields.
     pub fn with_required<S: Into<String>, F: Into<FieldType>>(
         mut self,
         iter: impl IntoIterator<Item = (S, F)>,
@@ -970,6 +1065,9 @@ impl NamedFields {
         self
     }
 
+    /// Specify a set of fields which may optionally be assigned a value.
+    ///
+    /// This will overwrite the previously set optional fields.
     pub fn with_optional<S: Into<String>, F: Into<FieldType>>(
         mut self,
         iter: impl IntoIterator<Item = (S, F)>,
@@ -981,12 +1079,16 @@ impl NamedFields {
         self
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn with_additional<F: Into<FieldType>>(mut self, f: F) -> Self {
         self.allow_additional = Some(f.into());
 
         self
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn any() -> Self {
         Self {
             allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
@@ -1000,6 +1102,8 @@ impl NamedFields {
     }
 }
 
+/// Represents fields on a type in Bauble.
+#[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub enum Fields {
     Unit,
@@ -1007,26 +1111,33 @@ pub enum Fields {
     Named(NamedFields),
 }
 
+/// Variants of a single enum inside of Bauble.
 #[derive(Debug, Clone)]
 pub struct EnumVariants(IndexMap<TypePathElem, TypeId>);
 
 impl EnumVariants {
+    /// Get the variant based on its identifier.
     pub fn get(&self, variant: TypePathElem<&str>) -> Option<TypeId> {
         self.0.get(&variant).copied()
     }
 
+    /// Iterate all variants.
     pub fn iter(&self) -> impl Iterator<Item = (TypePathElem<&str>, TypeId)> {
         self.0.iter().map(|(key, value)| (key.borrow(), *value))
     }
 }
 
+/// An array type in Bauble.
 #[derive(Debug, Clone)]
 pub struct ArrayType {
+    #[allow(missing_docs)]
     pub ty: FieldType,
     /// None means any size.
     pub len: Option<usize>,
 }
 
+/// A map type in Bauble.
+#[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub struct MapType {
     pub key: FieldType,
@@ -1035,11 +1146,15 @@ pub struct MapType {
     pub len: Option<usize>,
 }
 
+/// The type of expressions which allow being changed by the `|` operator in Bauble. Usually this is bitflags.
 #[derive(Debug, Clone)]
 pub struct OrType {
+    #[allow(missing_docs)]
     pub variants: Vec<TypePathElem>,
 }
 
+/// An enum covering all the various kinds of types a Bauble value may have.
+#[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub enum TypeKind {
     Tuple(UnnamedFields),
@@ -1066,6 +1181,8 @@ pub enum TypeKind {
     Generic(TypeSet),
 }
 
+/// A primitive type in Bauble.
+#[allow(missing_docs)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(usize)]
 pub enum Primitive {
@@ -1084,6 +1201,7 @@ impl From<Primitive> for TypeKind {
 }
 
 impl TypeKind {
+    /// If the type may be instanciated (created) inside of Bauble.
     pub fn instanciable(&self) -> bool {
         match self {
             TypeKind::Tuple(_)

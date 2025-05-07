@@ -6,6 +6,7 @@ use crate::{
     types::{BaubleTrait, TypeId, TypeRegistry},
 };
 
+#[allow(missing_docs)]
 pub type Source = ariadne::Source<String>;
 
 #[derive(Clone, Default)]
@@ -18,14 +19,19 @@ struct InnerReference {
     redirect: Option<TypePath>,
 }
 
+/// A type containing multiple references generally derived from a path.
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
+    /// The type referenced by a path.
     pub ty: Option<TypeId>,
+    /// The asset (and its path) referenced by the path.
     pub asset: Option<(TypeId, TypePath)>,
+    /// If the reference references a module.
     pub module: Option<TypePath>,
 }
 
 impl PathReference {
+    /// Constructs an empty path reference.
     pub fn empty() -> Self {
         Self {
             ty: None,
@@ -33,6 +39,8 @@ impl PathReference {
             module: None,
         }
     }
+
+    /// Constructs a path reference referencing the 'any' type.
     pub fn any(path: TypePath) -> Self {
         Self {
             ty: Some(TypeRegistry::any_type()),
@@ -41,6 +49,8 @@ impl PathReference {
         }
     }
 
+    /// Take the exclusive properties of `self` and `other`, essentially "xor"ing them together by producing
+    /// the combined result where each field where both are `Some` are `None`.
     pub fn combined(self, other: Self) -> Option<Self> {
         fn xor_option<T>(a: Option<T>, b: Option<T>) -> Option<Option<T>> {
             match (a, b) {
@@ -77,6 +87,9 @@ impl PathReference {
     }
 }
 
+/// A builder used to create a [`BaubleContext`].
+///
+/// The builder is mainly useful to register various types into the context.
 #[derive(Clone)]
 pub struct BaubleContextBuilder {
     registry: TypeRegistry,
@@ -90,6 +103,7 @@ impl Default for BaubleContextBuilder {
 }
 
 impl BaubleContextBuilder {
+    #[allow(missing_docs)]
     pub fn new() -> Self {
         let mut this = Self {
             registry: TypeRegistry::new(),
@@ -107,19 +121,23 @@ impl BaubleContextBuilder {
         this
     }
 
+    /// Register type `T` into the context if it is not already registered.
     pub fn register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> &mut Self {
         self.get_or_register_type::<T, A>();
         self
     }
 
+    /// Register type `T` into the context if it is not already registered, then return its associated ID.
     pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
         self.registry.get_or_register_type::<T, A>()
     }
 
+    #[allow(missing_docs)]
     pub fn type_registry(&mut self) -> &mut TypeRegistry {
         &mut self.registry
     }
 
+    /// Register trait described by `T` where T implements [`BaubleTrait`] for the type associated with the id `ty`.
     pub fn add_trait_for_type<T: ?Sized + BaubleTrait>(&mut self, ty: TypeId) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
         self.registry.add_trait_dependency(ty, tr);
@@ -127,6 +145,7 @@ impl BaubleContextBuilder {
         self
     }
 
+    #[allow(missing_docs)]
     pub fn set_top_level_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
         self.registry.set_top_level_trait_dependency(tr);
@@ -134,11 +153,14 @@ impl BaubleContextBuilder {
         self
     }
 
+    /// Includes an implicit `use` prelude into parsed Bauble files.
     pub fn with_default_use(&mut self, ident: TypePathElem, path: TypePath) -> &mut Self {
         self.default_uses.0.insert(ident, path);
         self
     }
 
+    // TODO: documentation
+    #[allow(missing_docs)]
     /// # Panics
     ///
     /// Can panic if `T`'s `TypeKind` isn't a primitive.
@@ -399,9 +421,14 @@ impl CtxNode {
     }
 }
 
+/// The ID associated with a context registered file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FileId(usize);
 
+/// The root of Bauble parsing.
+///
+/// The Bauble context is used to track the various source files for parsing and maintains
+/// the [`TypeRegistry`] that describes every type and trait registered to Bauble.
 #[derive(Clone)]
 pub struct BaubleContext {
     registry: TypeRegistry,
@@ -432,6 +459,9 @@ fn preprocess_path(path: TypePath<&str>) -> TypePath<&str> {
 }
 
 impl BaubleContext {
+    /// `path` describes the bauble "module" that the file corresponds to. That is it say, what prefix path
+    /// is necessary inside of bauble to reference the context of this file.
+    /// `source` is the string of Bauble text to be parsed.
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) -> FileId {
         let path = preprocess_path(path);
         let node = self.root_node.build_nodes(path);
@@ -592,15 +622,20 @@ impl BaubleContext {
         (objects, errors)
     }
 
+    #[allow(missing_docs)]
     pub fn type_registry(&self) -> &TypeRegistry {
         &self.registry
     }
 
+    /// Takes a path in bauble, and if the path is valid, return meta information about the
+    /// bauble item at the current path.
     pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
         self.root_node
             .walk(path, |node| node.reference(&self.root_node))
     }
 
+    /// Takes a path to a module in bauble, and if the path is valid, return the meta information
+    /// of all items inside of thatm module (not recursive).
     pub fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
         self.root_node.walk(path, |node| {
             node.children
@@ -610,6 +645,8 @@ impl BaubleContext {
         })
     }
 
+    // TODO(@docs)
+    #[allow(missing_docs)]
     pub fn ref_with_ident(
         &self,
         path: TypePath<&str>,
@@ -627,10 +664,12 @@ impl BaubleContext {
             .flatten()
     }
 
+    /// if there is any associated file for `path`, get the ID of that file.
     pub fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
         self.root_node.find_file_id(path)
     }
 
+    /// Get the module path of `file`.
     pub fn get_file_path(&self, file: FileId) -> TypePath<&str> {
         match self.files.get(file.0) {
             Some(p) => p.0.borrow(),
@@ -643,10 +682,12 @@ impl BaubleContext {
         }
     }
 
+    /// Get the source used for parsing of `file`.
     pub fn get_source(&self, file: FileId) -> &Source {
         &self.files.get(file.0).expect("FileId was invalid").1
     }
 
+    /// Get all the assets starting from `path`, with an optional maximum depth of `max_depth`.
     pub fn assets(
         &self,
         path: TypePath<&str>,
@@ -663,6 +704,7 @@ impl BaubleContext {
             .flatten()
     }
 
+    /// Get all the types starting from `path`, with an optional maximum depth of `max_depth`.
     pub fn types(
         &self,
         path: TypePath<&str>,
@@ -679,6 +721,7 @@ impl BaubleContext {
             .flatten()
     }
 
+    /// Get all the modules starting from `path`, with an optional maximum depth of `max_depth`.
     pub fn modules(
         &self,
         path: TypePath<&str>,
@@ -695,6 +738,7 @@ impl BaubleContext {
             .flatten()
     }
 
+    /// Get all the references starting from `path` which belong to `kind`, with an optional maximum depth of `max_depth`.
     pub fn ref_kinds(
         &self,
         path: TypePath<&str>,
