@@ -31,7 +31,7 @@ pub struct PathReference {
 }
 
 impl PathReference {
-    /// Construicts an empty path reference.
+    /// Constructs an empty path reference.
     pub fn empty() -> Self {
         Self {
             ty: None,
