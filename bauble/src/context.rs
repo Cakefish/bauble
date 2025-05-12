@@ -473,6 +473,11 @@ impl BaubleContext {
         id
     }
 
+    /// Iterates all registered files.
+    pub fn files(&self) -> impl Iterator<Item = (TypePath<&str>, &str)> {
+        self.files.iter().map(|e| (e.0.borrow(), e.1.text()))
+    }
+
     /// Registers an asset. This is done automatically for any objects in a file that gets registered.
     ///
     /// With this method you can expose assets that aren't in bauble.
