@@ -432,24 +432,22 @@ impl TypeRegistry {
             TypeKind::Enum { variants } => {
                 for (variant, variant_ty) in &variants.0 {
                     self.to_be_assigned.remove(variant_ty);
-                    self.types[variant_ty.0].meta = TypeMeta {
-                                path: ty.meta.path.join(variant),
-                                generic_base_type: ty.meta.generic_base_type.map(|generic| {
-                                    let generic_id = self.get_or_register_generic_type(
-                                        self.key_type(generic).meta.path.join(variant),
-                                    );
-                                    let TypeKind::Generic(types) = &mut self.types[generic_id.0.0].kind else {
-                                        panic!(
-                                            "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
-                                        )
-                                    };
+                    self.types[variant_ty.0].meta.path = ty.meta.path.join(variant);
+                    self.types[variant_ty.0].meta.generic_base_type = ty.meta.generic_base_type.map(|generic| {
+                        let generic_id = self.get_or_register_generic_type(
+                            self.key_type(generic).meta.path.join(variant),
+                        );
+                        let TypeKind::Generic(types) = &mut self.types[generic_id.0.0].kind else {
+                            panic!(
+                                "`generic_base_type` pointing to a type that isn't `TypeKind::Generic`"
+                            )
+                        };
 
-                                    types.insert(*variant_ty);
+                        types.insert(*variant_ty);
 
-                                    generic_id
-                                }),
-                                ..ty.meta.clone()
-                            };
+                        generic_id
+                    });
+
                     if let TypeKind::EnumVariant {
                         enum_type,
                         variant: v,
