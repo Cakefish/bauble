@@ -34,6 +34,12 @@ pub struct Path {
     pub last: Spanned<PathEnd>,
 }
 
+impl std::borrow::Borrow<str> for Path {
+    fn borrow(&self) -> &str {
+        &self.last_ident()
+    }
+}
+
 impl Path {
     pub fn as_ident(&self) -> Option<Spanned<&str>> {
         if let (true, PathEnd::Ident(ident)) = (self.leading.is_empty(), &self.last.value) {

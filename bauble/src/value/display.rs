@@ -3,13 +3,13 @@
 // NOTE(@docs) the display API is self-explanatory.
 #![allow(missing_docs)]
 
-use std::collections::HashMap;
+use std::{borrow::Borrow, collections::HashMap};
 
 use crate::{
     Spanned,
     parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
     path::TypePath,
-    types::{TypeId, TypeRegistry},
+    types::{TypeKind, TypeRegistry},
 };
 
 use super::{Attributes, FieldsKind, Object, UnspannedVal, Val, Value, ValueContainer, ValueTrait};
@@ -454,11 +454,34 @@ impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX
 
         w.write(ident.as_str());
 
-        let ty = self.value.ty();
-        if let Some(path) = w.ctx().get_writable_path(ty) {
-            let path = path.to_owned();
-            w.write(": ");
-            w.write(path.as_str());
+        if let Some(registry) = w.ctx().type_registry() {
+            let ty = self.value.ty();
+            // We can skip displaying the type path if the value hints what type it should be. This
+            // is the case for non-flattened structs and enums, and primitive types.
+            let can_skip_type = registry.is_primitive_type(ty)
+                || match &registry.key_type(ty).kind {
+                    TypeKind::Struct(_) => true,
+                    TypeKind::Enum { variants } => {
+                        if let Value::Enum(variant, _) = self.value.value()
+                            && let Some(variant_ty) = variants.get(variant.borrow())
+                        {
+                            matches!(
+                                registry.key_type(variant_ty).kind,
+                                TypeKind::EnumVariant { .. }
+                            )
+                        } else {
+                            false
+                        }
+                    }
+
+                    _ => false,
+                };
+
+            if !can_skip_type && let Some(path) = registry.get_writable_path(ty) {
+                let path = path.to_owned();
+                w.write(": ");
+                w.write(path.as_str());
+            }
         }
 
         w.write(" = ");
@@ -474,7 +497,7 @@ struct ValueDisplayCtx<'a, V: ValueTrait> {
 trait ValueCtx<V: ValueTrait> {
     fn inline(&self, path: &V::Ref) -> Option<&V::Inner>;
 
-    fn get_writable_path(&self, _ty: TypeId) -> Option<TypePath<&str>>;
+    fn type_registry(&self) -> Option<&TypeRegistry>;
 }
 
 impl ValueCtx<ParseVal> for () {
@@ -482,7 +505,7 @@ impl ValueCtx<ParseVal> for () {
         None
     }
 
-    fn get_writable_path(&self, _ty: TypeId) -> Option<TypePath<&str>> {
+    fn type_registry(&self) -> Option<&TypeRegistry> {
         None
     }
 }
@@ -492,8 +515,8 @@ impl ValueCtx<Val> for ValueDisplayCtx<'_, Val> {
         self.inlined_refs.get(path.as_str()).copied()
     }
 
-    fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
-        self.types.get_writable_path(ty)
+    fn type_registry(&self) -> Option<&TypeRegistry> {
+        Some(self.types)
     }
 }
 
@@ -502,8 +525,8 @@ impl ValueCtx<UnspannedVal> for ValueDisplayCtx<'_, UnspannedVal> {
         self.inlined_refs.get(path.as_str()).copied()
     }
 
-    fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
-        self.types.get_writable_path(ty)
+    fn type_registry(&self) -> Option<&TypeRegistry> {
+        Some(self.types)
     }
 }
 
