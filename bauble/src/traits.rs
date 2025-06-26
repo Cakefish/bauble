@@ -634,7 +634,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                     none.to_owned(),
                     Box::new(
                         registry
-                            .instantiate(variants.get(none).expect("We just added this variant"))
+                            .instantiate(variants.get(&none).expect("We just added this variant"))
                             .expect("We should be able to instantiate unit fields"),
                     ),
                 ))),

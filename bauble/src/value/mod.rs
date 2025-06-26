@@ -33,7 +33,7 @@ pub(crate) use symbols::Symbols;
 pub trait ValueTrait: Clone + std::fmt::Debug {
     type Inner: ValueContainer;
     type Ref;
-    type Variant;
+    type Variant: std::borrow::Borrow<str>;
     type Field: std::fmt::Debug + Clone + Hash + Eq + std::borrow::Borrow<str>;
 
     fn ty(&self) -> TypeId;

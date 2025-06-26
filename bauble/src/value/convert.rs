@@ -786,7 +786,7 @@ where
                 {
                     let variant = Self::get_variant(variant, meta.symbols)?
                         .spanned(Self::variant_span(variant, &meta));
-                    let ty = variants.get(variant.borrow()).ok_or(
+                    let ty = variants.get(&*variant).ok_or(
                         ConversionError::UnknownVariant {
                             variant: variant.clone(),
                             ty: ty_id.value,
