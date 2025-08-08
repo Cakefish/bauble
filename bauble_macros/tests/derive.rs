@@ -220,25 +220,31 @@ fn test_from() {
 }
 
 #[test]
-fn test_nullable() {
+fn test_default() {
     #[derive(Bauble, PartialEq, Debug, Default)]
-    #[bauble(nullable)]
-    struct Foo(u32);
+    struct Foo(u32, #[bauble(attribute = foo, default)] u32);
 
     #[derive(Bauble, PartialEq, Debug)]
     #[bauble(flatten)]
-    struct Bar(Foo);
+    struct Bar(Foo, #[bauble(attribute = test, default)] u32);
 
     bauble_test!(
         [Foo, Bar]
         r#"
         use derive::{Foo, Bar};
 
-        a: Foo = null
-        b = Foo(2)
-        c: Bar = null
-        d: Bar = Foo(3)
+        a: Foo = default
+        b: Bar = default
+        c: Foo = #[foo = 2] default
+        d: Bar = #[test = 10] default
+        e: Bar = #[test = 11, foo = 33] default
         "#
-        [Foo(0), Foo(2), Bar(Foo(0)), Bar(Foo(3))]
+        [
+            Foo(0, 0),
+            Bar(Foo(0, 0), 0),
+            Foo(0, 2),
+            Bar(Foo(0, 0), 10),
+            Bar(Foo(0, 33), 11),
+        ]
     );
 }

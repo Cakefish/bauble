@@ -821,15 +821,6 @@ impl TypeRegistry {
             return Some(default.clone().with_type(ty_id));
         }
 
-        if ty.meta.nullable {
-            return Some(UnspannedVal {
-                ty: ty_id,
-                value: crate::Value::Primitive(crate::PrimitiveValue::Null),
-                // Null values don't have attributes.
-                attributes: crate::Attributes::default(),
-            });
-        }
-
         let construct_unnamed = |fields: &UnnamedFields| {
             fields
                 .required
@@ -939,8 +930,6 @@ pub struct TypeMeta {
     pub traits: Vec<TraitId>,
     /// The optional default value of the type.
     pub default: Option<UnspannedVal>,
-    /// If the type may be nullable.
-    pub nullable: bool,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
