@@ -904,7 +904,16 @@ impl TypeRegistry {
                     self.instantiate(*ty)?
                 }))
             }
-            TypeKind::Trait(_) => return None,
+            TypeKind::Trait(tr) => {
+                let mut v: Vec<_> = self.iter_type_set(tr).collect();
+                v.sort_unstable_by(|a, b| {
+                    self.key_type(*a)
+                        .meta
+                        .path
+                        .cmp(&self.key_type(*b).meta.path)
+                });
+                return v.into_iter().find_map(|t| self.instantiate(t));
+            }
             TypeKind::Generic(_) => return None,
         };
 
