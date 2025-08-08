@@ -93,6 +93,30 @@ impl<S: AsRef<str>> TypePathElem<S> {
     }
 }
 
+impl<S> TypePathElem<S> {
+    /// Creates a new type path elem without checking for correctness.
+    ///
+    /// This isn't unsafe but a lot of logic assumes a `TypePathElem` to be correct so would
+    /// still cause bugs to use this incorrectly.
+    pub fn new_unchecked(inner: S) -> Self {
+        Self(TypePath::new_unchecked(inner))
+    }
+
+    pub fn into_inner(self) -> S {
+        self.0.into_inner()
+    }
+
+    pub fn get_inner(&self) -> &S {
+        self.0.get_inner()
+    }
+
+    /// This isn't unsafe but a lot of logic assumes a `TypePath` to be correct so would
+    /// still cause bugs to use this incorrectly.
+    pub fn get_inner_mut(&mut self) -> &mut S {
+        self.0.get_inner_mut()
+    }
+}
+
 /// A path seperated by `::`. I.e `this::is::a::path`
 /// A path element can contain spans of delimiters, i.e `some_ident<test>`. These spans
 /// can themselves contain paths like `some_ident<inner::path>` which still count as one
