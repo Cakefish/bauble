@@ -134,7 +134,7 @@ pub struct Variant {
     #[allow(missing_docs)]
     // TODO(@docs)
     pub extra: Extra,
-    /// The default value to be assigned to this variant if a null value was provided.
+    /// The default value to be assigned to this if there's a `default` value.
     pub default: Option<UnspannedVal>,
 }
 
@@ -377,6 +377,7 @@ impl TypeRegistry {
                                 attributes: variant.attributes,
                                 extra: variant.extra,
                                 extra_validation: variant.extra_validation,
+                                default: variant.default,
                                 ..Default::default()
                             },
                             kind: match variant.kind {
@@ -813,7 +814,7 @@ impl TypeRegistry {
         }
     }
 
-    /// Create a value with this type.
+    /// Create the default value of this type.
     pub fn instantiate(&self, ty_id: TypeId) -> Option<UnspannedVal> {
         let ty = self.key_type(ty_id);
 

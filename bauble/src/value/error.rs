@@ -62,10 +62,6 @@ pub enum ConversionError {
         first: Ident,
         second: Ident,
     },
-    AttributeOnNull {
-        attribute: Ident,
-        ty: TypeId,
-    },
     WrongFieldKind(TypeId),
     UnknownVariant {
         variant: Spanned<TypePathElem>,
@@ -134,9 +130,6 @@ impl BaubleError for Spanned<ConversionError> {
                 types.key_type(*ty).meta.path
             )),
             ConversionError::DuplicateAttribute { .. } => Cow::Borrowed("Duplicate attribute"),
-            ConversionError::AttributeOnNull { .. } => {
-                Cow::Borrowed("Attributes aren't allowed on null values")
-            }
             ConversionError::WrongFieldKind(ty) => Cow::Owned(format!(
                 "Wrong kind of fields for `{}`",
                 types.key_type(*ty).meta.path
@@ -484,20 +477,6 @@ impl BaubleError for Spanned<ConversionError> {
                         Level::Info,
                     ),
                 ];
-            }
-            ConversionError::AttributeOnNull { attribute, ty } => {
-                let ty = types.key_type(*ty);
-                if ty.meta.attributes.get(attribute).is_some() {
-                    Cow::Owned(format!(
-                        "The type `{}` has this attribute, but it isn't allowed on `null` values",
-                        ty.meta.path
-                    ))
-                } else {
-                    Cow::Owned(format!(
-                        "The type `{}` doesn't have this attribute, nor is it allowed on `null` values",
-                        ty.meta.path
-                    ))
-                }
             }
             ConversionError::WrongFieldKind(ty) => {
                 if let types::TypeKind::Struct(fields)
