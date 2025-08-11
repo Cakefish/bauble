@@ -144,18 +144,6 @@ impl<T: Hash> Hash for Spanned<T> {
     }
 }
 
-impl Borrow<str> for Spanned<&str> {
-    fn borrow(&self) -> &str {
-        self.value
-    }
-}
-
-impl Borrow<str> for Spanned<String> {
-    fn borrow(&self) -> &str {
-        self.value.as_str()
-    }
-}
-
 impl<T> Deref for Spanned<T> {
     type Target = T;
 
@@ -216,5 +204,11 @@ pub trait SpanExt: Sized {
 impl<T: Sized> SpanExt for T {
     fn spanned(self, span: Span) -> Spanned<Self> {
         Spanned::new(span, self)
+    }
+}
+
+impl<T: Borrow<str>> Borrow<str> for Spanned<T> {
+    fn borrow(&self) -> &str {
+        self.value.borrow()
     }
 }
