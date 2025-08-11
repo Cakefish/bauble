@@ -17,10 +17,6 @@ use proc_macro::TokenStream;
 /// - `bounds`: Adds extra bounds to the `Bauble` implementation.
 /// - `from`: Parse this type as if it was flattening to the specified type.
 ///   Specified like `from = T` and this type has to implement `From<T>`.
-/// - `nullable`: Mark this type as nullable, so it can parse from `null` values.
-///   This will by default use the types `Default` implementation which only
-///   works with the default allocator, but a certain value can be specified like
-///   `nullable = |allocator| unsafe { allocator.wrap(some_expr()) }`
 ///
 /// # Container or type attributes
 ///

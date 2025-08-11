@@ -284,7 +284,7 @@ where
                 super::PrimitiveValue::Str(v) => w.debug_fmt(v),
                 super::PrimitiveValue::Bool(v) => w.fmt(v),
                 super::PrimitiveValue::Unit => w.write("()"),
-                super::PrimitiveValue::Null => w.write("null"),
+                super::PrimitiveValue::Default => w.write("default"),
                 // `Raw` is a bit annoying to handle here, since we don't know how it
                 // was originally expressed. So we need to check:
                 // 1. Can it be displayed as a literal raw, i.e `#some_raw`

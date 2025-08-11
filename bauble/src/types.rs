@@ -134,7 +134,7 @@ pub struct Variant {
     #[allow(missing_docs)]
     // TODO(@docs)
     pub extra: Extra,
-    /// The default value to be assigned to this variant if a null value was provided.
+    /// The default value to be assigned to this if there's a `default` value.
     pub default: Option<UnspannedVal>,
 }
 
@@ -377,6 +377,7 @@ impl TypeRegistry {
                                 attributes: variant.attributes,
                                 extra: variant.extra,
                                 extra_validation: variant.extra_validation,
+                                default: variant.default,
                                 ..Default::default()
                             },
                             kind: match variant.kind {
@@ -813,21 +814,12 @@ impl TypeRegistry {
         }
     }
 
-    /// Create a value with this type.
+    /// Create the default value of this type.
     pub fn instantiate(&self, ty_id: TypeId) -> Option<UnspannedVal> {
         let ty = self.key_type(ty_id);
 
         if let Some(default) = &ty.meta.default {
             return Some(default.clone().with_type(ty_id));
-        }
-
-        if ty.meta.nullable {
-            return Some(UnspannedVal {
-                ty: ty_id,
-                value: crate::Value::Primitive(crate::PrimitiveValue::Null),
-                // Null values don't have attributes.
-                attributes: crate::Attributes::default(),
-            });
         }
 
         let construct_unnamed = |fields: &UnnamedFields| {
@@ -912,7 +904,16 @@ impl TypeRegistry {
                     self.instantiate(*ty)?
                 }))
             }
-            TypeKind::Trait(_) => return None,
+            TypeKind::Trait(tr) => {
+                let mut v: Vec<_> = self.iter_type_set(tr).collect();
+                v.sort_unstable_by(|a, b| {
+                    self.key_type(*a)
+                        .meta
+                        .path
+                        .cmp(&self.key_type(*b).meta.path)
+                });
+                return v.into_iter().find_map(|t| self.instantiate(t));
+            }
             TypeKind::Generic(_) => return None,
         };
 
@@ -939,8 +940,6 @@ pub struct TypeMeta {
     pub traits: Vec<TraitId>,
     /// The optional default value of the type.
     pub default: Option<UnspannedVal>,
-    /// If the type may be nullable.
-    pub nullable: bool,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.

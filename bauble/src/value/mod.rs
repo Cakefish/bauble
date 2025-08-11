@@ -392,6 +392,54 @@ impl UnspannedVal {
         self.ty = ty;
         self
     }
+
+    /// Convert this unspanned value into a spanned value by using a specfic span for all spans.
+    pub fn into_spanned(self, span: crate::Span) -> Val {
+        Val {
+            ty: self.ty.spanned(span),
+            value: match self.value {
+                Value::Ref(r) => Value::Ref(r),
+                Value::Tuple(seq) => {
+                    Value::Tuple(seq.into_iter().map(|v| v.into_spanned(span)).collect())
+                }
+                Value::Array(seq) => {
+                    Value::Array(seq.into_iter().map(|v| v.into_spanned(span)).collect())
+                }
+                Value::Map(map) => Value::Map(
+                    map.into_iter()
+                        .map(|(k, v)| (k.into_spanned(span), v.into_spanned(span)))
+                        .collect(),
+                ),
+                Value::Struct(fields) => Value::Struct(match fields {
+                    FieldsKind::Unit => FieldsKind::Unit,
+                    FieldsKind::Unnamed(fields) => FieldsKind::Unnamed(
+                        fields.into_iter().map(|v| v.into_spanned(span)).collect(),
+                    ),
+                    FieldsKind::Named(fields) => FieldsKind::Named(
+                        fields
+                            .into_iter()
+                            .map(|(f, v)| (f.spanned(span), v.into_spanned(span)))
+                            .collect(),
+                    ),
+                }),
+                Value::Or(items) => Value::Or(items.into_iter().map(|v| v.spanned(span)).collect()),
+                Value::Primitive(prim) => Value::Primitive(prim),
+                Value::Transparent(inner) => Value::Transparent(Box::new(inner.into_spanned(span))),
+                Value::Enum(variant, inner) => {
+                    Value::Enum(variant.spanned(span), Box::new(inner.into_spanned(span)))
+                }
+            }
+            .spanned(span),
+            attributes: Attributes(
+                self.attributes
+                    .0
+                    .into_iter()
+                    .map(|(s, v)| (s.spanned(span), v.into_spanned(span)))
+                    .collect(),
+            )
+            .spanned(span),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -499,7 +547,7 @@ pub enum PrimitiveValue {
     Str(String),
     Bool(bool),
     Unit,
-    Null,
+    Default,
     Raw(String),
 }
 
@@ -529,6 +577,12 @@ pub enum Value<V: ValueTrait = Val> {
     Enum(V::Variant, Box<V::Inner>),
 }
 
+impl<V: ValueTrait> Default for Value<V> {
+    fn default() -> Self {
+        Value::Primitive(PrimitiveValue::Unit)
+    }
+}
+
 impl<T: ValueTrait> Value<T> {
     /// If the value can be described by a primitive type.
     pub fn primitive_type(&self) -> Option<types::Primitive> {
@@ -539,7 +593,7 @@ impl<T: ValueTrait> Value<T> {
                 PrimitiveValue::Bool(_) => types::Primitive::Bool,
                 PrimitiveValue::Unit => types::Primitive::Unit,
                 PrimitiveValue::Raw(_) => types::Primitive::Raw,
-                PrimitiveValue::Null => return None,
+                PrimitiveValue::Default => return None,
             }),
             _ => None,
         }

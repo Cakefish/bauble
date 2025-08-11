@@ -408,7 +408,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
 
             let unit = just("()").map(|_| Value::Primitive(PrimitiveValue::Unit));
 
-            let null = just("null").map(|_| Value::Primitive(PrimitiveValue::Null));
+            let default = just("default").map(|_| Value::Primitive(PrimitiveValue::Default));
 
             let transparent = object
                 .clone()
@@ -538,7 +538,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             let value = choice((
                 bool_.map(no_type),
                 unit.map(no_type),
-                null.map(no_type),
+                default.map(no_type),
                 num.map(no_type),
                 string.map(no_type),
                 reference.map(no_type),
