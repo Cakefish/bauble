@@ -54,11 +54,15 @@ mod formatter {
         indent: usize,
         ctx: &'a CTX,
         ty: &'a str,
+        typed_context: bool,
     }
 
     pub struct LineWriter<'a, CTX>(Formatter<'a, CTX>);
 
     impl<'a, CTX> LineWriter<'a, CTX> {
+        pub fn is_typed(&self) -> bool {
+            self.0.is_typed()
+        }
         pub fn write(&mut self, s: &str) {
             self.0.string.push_str(s)
         }
@@ -106,9 +110,21 @@ mod formatter {
         pub fn with_ctx<'b, C>(&'b mut self, ctx: &'b C) -> LineWriter<'b, C> {
             LineWriter(self.0.with_ctx(ctx))
         }
+
+        pub fn with_typed_context(&mut self) -> LineWriter<CTX> {
+            LineWriter(self.0.with_typed_context())
+        }
+
+        pub fn with_untyped_context(&mut self) -> LineWriter<CTX> {
+            LineWriter(self.0.with_untyped_context())
+        }
     }
 
     impl<'a, CTX> Formatter<'a, CTX> {
+        pub fn is_typed(&self) -> bool {
+            self.typed_context
+        }
+
         pub fn start(config: &'a DisplayConfig, ctx: &'a CTX, string: &'a mut String) -> Self {
             Self {
                 config,
@@ -116,6 +132,7 @@ mod formatter {
                 indent: 0,
                 ctx,
                 ty: "",
+                typed_context: true,
             }
         }
         fn reborrow(&mut self) -> Formatter<CTX> {
@@ -125,6 +142,7 @@ mod formatter {
                 indent: self.indent,
                 ctx: self.ctx,
                 ty: self.ty,
+                typed_context: self.typed_context,
             }
         }
         fn bump_indent(&mut self) -> Formatter<CTX> {
@@ -144,6 +162,29 @@ mod formatter {
                 indent: self.indent,
                 ctx,
                 ty: self.ty,
+                typed_context: self.typed_context,
+            }
+        }
+
+        pub fn with_typed_context(&mut self) -> Formatter<'_, CTX> {
+            Formatter {
+                config: self.config,
+                string: self.string,
+                indent: self.indent,
+                ctx: self.ctx,
+                ty: self.ty,
+                typed_context: true,
+            }
+        }
+
+        pub fn with_untyped_context(&mut self) -> Formatter<'_, CTX> {
+            Formatter {
+                config: self.config,
+                string: self.string,
+                indent: self.indent,
+                ctx: self.ctx,
+                ty: self.ty,
+                typed_context: false,
             }
         }
 
@@ -399,13 +440,38 @@ impl IndentedDisplay<ValueDisplayCtx<'_, UnspannedVal>> for UnspannedVal {
             w.write(" ");
         }
 
+        let typed = match w.ctx().types.key_type(self.ty).kind {
+            TypeKind::Transparent(t) | TypeKind::Ref(t) => {
+                !matches!(w.ctx().types.key_type(t).kind, TypeKind::Trait(_))
+            }
+            _ => true,
+        };
+
         let path = w
             .ctx()
             .types
             .get_writable_path(self.ty)
             .unwrap_or_default()
             .to_owned();
-        self.value.indented_display(w.with_type(path.as_str()));
+
+        let mut w = w.with_type(path.as_str());
+
+        if !w.is_typed()
+            && !matches!(
+                self.value,
+                Value::Struct(_) | Value::Enum(_, _) | Value::Or(_)
+            )
+        {
+            w.write("<");
+            w.write_type();
+            w.write("> ");
+        }
+
+        self.value.indented_display(if typed {
+            w.with_typed_context()
+        } else {
+            w.with_untyped_context()
+        });
     }
 }
 
@@ -423,13 +489,38 @@ impl IndentedDisplay<ValueDisplayCtx<'_, Val>> for Val {
             w.write(" ");
         }
 
+        let typed = match w.ctx().types.key_type(*self.ty).kind {
+            TypeKind::Transparent(t) | TypeKind::Ref(t) => {
+                !matches!(w.ctx().types.key_type(t).kind, TypeKind::Trait(_))
+            }
+            _ => true,
+        };
+
         let path = w
             .ctx()
             .types
             .get_writable_path(*self.ty)
             .unwrap_or_default()
             .to_owned();
-        self.value.indented_display(w.with_type(path.as_str()));
+
+        let mut w = w.with_type(path.as_str());
+
+        if !w.is_typed()
+            && !matches!(
+                *self.value,
+                Value::Struct(_) | Value::Enum(_, _) | Value::Or(_)
+            )
+        {
+            w.write("<");
+            w.write_type();
+            w.write("> ");
+        }
+
+        self.value.indented_display(if typed {
+            w.with_typed_context()
+        } else {
+            w.with_untyped_context()
+        });
     }
 }
 
@@ -441,8 +532,15 @@ impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseVal {
         }
 
         let ty = self.ty.as_ref().map(|p| p.to_string());
-        self.value
-            .indented_display(w.with_type(ty.as_deref().unwrap_or("")));
+        let mut w = w.with_type(ty.as_deref().unwrap_or(""));
+
+        if self.ty.is_some() && !matches!(*self.value, Value::Struct(_) | Value::Or(_)) {
+            w.write("<");
+            w.write_type();
+            w.write("> ");
+        }
+
+        self.value.indented_display(w);
     }
 }
 

@@ -512,7 +512,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                     .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 
-            let path = path.map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
+            let path_value = path.map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
 
             // The start of a raw string: count the number of open braces
             let start_raw = just('{').repeated().at_least(1).count();
@@ -549,7 +549,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 unnamed_struct,
                 named_struct,
                 path_or.map(no_type),
-                path,
+                path_value,
                 raw.map(no_type),
                 literal.map(no_type),
             ))
@@ -558,9 +558,18 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             .recover_with(skip_then_retry_until(
                 any().ignored(),
                 one_of(['}', ']', ')']).ignored(),
-            ));
+            ))
+            .boxed();
+
+            let ty_specification = path
+                .delimited_by(
+                    just('<').padded_by(comments).padded(),
+                    just('>').padded_by(comments).padded(),
+                )
+                .boxed();
 
             attributes
+                .then(ty_specification.or_not())
                 .then(
                     value
                         .map_with(|value, e| value.spanned(e.span()))
@@ -568,22 +577,19 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                         .padded()
                         .boxed(),
                 )
-                .map(
-                    |(attributes, spanned): (
-                        _,
-                        Spanned<(Option<Path>, crate::Value<ParseVal>)>,
-                    )| {
-                        let Spanned {
-                            span,
-                            value: (ty, value),
-                        } = spanned;
-                        ParseVal {
-                            ty,
-                            attributes,
-                            value: value.spanned(span),
-                        }
-                    },
-                )
+                .map(|((attributes, ty_specification), spanned)| {
+                    let Spanned {
+                        span,
+                        value: (ty, value),
+                    } = spanned;
+
+                    let ty = ty_specification.or(ty);
+                    ParseVal {
+                        ty,
+                        attributes,
+                        value: value.spanned(span),
+                    }
+                })
         },
     );
 
