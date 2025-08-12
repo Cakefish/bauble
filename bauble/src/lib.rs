@@ -90,31 +90,41 @@ fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<ParseValues, BaubleErro
 #[allow(missing_docs)]
 #[macro_export]
 macro_rules! bauble_test {
-    ([$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
+    ( [$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
+        $crate::bauble_test!(__TEST_CTX [$($ty),*] $source [$($expr),*])
+    };
+    ($ctx_static:ident [$($ty:ty),* $(,)?] $source:literal [$($expr:expr),* $(,)?]) => {
+        static $ctx_static: std::sync::OnceLock<std::sync::RwLock<$crate::BaubleContext>> = std::sync::OnceLock::new();
         {
-            let mut ctx = $crate::BaubleContextBuilder::new();
-            $(ctx.register_type::<$ty, _>();)*
-            let mut ctx = ctx.build();
-            ctx.type_registry().validate(true).expect("Invalid type registry");
             let file_path = $crate::path::TypePath::new("test").unwrap();
-            ctx.register_file(file_path, format!("\n{}\n", $source));
+            let ctx = $ctx_static.get_or_init(|| {
+                let mut ctx = $crate::BaubleContextBuilder::new();
+                $(ctx.register_type::<$ty, _>();)*
 
-            let (objects, errors) = ctx.load_all();
+                let mut ctx = ctx.build();
+                ctx.type_registry().validate(true).expect("Invalid type registry");
+
+                ctx.register_file(file_path, format!("\n{}\n", $source));
+
+                std::sync::RwLock::new(ctx)
+            });
+
+            let (objects, errors) = ctx.write().unwrap().load_all();
 
             if !errors.is_empty() {
-                $crate::print_errors(Err::<(), _>(errors), &ctx);
+                $crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
 
                 panic!("Error converting");
             }
 
-            let re_source = $crate::display_formatted(objects.as_slice(), ctx.type_registry(), &$crate::DisplayConfig {
+            let re_source = $crate::display_formatted(objects.as_slice(), ctx.read().unwrap().type_registry(), &$crate::DisplayConfig {
                 ..$crate::DisplayConfig::default()
             });
 
-            let (re_objects, errors) = ctx.reload_paths([(file_path, re_source.as_str())]);
+            let (re_objects, errors) = ctx.write().unwrap().reload_paths([(file_path, re_source.as_str())]);
 
             if !errors.is_empty() {
-                $crate::print_errors(Err::<(), _>(errors), &ctx);
+                $crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
 
                 println!("{re_source}");
 
@@ -127,7 +137,7 @@ macro_rules! bauble_test {
                 $(
                     let value = objects.next().expect("Not as many objects as test expr in bauble test?");
                     let mut read_value = $expr;
-                    let test_value = ::std::mem::replace(&mut read_value, $crate::print_errors(Bauble::from_bauble(value.value, &::bauble::DefaultAllocator), &ctx).unwrap());
+                    let test_value = ::std::mem::replace(&mut read_value, $crate::print_errors(Bauble::from_bauble(value.value, &::bauble::DefaultAllocator), &ctx.read().unwrap()).unwrap());
 
 
                     assert_eq!(

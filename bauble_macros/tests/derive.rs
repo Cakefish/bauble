@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, bauble_test};
+use bauble::{Bauble, SpannedValue, bauble_test};
 
 #[test]
 fn test_struct() {
@@ -238,6 +238,7 @@ fn test_default() {
         c: Foo = #[foo = 2] default
         d: Bar = #[test = 10] default
         e: Bar = #[test = 11, foo = 33] default
+        f = <Bar> default
         "#
         [
             Foo(0, 0),
@@ -245,6 +246,135 @@ fn test_default() {
             Foo(0, 2),
             Bar(Foo(0, 0), 10),
             Bar(Foo(0, 33), 11),
+            Bar(Foo(0, 0), 0),
         ]
+    );
+}
+
+#[test]
+fn test_trait() {
+    use bauble::path::TypePath;
+    use bauble::types::{BaubleTrait, Type, TypeKind, TypeMeta, TypeRegistry};
+
+    trait TestTrait: std::fmt::Debug {
+        fn dyn_eq(&self, other: &dyn TestTrait) -> bool;
+
+        fn as_any(&self) -> &dyn std::any::Any;
+    }
+
+    impl BaubleTrait for dyn TestTrait {
+        const BAUBLE_PATH: &'static str = "derive::TestTrait";
+    }
+
+    #[derive(Debug)]
+    struct Trans(Box<dyn TestTrait>);
+
+    impl PartialEq for Trans {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.dyn_eq(&*other.0)
+        }
+    }
+
+    impl Bauble<'_> for Trans {
+        fn construct_type(registry: &mut TypeRegistry) -> Type {
+            let tr = registry.get_or_register_trait::<dyn TestTrait>();
+
+            Type {
+                meta: TypeMeta {
+                    path: TypePath::new("derive::Trans")
+                        .expect("This is a valid path")
+                        .to_owned(),
+                    traits: vec![tr],
+
+                    ..Default::default()
+                },
+                kind: TypeKind::Transparent(tr.into()),
+            }
+        }
+
+        fn from_bauble(
+            val: bauble::Val,
+            allocator: &bauble::DefaultAllocator,
+        ) -> Result<
+            <bauble::DefaultAllocator as bauble::BaubleAllocator>::Out<Self>,
+            bauble::ToRustError,
+        > {
+            let s = val.span();
+            if let bauble::Value::Transparent(v) = val.value.value {
+                let ctx = TEST_CTX.get().unwrap().read().unwrap();
+
+                let types = ctx.type_registry();
+
+                let rust_ty = types.find_rust_type(*v.ty).unwrap();
+
+                use std::any::TypeId;
+
+                let v: Box<dyn TestTrait> = if rust_ty == TypeId::of::<Foo>() {
+                    Box::new(Foo::from_bauble(*v, allocator)?)
+                } else if rust_ty == TypeId::of::<Bar>() {
+                    Box::new(Bar::from_bauble(*v, allocator)?)
+                } else {
+                    return Err(Self::error(
+                        s,
+                        bauble::ToRustErrorKind::WrongType { found: val.ty },
+                    ));
+                };
+
+                Ok(Trans(v))
+            } else {
+                Err(Self::error(
+                    s,
+                    bauble::ToRustErrorKind::WrongType { found: val.ty },
+                ))
+            }
+        }
+    }
+
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(traits(TestTrait))]
+    pub struct Foo(u32);
+
+    impl TestTrait for Foo {
+        fn dyn_eq(&self, other: &dyn TestTrait) -> bool {
+            match other.as_any().downcast_ref::<Self>() {
+                Some(v) => v == self,
+                None => false,
+            }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(flatten)]
+    #[bauble(traits(TestTrait))]
+    pub struct Bar(String);
+
+    impl TestTrait for Bar {
+        fn dyn_eq(&self, other: &dyn TestTrait) -> bool {
+            match other.as_any().downcast_ref::<Self>() {
+                Some(v) => v == self,
+                None => false,
+            }
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    bauble_test!(
+        TEST_CTX
+        [Trans, Foo, Bar]
+        r#"
+            use derive::{Trans, Foo, Bar};
+
+            a: Trans = Foo(32)
+
+            b: Trans = <Bar> "meow"
+        "#
+        [Trans(Box::new(Foo(32))), Trans(Box::new(Bar("meow".to_string())))]
     );
 }

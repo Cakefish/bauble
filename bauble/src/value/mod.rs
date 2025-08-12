@@ -184,6 +184,10 @@ impl<V: ValueContainer> Attributes<V> {
         self.0.values()
     }
 
+    pub fn values_mut(&mut self) -> impl ExactSizeIterator<Item = &mut V> {
+        self.0.values_mut()
+    }
+
     /// Iterate the key and value of all attributes and their fields.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&V::ContainerField, &V)> {
         self.0.iter()
@@ -207,6 +211,10 @@ impl<V: ValueContainer> Attributes<V> {
     /// Get the inner fields of an attribute.
     pub fn get_inner(&self) -> &Fields<V> {
         &self.0
+    }
+
+    pub fn get_inner_mut(&mut self) -> &mut Fields<V> {
+        &mut self.0
     }
 }
 

@@ -236,6 +236,15 @@ impl Display for TypeSystemError<'_> {
 }
 
 impl TypeRegistry {
+    /// This is not performant and should not be exposed API, it is used for tests.
+    #[doc(hidden)]
+    pub fn find_rust_type(&self, ty: TypeId) -> Option<std::any::TypeId> {
+        self.type_from_rust
+            .iter()
+            .find(|(_, t)| **t == ty)
+            .map(|(t, _)| *t)
+    }
+
     pub(crate) fn new() -> Self {
         let mut this = Self {
             types: Default::default(),

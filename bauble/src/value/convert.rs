@@ -948,10 +948,16 @@ where
                 }
                 // or we convert from a flat one.
                 (types::TypeKind::Transparent(ty), _) => {
+                    // If the cvalue type is this transparent type, project it to the represented value.
+                    let val_ty = if raw_val_type.is_some_and(|v| *v == *ty_id) {
+                        raw_val_type.map(|v| v.map(|_| *ty))
+                    } else {
+                        raw_val_type
+                    };
                     let val = extra_attributes.convert_inner_with(
                         value,
                         Spanned::new(attributes_span, &Default::default()),
-                        raw_val_type,
+                        val_ty,
                         meta.reborrow(),
                         *ty,
                     )?;
