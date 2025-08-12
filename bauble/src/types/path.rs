@@ -76,6 +76,12 @@ impl<S: AsRef<str>> TypePathElem<S> {
         }
     }
 
+    pub fn is_sub_asset_of(&self, other: TypePathElem<&str>) -> bool {
+        self.as_str()
+            .strip_prefix(other.as_str())
+            .is_some_and(|s| s.starts_with(['#', '&']))
+    }
+
     pub fn to_owned(&self) -> TypePathElem<String> {
         TypePathElem(self.0.to_owned())
     }
