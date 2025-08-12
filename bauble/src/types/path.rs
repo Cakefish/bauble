@@ -65,8 +65,8 @@ impl<S: AsRef<str>> TryFrom<TypePath<S>> for TypePathElem<S> {
     }
 }
 
-#[allow(missing_docs)]
 impl<S: AsRef<str>> TypePathElem<S> {
+    /// Creates a new path element, returns err if it's not one element.
     pub fn new(s: S) -> Result<Self> {
         let l = path_len(s.as_ref())?;
         match l {
@@ -76,24 +76,22 @@ impl<S: AsRef<str>> TypePathElem<S> {
         }
     }
 
-    pub fn is_sub_asset_of(&self, other: TypePathElem<&str>) -> bool {
-        self.as_str()
-            .strip_prefix(other.as_str())
-            .is_some_and(|s| s.starts_with(['#', '&']))
-    }
-
+    /// Convert this to an owned path element.
     pub fn to_owned(&self) -> TypePathElem<String> {
         TypePathElem(self.0.to_owned())
     }
 
+    /// Borrow this path element.
     pub fn borrow(&self) -> TypePathElem<&str> {
         TypePathElem(self.0.borrow())
     }
 
+    /// For path elements this is always false.
     pub fn is_empty(&self) -> bool {
         false
     }
 
+    /// For path elements this is always one.
     pub fn len(&self) -> usize {
         1
     }
@@ -166,13 +164,21 @@ impl<S: AsRef<str>> std::fmt::Display for TypePath<S> {
 }
 
 /// An error when forming paths.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathError {
+    /// There was an empty path element, for example `foo::::bar`.
     EmptyElem(usize),
+    /// A start delimiter, i.e `<`, `(`, `[`, is missing its end equivalent.
     MissingDelimiterEnd(usize),
+    /// An end delimiter, i.e `>`, `)`, `]`, is missing its start equivalent.
     MissingDelimiterStart(usize),
+    /// Too many path elements.
+    ///
+    /// `TypePathElem` only allows one element.
     TooManyElements,
+    /// Zero path elements.
+    ///
+    /// `TypePathElem` needs one element.
     ZeroElements,
 }
 
@@ -306,7 +312,9 @@ impl<S> TypePath<S> {
 }
 
 impl<S: AsRef<str>> TypePath<S> {
-    #[allow(missing_docs)]
+    /// Create an empty type path.
+    ///
+    /// This is equivalent to `TypePath::new_unchecked("".into())`.
     pub fn empty() -> Self
     where
         S: From<&'static str>,
@@ -314,24 +322,26 @@ impl<S: AsRef<str>> TypePath<S> {
         Self("".into())
     }
 
-    #[allow(missing_docs)]
+    /// Create a new `TypePath` with checks that it is valid.
     pub fn new(s: S) -> Result<Self> {
         path_len(s.as_ref())?;
 
         Ok(Self(s))
     }
 
-    #[allow(missing_docs)]
+    /// Tries to convert this type path into a type path element.
+    ///
+    /// Only succeeds if `self.len() == 1`.
     pub fn try_into_elem(self) -> Result<TypePathElem<S>> {
         TypePathElem::try_from(self)
     }
 
-    #[allow(missing_docs)]
+    /// Get the internal string slice of this type path.
     pub fn as_str(&self) -> &str {
         self.0.as_ref()
     }
 
-    #[allow(missing_docs)]
+    /// Borrows this path.
     pub fn borrow(&self) -> TypePath<&str> {
         TypePath(self.as_str())
     }
@@ -351,7 +361,7 @@ impl<S: AsRef<str>> TypePath<S> {
         self.as_str().len()
     }
 
-    #[allow(missing_docs)]
+    /// Convert this into an owned type path.
     pub fn to_owned(&self) -> TypePath {
         TypePath(self.as_str().to_string())
     }
@@ -405,8 +415,12 @@ impl<S: AsRef<str>> TypePath<S> {
                     == Some(PATH_SEPERATOR))
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Returns true if this type path is something that is allowed to be
+    /// written in the bauble format.
+    ///
+    /// This means that:
+    /// - The path is non-empty.
+    /// - All the path segments are valid rust identifiers.
     pub fn is_writable(&self) -> bool {
         !self.is_empty()
             && self.iter().all(|part| {
