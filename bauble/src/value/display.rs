@@ -457,10 +457,15 @@ impl IndentedDisplay<ValueDisplayCtx<'_, UnspannedVal>> for UnspannedVal {
         let mut w = w.with_type(path.as_str());
 
         if !w.is_typed()
-            && !matches!(
-                self.value,
-                Value::Struct(_) | Value::Enum(_, _) | Value::Or(_)
-            )
+            && !path.is_empty()
+            && match w.ctx().types.key_type(self.ty).kind {
+                TypeKind::Struct(_)
+                | TypeKind::Enum { .. }
+                | TypeKind::Or(_)
+                | TypeKind::EnumVariant { .. } => false,
+                TypeKind::Primitive(p) => w.ctx().types.primitive_type(p) == self.ty,
+                _ => true,
+            }
         {
             w.write("<");
             w.write_type();
@@ -506,10 +511,15 @@ impl IndentedDisplay<ValueDisplayCtx<'_, Val>> for Val {
         let mut w = w.with_type(path.as_str());
 
         if !w.is_typed()
-            && !matches!(
-                *self.value,
-                Value::Struct(_) | Value::Enum(_, _) | Value::Or(_)
-            )
+            && !path.is_empty()
+            && match w.ctx().types.key_type(*self.ty).kind {
+                TypeKind::Struct(_)
+                | TypeKind::Enum { .. }
+                | TypeKind::Or(_)
+                | TypeKind::EnumVariant { .. } => false,
+                TypeKind::Primitive(p) => w.ctx().types.primitive_type(p) == *self.ty,
+                _ => true,
+            }
         {
             w.write("<");
             w.write_type();
