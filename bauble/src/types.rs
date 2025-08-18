@@ -900,7 +900,13 @@ impl TypeRegistry {
                     .map(|v| crate::Value::Enum(variant.to_owned(), Box::new(v)))
             })?,
             TypeKind::Or(_) => crate::Value::Or(Vec::new()),
-            TypeKind::Ref(_) => return None,
+            TypeKind::Ref(inner) => {
+                if self.instantiate(*inner).is_some() {
+                    crate::Value::Primitive(crate::PrimitiveValue::Default)
+                } else {
+                    return None;
+                }
+            }
             TypeKind::Primitive(primitive) => crate::Value::Primitive(match primitive {
                 Primitive::Any => crate::PrimitiveValue::Unit,
                 Primitive::Num => crate::PrimitiveValue::Num(rust_decimal::Decimal::ZERO),
