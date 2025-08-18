@@ -1106,7 +1106,7 @@ fn create_object(
     value: Val,
     symbols: &Symbols,
 ) -> Result<Object> {
-    if symbols.ctx.type_registry().impls_top_level_type(*value.ty) {
+    if symbols.ctx.type_registry().impls_top_level_trait(*value.ty) {
         Ok(Object {
             object_path: path.join(&name),
             value,

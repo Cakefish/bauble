@@ -60,7 +60,9 @@ impl From<GenericTypeId> for TypeId {
     }
 }
 
-// TODO(@docs)
+/// A [`GenericTypeId`] represents a generic type registed by a Bauble [`TypeRegistry`].
+///
+/// We maintain the invariant that the type is kind `TypeKind::Generic`
 #[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GenericTypeId(TypeId);
@@ -131,8 +133,7 @@ pub struct Variant {
     pub attributes: NamedFields,
     /// Additional validation to perform during parsing.
     pub extra_validation: Option<ValidationFunction>,
-    #[allow(missing_docs)]
-    // TODO(@docs)
+    /// Extra data attached by the user to the variant.
     pub extra: Extra,
     /// The default value to be assigned to this if there's a `default` value.
     pub default: Option<UnspannedVal>,
@@ -286,13 +287,12 @@ impl TypeRegistry {
         this
     }
 
-    /// If a type implements the required top-level type.
-    pub fn impls_top_level_type(&self, id: TypeId) -> bool {
+    /// If a type implements the required top-level trait.
+    pub fn impls_top_level_trait(&self, id: TypeId) -> bool {
         self.key_trait(self.top_level_trait_dependency).contains(id)
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// The trait that's expected for all top-level bauble assets to have.
     pub fn top_level_trait(&self) -> TraitId {
         self.top_level_trait_dependency
     }
@@ -700,8 +700,7 @@ impl TypeRegistry {
         }
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Sets the trait all top-level assets are expected to have. By default this is the any trait.
     pub fn set_top_level_trait_dependency(&mut self, tr: TraitId) {
         self.top_level_trait_dependency = tr;
     }
@@ -717,14 +716,18 @@ impl TypeRegistry {
         tr.insert(ty);
     }
 
+    /// Retrieves a type, panicing if it doesn't exist.
+    ///
     /// # Panics
     /// Can panic if `TypeId` hasn't been constructed using this `TypeRegistry`.
     pub fn key_type(&self, id: impl Into<TypeId>) -> &Type {
         self.types.get(id.into().0).expect("unknown type id")
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Retrieves a trait, panicing if it doesn't exist.
+    ///
+    /// # Panics
+    /// Can panic if `TraitId` hasn't been constructed using this `TypeRegistry`.
     pub fn key_trait(&self, id: TraitId) -> &TypeSet {
         match &self.key_type(id).kind {
             TypeKind::Trait(type_set) => type_set,
@@ -732,8 +735,10 @@ impl TypeRegistry {
         }
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Retrieves a generic type, panicing if it doesn't exist.
+    ///
+    /// # Panics
+    /// Can panic if `GenericTypeId` hasn't been constructed using this `TypeRegistry`.
     pub fn key_generic(&self, id: GenericTypeId) -> &TypeSet {
         match &self.key_type(id).kind {
             TypeKind::Generic(type_set) => type_set,
@@ -751,8 +756,7 @@ impl TypeRegistry {
         self.type_id::<T, A>().map(|id| self.key_type(id))
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Get a trait using the generic `dyn Trait`.
     pub fn get_trait<T: ?Sized + BaubleTrait>(&self) -> Option<&Type> {
         self.trait_id::<T>().map(|id| self.key_type(id))
     }
@@ -775,8 +779,9 @@ impl TypeRegistry {
         }
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Gets the writeable path of a certain path.
+    ///
+    /// If this type is generic and its path isn't writable this will return the generic types path.
     pub fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
         let p = self.key_type(ty).meta.path.borrow();
 
@@ -953,8 +958,7 @@ pub struct TypeMeta {
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
     pub extra_validation: Option<ValidationFunction>,
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Extra data attached by the user to the type.
     pub extra: Extra,
 }
 
@@ -963,7 +967,7 @@ pub struct TypeMeta {
 #[derive(Debug, Clone)]
 pub struct FieldType {
     pub id: TypeId,
-    // TODO(@docs)
+    /// Extra data attached by the user to the field.
     pub extra: Extra,
     pub default: Option<UnspannedVal>,
 }
@@ -993,8 +997,8 @@ pub struct UnnamedFields {
     pub required: Vec<FieldType>,
     /// Optional fields, such as those specified by attributes with default values.
     pub optional: Vec<FieldType>,
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// If this is some, it allows any amount of that field type following the last
+    /// defined required/optional field.
     pub allow_additional: Option<FieldType>,
 }
 
@@ -1028,8 +1032,7 @@ impl UnnamedFields {
         self
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// An `UnnamedFields` to allow any amount of fields of any type.
     pub fn any() -> Self {
         Self {
             allow_additional: Some(FieldType::from(TypeRegistry::any_type())),
@@ -1044,8 +1047,8 @@ pub struct NamedFields {
     pub required: IndexMap<String, FieldType>,
     /// Optional fields, such as those specified by attributes with default values.
     pub optional: IndexMap<String, FieldType>,
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// If this is some, it allows a field of field names that aren't defined in `required`
+    /// or `òptional` as the specified type.
     pub allow_additional: Option<FieldType>,
 }
 
