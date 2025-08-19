@@ -948,7 +948,7 @@ where
                 }
                 // or we convert from a flat one.
                 (types::TypeKind::Transparent(ty), _) => {
-                    // If the cvalue type is this transparent type, project it to the represented value.
+                    // If the value type is this transparent type, project it to the represented value.
                     let val_ty = if raw_val_type.is_some_and(|v| *v == *ty_id) {
                         raw_val_type.map(|v| v.map(|_| *ty))
                     } else {

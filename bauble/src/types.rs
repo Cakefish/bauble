@@ -716,7 +716,7 @@ impl TypeRegistry {
         tr.insert(ty);
     }
 
-    /// Retrieves a type, panicing if it doesn't exist.
+    /// Retrieves a type, panicking if it doesn't exist.
     ///
     /// # Panics
     /// Can panic if `TypeId` hasn't been constructed using this `TypeRegistry`.
@@ -724,7 +724,7 @@ impl TypeRegistry {
         self.types.get(id.into().0).expect("unknown type id")
     }
 
-    /// Retrieves a trait, panicing if it doesn't exist.
+    /// Retrieves a trait, panicking if it doesn't exist.
     ///
     /// # Panics
     /// Can panic if `TraitId` hasn't been constructed using this `TypeRegistry`.
@@ -735,7 +735,7 @@ impl TypeRegistry {
         }
     }
 
-    /// Retrieves a generic type, panicing if it doesn't exist.
+    /// Retrieves a generic type, panicking if it doesn't exist.
     ///
     /// # Panics
     /// Can panic if `GenericTypeId` hasn't been constructed using this `TypeRegistry`.
