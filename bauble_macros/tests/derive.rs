@@ -218,3 +218,33 @@ fn test_from() {
         [NumberRepr("1553".to_string()), TestEnum::A(555), TestEnum::B(333)]
     );
 }
+
+#[test]
+fn test_default() {
+    #[derive(Bauble, PartialEq, Debug, Default)]
+    struct Foo(u32, #[bauble(attribute = foo, default)] u32);
+
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(flatten)]
+    struct Bar(Foo, #[bauble(attribute = test, default)] u32);
+
+    bauble_test!(
+        [Foo, Bar]
+        r#"
+        use derive::{Foo, Bar};
+
+        a: Foo = default
+        b: Bar = default
+        c: Foo = #[foo = 2] default
+        d: Bar = #[test = 10] default
+        e: Bar = #[test = 11, foo = 33] default
+        "#
+        [
+            Foo(0, 0),
+            Bar(Foo(0, 0), 0),
+            Foo(0, 2),
+            Bar(Foo(0, 0), 10),
+            Bar(Foo(0, 33), 11),
+        ]
+    );
+}

@@ -62,10 +62,6 @@ pub enum ConversionError {
         first: Ident,
         second: Ident,
     },
-    AttributeOnNull {
-        attribute: Ident,
-        ty: TypeId,
-    },
     WrongFieldKind(TypeId),
     UnknownVariant {
         variant: Spanned<TypePathElem>,
@@ -76,7 +72,6 @@ pub enum ConversionError {
         ty: TypeId,
     },
     RefError(Box<RefError>),
-    NotNullable(TypeId),
     ExpectedExactType {
         expected: TypeId,
         got: Option<TypeId>,
@@ -86,6 +81,9 @@ pub enum ConversionError {
     ErrorInCopy {
         copy: Spanned<TypePathElem>,
         error: Box<Spanned<ConversionError>>,
+    },
+    NotInstantiable {
+        ty: TypeId,
     },
     Custom(CustomError),
 }
@@ -132,9 +130,6 @@ impl BaubleError for Spanned<ConversionError> {
                 types.key_type(*ty).meta.path
             )),
             ConversionError::DuplicateAttribute { .. } => Cow::Borrowed("Duplicate attribute"),
-            ConversionError::AttributeOnNull { .. } => {
-                Cow::Borrowed("Attributes aren't allowed on null values")
-            }
             ConversionError::WrongFieldKind(ty) => Cow::Owned(format!(
                 "Wrong kind of fields for `{}`",
                 types.key_type(*ty).meta.path
@@ -153,16 +148,16 @@ impl BaubleError for Spanned<ConversionError> {
                 RefKind::Type => "Failed to resolve type",
                 RefKind::Any => "Failed to resolve path",
             }),
-            ConversionError::NotNullable(ty) => Cow::Owned(format!(
-                "The type `{}` is not nullable",
-                types.key_type(*ty).meta.path
-            )),
             ConversionError::ExpectedExactType { expected, .. } => Cow::Owned(format!(
                 "Expected the type `{}`",
                 types.key_type(*expected).meta.path
             )),
             ConversionError::ErrorInCopy { error, .. } => return error.msg_general(ctx),
             ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
+            ConversionError::NotInstantiable { ty } => Cow::Owned(format!(
+                "Can't construct a default value of the type {}",
+                types.key_type(*ty).meta.path
+            )),
             ConversionError::Custom(custom) => custom.message.clone(),
         };
 
@@ -483,20 +478,6 @@ impl BaubleError for Spanned<ConversionError> {
                     ),
                 ];
             }
-            ConversionError::AttributeOnNull { attribute, ty } => {
-                let ty = types.key_type(*ty);
-                if ty.meta.attributes.get(attribute).is_some() {
-                    Cow::Owned(format!(
-                        "The type `{}` has this attribute, but it isn't allowed on `null` values",
-                        ty.meta.path
-                    ))
-                } else {
-                    Cow::Owned(format!(
-                        "The type `{}` doesn't have this attribute, nor is it allowed on `null` values",
-                        ty.meta.path
-                    ))
-                }
-            }
             ConversionError::WrongFieldKind(ty) => {
                 if let types::TypeKind::Struct(fields)
                 | types::TypeKind::EnumVariant { fields, .. } = &types.key_type(*ty).kind
@@ -640,7 +621,6 @@ impl BaubleError for Spanned<ConversionError> {
 
                 return errs;
             }
-            ConversionError::NotNullable(_) => Cow::Borrowed("This value is `null`"),
             ConversionError::ExpectedExactType { expected, got } => {
                 let s = if let Some(got) = got {
                     format!(
@@ -677,6 +657,9 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::UnregisteredAsset => Cow::Borrowed(
                 "This asset hasn't been registered with `BaubleContext::register_asset`",
             ),
+            ConversionError::NotInstantiable { .. } => {
+                Cow::Borrowed("Consider specifying this value manually")
+            }
             ConversionError::Custom(custom) => return custom.labels.clone(),
         };
 

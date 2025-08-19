@@ -356,25 +356,6 @@ where
             Err(expected_err())?
         }
 
-        if ty.meta.nullable && matches!(value.value, Value::Primitive(PrimitiveValue::Null)) {
-            if let Some(s) = attributes
-                .first()
-                .map(|v| Self::get_spanned_field(v.0, &meta))
-                .or_else(|| Some(C::get_spanned_field(extra_attributes?.first()?.0, &meta)))
-            {
-                Err(ConversionError::AttributeOnNull {
-                    attribute: s,
-                    ty: *ty_id,
-                }
-                .spanned(span))?
-            }
-            return Ok(Val {
-                ty: ty_id,
-                value: Value::Primitive(PrimitiveValue::Null).spanned(span),
-                attributes: Attributes::default().spanned(span.sub_span(0..0)),
-            });
-        }
-
         /// Macro to parse unnamed fields.
         macro_rules! parse_unnamed {
             ($fields:expr, $values:expr $(,)?) => {{
@@ -692,174 +673,175 @@ where
             (new_attrs, extra_attributes)
         };
 
-        let value = match (&ty.kind, &value.value) {
-            (types::TypeKind::Tuple(fields), Value::Tuple(values)) => {
-                Value::Tuple(parse_unnamed!(fields, values))
-            }
-            (types::TypeKind::Array(array_type), Value::Array(arr)) => {
-                if array_type
-                    .len
-                    .is_some_and(|expected_len| expected_len != arr.len())
-                {
-                    Err(ConversionError::WrongLength {
-                        got: arr.len(),
-                        ty: *ty_id,
-                    }
-                    .spanned(span))?
+        let val = 'val: {
+            let value = match (&ty.kind, &value.value) {
+                (types::TypeKind::Tuple(fields), Value::Tuple(values)) => {
+                    Value::Tuple(parse_unnamed!(fields, values))
                 }
-
-                let mut values = Vec::with_capacity(arr.len());
-
-                for value in arr {
-                    values.push(value.convert(meta.reborrow(), array_type.ty.id, no_attr())?);
-                }
-
-                Value::Array(values)
-            }
-            (types::TypeKind::Map(map_type), Value::Map(map)) => {
-                if map_type
-                    .len
-                    .is_some_and(|expected_len| expected_len != map.len())
-                {
-                    Err(ConversionError::WrongLength {
-                        got: map.len(),
-                        ty: *ty_id,
-                    }
-                    .spanned(span))?
-                }
-
-                let mut values = Vec::with_capacity(map.len());
-
-                for (key, value) in map {
-                    values.push((
-                        key.convert(meta.reborrow(), map_type.key.id, no_attr())?,
-                        value.convert(meta.reborrow(), map_type.value.id, no_attr())?,
-                    ));
-                }
-
-                Value::Map(values)
-            }
-            // Both struct and enum variant are parsed from a `Struct` value.
-            (
-                types::TypeKind::Struct(fields) | types::TypeKind::EnumVariant { fields, .. },
-                Value::Struct(f),
-            ) => Value::Struct(match (fields, f) {
-                (types::Fields::Unit, FieldsKind::Unit) => FieldsKind::Unit,
-                (types::Fields::Unnamed(fields), FieldsKind::Unnamed(values)) => {
-                    FieldsKind::Unnamed(parse_unnamed!(fields, values))
-                }
-                (types::Fields::Named(fields), FieldsKind::Named(value_fields)) => {
-                    for (field, _) in fields.required.iter() {
-                        if !value_fields.contains_key(field.as_str()) {
-                            Err(ConversionError::MissingField {
-                                attribute: false,
-                                field: field.clone(),
-                                ty: *ty_id,
-                            }
-                            .spanned(span))?
+                (types::TypeKind::Array(array_type), Value::Array(arr)) => {
+                    if array_type
+                        .len
+                        .is_some_and(|expected_len| expected_len != arr.len())
+                    {
+                        Err(ConversionError::WrongLength {
+                            got: arr.len(),
+                            ty: *ty_id,
                         }
+                        .spanned(span))?
                     }
 
-                    let mut new_fields = Fields::with_capacity(value_fields.len());
-                    for (field, value) in value_fields {
-                        let field = Self::get_spanned_field(field, &meta);
-                        let Some(ty) = fields.get(field.as_str()) else {
-                            Err(ConversionError::UnexpectedField {
-                                attribute: false,
-                                field: field.clone(),
-                                ty: *ty_id,
-                            }
-                            .spanned(span))?
-                        };
+                    let mut values = Vec::with_capacity(arr.len());
 
-                        new_fields.insert(field, value.convert(meta.reborrow(), ty.id, no_attr())?);
+                    for value in arr {
+                        values.push(value.convert(meta.reborrow(), array_type.ty.id, no_attr())?);
                     }
 
-                    FieldsKind::Named(new_fields)
+                    Value::Array(values)
                 }
-                _ => Err(ConversionError::WrongFields { ty: *ty_id }.spanned(span))?,
-            }),
-            (types::TypeKind::Enum { variants }, _) => {
-                // First see if we already have the correct value.
-                let (variant, inner) = if let Value::Enum(variant, value) = &value.value
-                    && raw_val_type.is_some_and(|ty| ty.value == ty_id.value)
-                {
-                    let variant = Self::get_variant(variant, meta.symbols)?
-                        .spanned(Self::variant_span(variant, &meta));
-                    let ty = variants.get(&*variant).ok_or(
-                        ConversionError::UnknownVariant {
-                            variant: variant.clone(),
-                            ty: ty_id.value,
+                (types::TypeKind::Map(map_type), Value::Map(map)) => {
+                    if map_type
+                        .len
+                        .is_some_and(|expected_len| expected_len != map.len())
+                    {
+                        Err(ConversionError::WrongLength {
+                            got: map.len(),
+                            ty: *ty_id,
                         }
-                        .spanned(span),
-                    )?;
-                    (
-                        variant.map(|v| v.to_owned()),
-                        extra_attributes.convert_with(value, meta.reborrow(), ty)?,
-                    )
+                        .spanned(span))?
+                    }
+
+                    let mut values = Vec::with_capacity(map.len());
+
+                    for (key, value) in map {
+                        values.push((
+                            key.convert(meta.reborrow(), map_type.key.id, no_attr())?,
+                            value.convert(meta.reborrow(), map_type.value.id, no_attr())?,
+                        ));
+                    }
+
+                    Value::Map(values)
                 }
-                // Otherwise see if we have the value of an `EnumVariant` or its generic type.
-                else if let Some(raw_val_type) = raw_val_type
-                    && let Some((variant, variant_ty)) =
-                        variants.iter().find(|(_, ty)| {
+                // Both struct and enum variant are parsed from a `Struct` value.
+                (
+                    types::TypeKind::Struct(fields) | types::TypeKind::EnumVariant { fields, .. },
+                    Value::Struct(f),
+                ) => Value::Struct(match (fields, f) {
+                    (types::Fields::Unit, FieldsKind::Unit) => FieldsKind::Unit,
+                    (types::Fields::Unnamed(fields), FieldsKind::Unnamed(values)) => {
+                        FieldsKind::Unnamed(parse_unnamed!(fields, values))
+                    }
+                    (types::Fields::Named(fields), FieldsKind::Named(value_fields)) => {
+                        for (field, _) in fields.required.iter() {
+                            if !value_fields.contains_key(field.as_str()) {
+                                Err(ConversionError::MissingField {
+                                    attribute: false,
+                                    field: field.clone(),
+                                    ty: *ty_id,
+                                }
+                                .spanned(span))?
+                            }
+                        }
+
+                        let mut new_fields = Fields::with_capacity(value_fields.len());
+                        for (field, value) in value_fields {
+                            let field = Self::get_spanned_field(field, &meta);
+                            let Some(ty) = fields.get(field.as_str()) else {
+                                Err(ConversionError::UnexpectedField {
+                                    attribute: false,
+                                    field: field.clone(),
+                                    ty: *ty_id,
+                                }
+                                .spanned(span))?
+                            };
+
+                            new_fields
+                                .insert(field, value.convert(meta.reborrow(), ty.id, no_attr())?);
+                        }
+
+                        FieldsKind::Named(new_fields)
+                    }
+                    _ => Err(ConversionError::WrongFields { ty: *ty_id }.spanned(span))?,
+                }),
+                (types::TypeKind::Enum { variants }, _) => {
+                    // First see if we already have the correct value.
+                    let (variant, inner) = if let Value::Enum(variant, value) = &value.value
+                        && raw_val_type.is_some_and(|ty| ty.value == ty_id.value)
+                    {
+                        let variant = Self::get_variant(variant, meta.symbols)?
+                            .spanned(Self::variant_span(variant, &meta));
+                        let ty = variants.get(&*variant).ok_or(
+                            ConversionError::UnknownVariant {
+                                variant: variant.clone(),
+                                ty: ty_id.value,
+                            }
+                            .spanned(span),
+                        )?;
+                        (
+                            variant.map(|v| v.to_owned()),
+                            extra_attributes.convert_with(value, meta.reborrow(), ty)?,
+                        )
+                    }
+                    // Otherwise see if we have the value of an `EnumVariant` or its generic type.
+                    else if let Some(raw_val_type) = raw_val_type
+                        && let Some((variant, variant_ty)) = variants.iter().find(|(_, ty)| {
                             *ty == raw_val_type.value
                                 || types.key_type(*ty).meta.generic_base_type.is_some_and(|t| {
                                     types.key_generic(t).contains(raw_val_type.value)
                                 })
                         })
-                {
-                    (
-                        variant.to_owned().spanned(raw_val_type.span),
-                        extra_attributes.convert_inner_with(
-                            value,
-                            Spanned::new(attributes_span, &Default::default()),
-                            Some(raw_val_type),
-                            meta.reborrow(),
-                            variant_ty,
-                        )?,
-                    )
+                    {
+                        (
+                            variant.to_owned().spanned(raw_val_type.span),
+                            extra_attributes.convert_inner_with(
+                                value,
+                                Spanned::new(attributes_span, &Default::default()),
+                                Some(raw_val_type),
+                                meta.reborrow(),
+                                variant_ty,
+                            )?,
+                        )
+                    }
+                    // If not, try to parse as all different variants, we could still convert
+                    // correctly if we just did this step. But it produces ugly errors, and
+                    // isn't as easy to check as the other ways.
+                    else {
+                        let mut variant_errors = Vec::new();
+
+                        let (variant, inner) = variants
+                            .iter()
+                            .find_map(|(variant, ty)| {
+                                Some((
+                                    variant,
+                                    extra_attributes
+                                        .convert_inner_with(
+                                            value,
+                                            Spanned::new(attributes_span, &Default::default()),
+                                            raw_val_type,
+                                            meta.reborrow(),
+                                            ty,
+                                        )
+                                        .map_err(|err| variant_errors.push((ty, Box::new(err))))
+                                        .ok()?,
+                                ))
+                            })
+                            .ok_or(
+                                ConversionError::VariantErrors {
+                                    variant_errors,
+                                    ty: *ty_id,
+                                }
+                                .spanned(span),
+                            )?;
+
+                        (variant.to_owned().spanned(inner.span()), inner)
+                    };
+
+                    Value::Enum(variant, Box::new(inner))
                 }
-                // If not, try to parse as all different variants, we could still convert
-                // correctly if we just did this step. But it produces ugly errors, and
-                // isn't as easy to check as the other ways.
-                else {
-                    let mut variant_errors = Vec::new();
-
-                    let (variant, inner) = variants
-                        .iter()
-                        .find_map(|(variant, ty)| {
-                            Some((
-                                variant,
-                                extra_attributes
-                                    .convert_inner_with(
-                                        value,
-                                        Spanned::new(attributes_span, &Default::default()),
-                                        raw_val_type,
-                                        meta.reborrow(),
-                                        ty,
-                                    )
-                                    .map_err(|err| variant_errors.push((ty, Box::new(err))))
-                                    .ok()?,
-                            ))
-                        })
-                        .ok_or(
-                            ConversionError::VariantErrors {
-                                variant_errors,
-                                ty: *ty_id,
-                            }
-                            .spanned(span),
-                        )?;
-
-                    (variant.to_owned().spanned(inner.span()), inner)
-                };
-
-                Value::Enum(variant, Box::new(inner))
-            }
-            // An or-type can be just one path, represented by a struct with unit fields.
-            (types::TypeKind::Or(variants), Value::Struct(f)) => {
-                if matches!(f, FieldsKind::Unit) {
-                    if let Some(val_type) = raw_val_type {
-                        match &types.key_type(val_type.value).kind {
+                // An or-type can be just one path, represented by a struct with unit fields.
+                (types::TypeKind::Or(variants), Value::Struct(f)) => {
+                    if matches!(f, FieldsKind::Unit) {
+                        if let Some(val_type) = raw_val_type {
+                            match &types.key_type(val_type.value).kind {
                             types::TypeKind::EnumVariant {
                                 variant,
                                 enum_type,
@@ -890,112 +872,131 @@ where
 
                             _ => Err(expected_err())?,
                         }
+                        } else {
+                            Err(expected_err())?
+                        }
                     } else {
-                        Err(expected_err())?
+                        Err(ConversionError::WrongFields { ty: *ty_id }.spanned(span))?
                     }
-                } else {
-                    Err(ConversionError::WrongFields { ty: *ty_id }.spanned(span))?
                 }
-            }
-            // Or it can be the `Or` value. We assume this is correctly type because of the checks
-            // for `Or` in `value_type`.
-            (types::TypeKind::Or(_), Value::Or(idents)) => {
-                let variants = idents
-                    .iter()
-                    .map(|ident| {
-                        Ok(Self::get_variant(ident, meta.symbols)?
-                            .to_owned()
-                            .spanned(Self::variant_span(ident, &meta)))
+                // Or it can be the `Or` value. We assume this is correctly type because of the checks
+                // for `Or` in `value_type`.
+                (types::TypeKind::Or(_), Value::Or(idents)) => {
+                    let variants = idents
+                        .iter()
+                        .map(|ident| {
+                            Ok(Self::get_variant(ident, meta.symbols)?
+                                .to_owned()
+                                .spanned(Self::variant_span(ident, &meta)))
+                        })
+                        .collect::<Result<_>>()?;
+
+                    Value::Or(variants)
+                }
+                // A ref can be from a ref value.
+                (types::TypeKind::Ref(_), Value::Ref(r)) => {
+                    Value::Ref(Self::get_asset(r, meta.symbols)?)
+                }
+                // Or from another value, and we instantiate a new object that we can refer to.
+                (types::TypeKind::Ref(ty), _) => {
+                    let object_name =
+                        TypePathElem::new(format!("{}&{}", meta.object_name, ty.inner()))
+                            .expect("We didn't add any ::");
+                    let val = extra_attributes.convert_inner_with(
+                        value,
+                        Spanned::new(attributes_span, &Default::default()),
+                        raw_val_type,
+                        meta.with_object_name(object_name.borrow()),
+                        *ty,
+                    )?;
+
+                    (meta.add_value)(object_name.borrow(), val, meta.symbols)?
+                }
+                (types::TypeKind::Primitive(primitive), Value::Primitive(value))
+                    if !matches!(value, PrimitiveValue::Default) =>
+                {
+                    Value::Primitive(match (primitive, value) {
+                        (types::Primitive::Num, PrimitiveValue::Num(v)) => PrimitiveValue::Num(*v),
+                        (types::Primitive::Bool, PrimitiveValue::Bool(v)) => {
+                            PrimitiveValue::Bool(*v)
+                        }
+                        (types::Primitive::Unit, PrimitiveValue::Unit) => PrimitiveValue::Unit,
+                        (types::Primitive::Str, PrimitiveValue::Str(v)) => {
+                            PrimitiveValue::Str(v.clone())
+                        }
+                        (types::Primitive::Raw, PrimitiveValue::Raw(v)) => {
+                            PrimitiveValue::Raw(v.clone())
+                        }
+
+                        // NOTE: Keep this exhaustive so this can be found when adding a new primitive type.
+                        (
+                            types::Primitive::Num
+                            | types::Primitive::Bool
+                            | types::Primitive::Unit
+                            | types::Primitive::Str
+                            | types::Primitive::Raw
+                            | types::Primitive::Any,
+                            _,
+                        ) => Err(expected_err())?,
                     })
-                    .collect::<Result<_>>()?;
+                }
+                // Either we get a transparent value,
+                (types::TypeKind::Transparent(ty), Value::Transparent(value)) => {
+                    let val = extra_attributes.convert_with(value, meta.reborrow(), *ty)?;
 
-                Value::Or(variants)
-            }
-            // A ref can be from a ref value.
-            (types::TypeKind::Ref(_), Value::Ref(r)) => {
-                Value::Ref(Self::get_asset(r, meta.symbols)?)
-            }
-            // Or from another value, and we instantiate a new object that we can refer to.
-            (types::TypeKind::Ref(ty), _) => {
-                let object_name = TypePathElem::new(format!("{}&{}", meta.object_name, ty.inner()))
-                    .expect("We didn't add any ::");
-                let val = extra_attributes.convert_inner_with(
-                    value,
-                    Spanned::new(attributes_span, &Default::default()),
-                    raw_val_type,
-                    meta.with_object_name(object_name.borrow()),
-                    *ty,
-                )?;
+                    Value::Transparent(Box::new(val))
+                }
+                // or we convert from a flat one.
+                (types::TypeKind::Transparent(ty), _) => {
+                    let val = extra_attributes.convert_inner_with(
+                        value,
+                        Spanned::new(attributes_span, &Default::default()),
+                        raw_val_type,
+                        meta.reborrow(),
+                        *ty,
+                    )?;
 
-                (meta.add_value)(object_name.borrow(), val, meta.symbols)?
-            }
-            (types::TypeKind::Primitive(primitive), Value::Primitive(value)) => {
-                Value::Primitive(match (primitive, value) {
-                    (types::Primitive::Num, PrimitiveValue::Num(v)) => PrimitiveValue::Num(*v),
-                    (types::Primitive::Bool, PrimitiveValue::Bool(v)) => PrimitiveValue::Bool(*v),
-                    (types::Primitive::Unit, PrimitiveValue::Unit) => PrimitiveValue::Unit,
-                    (types::Primitive::Str, PrimitiveValue::Str(v)) => {
-                        PrimitiveValue::Str(v.clone())
+                    Value::Transparent(Box::new(val))
+                }
+                (_, Value::Transparent(value)) => {
+                    // Try again as if it wasn't a transparent value.
+                    extra_attributes.extend(&attributes, &meta);
+                    break 'val extra_attributes.convert_with(
+                        value,
+                        meta.reborrow(),
+                        expected_type,
+                    )?;
+                }
+                (_, Value::Primitive(PrimitiveValue::Default)) => {
+                    let mut v = types
+                        .instantiate(*ty_id)
+                        .ok_or(ty_id.map(|ty| ConversionError::NotInstantiable { ty }))?
+                        .into_spanned(value.span);
+
+                    for (s, value) in attributes.into_iter() {
+                        v.attributes.insert(s, value);
                     }
-                    (types::Primitive::Raw, PrimitiveValue::Raw(v)) => {
-                        PrimitiveValue::Raw(v.clone())
-                    }
 
-                    // NOTE: Keep this exhaustive so this can be found when adding a new primitive type.
-                    (
-                        types::Primitive::Num
-                        | types::Primitive::Bool
-                        | types::Primitive::Unit
-                        | types::Primitive::Str
-                        | types::Primitive::Raw
-                        | types::Primitive::Any,
-                        _,
-                    ) => Err(expected_err())?,
-                })
-            }
-            // Either we get a transparent value,
-            (types::TypeKind::Transparent(ty), Value::Transparent(value)) => {
-                let val = extra_attributes.convert_with(value, meta.reborrow(), *ty)?;
+                    break 'val v;
+                }
+                _ => Err(expected_err())?,
+            };
 
-                Value::Transparent(Box::new(val))
+            // Report errors for unexpected attributes
+            if let Some(ident) = extra_attributes.first(&meta) {
+                Err(ConversionError::UnexpectedField {
+                    attribute: true,
+                    field: ident.clone(),
+                    ty: *ty_id,
+                }
+                .spanned(attributes_span))?;
             }
-            // or we convert from a flat one.
-            (types::TypeKind::Transparent(ty), _) => {
-                let val = extra_attributes.convert_inner_with(
-                    value,
-                    Spanned::new(attributes_span, &Default::default()),
-                    raw_val_type,
-                    meta.reborrow(),
-                    *ty,
-                )?;
 
-                Value::Transparent(Box::new(val))
+            Val {
+                ty: ty_id,
+                value: value.spanned(span),
+                attributes: attributes.spanned(attributes_span),
             }
-            (_, Value::Transparent(value)) => {
-                // Try again as if it wasn't a transparent value.
-                extra_attributes.extend(&attributes, &meta);
-                return extra_attributes.convert_with(value, meta.reborrow(), expected_type);
-            }
-            (_, Value::Primitive(PrimitiveValue::Null)) => {
-                Err(ConversionError::NotNullable(*ty_id).spanned(span))?
-            }
-            _ => Err(expected_err())?,
-        };
-
-        // Report errors for unexpected attributes
-        if let Some(ident) = extra_attributes.first(&meta) {
-            Err(ConversionError::UnexpectedField {
-                attribute: true,
-                field: ident.clone(),
-                ty: *ty_id,
-            }
-            .spanned(attributes_span))?;
-        }
-
-        let val = Val {
-            ty: ty_id,
-            value: value.spanned(span),
-            attributes: attributes.spanned(attributes_span),
         };
 
         if let Some(validation) = ty.meta.extra_validation {

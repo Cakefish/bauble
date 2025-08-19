@@ -292,7 +292,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
             meta: types::TypeMeta {
                 path: TypePath::new("bauble::Val").unwrap().to_owned(),
                 attributes: types::NamedFields::any(),
-                default: Some(UnspannedVal::new(Value::Primitive(PrimitiveValue::Null))),
+                default: Some(UnspannedVal::new(Value::default())),
                 ..Default::default()
             },
             kind: types::TypeKind::Primitive(types::Primitive::Any),
