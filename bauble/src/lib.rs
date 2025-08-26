@@ -55,9 +55,9 @@ pub use traits::{
 };
 pub use types::path;
 pub use value::{
-    Attributes, ConversionError, DisplayConfig, Fields, FieldsKind, IndentedDisplay, Map, Object,
-    PrimitiveValue, Sequence, SpannedValue, UnspannedVal, Val, Value, ValueContainer, ValueTrait,
-    display_formatted,
+    AdditionalUnspannedObjects, Attributes, ConversionError, DisplayConfig, Fields, FieldsKind,
+    IndentedDisplay, Map, Object, PrimitiveValue, Sequence, SpannedValue, UnspannedVal, Val, Value,
+    ValueContainer, ValueTrait, display_formatted,
 };
 
 // re-exporting crates from other crates

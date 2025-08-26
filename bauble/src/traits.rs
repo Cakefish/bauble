@@ -292,7 +292,7 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
             meta: types::TypeMeta {
                 path: TypePath::new("bauble::Val").unwrap().to_owned(),
                 attributes: types::NamedFields::any(),
-                default: Some(UnspannedVal::new(Value::default())),
+                default: Some(|_, _, _| UnspannedVal::new(Value::default())),
                 ..Default::default()
             },
             kind: types::TypeKind::Primitive(types::Primitive::Any),
@@ -630,14 +630,24 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                 ))
                 .unwrap(),
                 generic_base_type: Some(generic),
-                default: Some(UnspannedVal::new(Value::Enum(
-                    none.to_owned(),
-                    Box::new(
-                        registry
-                            .instantiate(variants.get(&none).expect("We just added this variant"))
-                            .expect("We should be able to instantiate unit fields"),
-                    ),
-                ))),
+                default: Some(|a, registry, ty| {
+                    let none = match &registry.key_type(ty).kind {
+                        types::TypeKind::Enum { variants } => variants
+                            .get("None")
+                            .expect("We instantiated it to this above."),
+                        _ => {
+                            unreachable!()
+                        }
+                    };
+                    UnspannedVal::new(Value::Enum(
+                        TypePathElem::new("None").unwrap().to_owned(),
+                        Box::new(
+                            registry
+                                .instantiate(none, a)
+                                .expect("We should be able to instantiate unit fields"),
+                        ),
+                    ))
+                }),
                 ..Default::default()
             },
             kind: types::TypeKind::Enum { variants },
