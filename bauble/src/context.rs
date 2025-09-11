@@ -205,6 +205,10 @@ impl BaubleContextBuilder {
 struct CtxNode {
     reference: InnerReference,
     path: TypePath,
+    /// `Some` when this node is the top level module of a file (currently inline modules don't
+    /// exist but there is some allowance for them).
+    ///
+    /// Set in [`BaubleContext::register_file`].
     source: Option<FileId>,
     children: IndexMap<TypePathElem, CtxNode>,
 }
@@ -415,10 +419,6 @@ impl CtxNode {
         }
         node.reference.asset = Some(ty);
     }
-
-    fn find_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
-        self.walk_find(path, |node| node.source).map(|(_, s)| s)
-    }
 }
 
 /// The ID associated with a context registered file.
@@ -510,15 +510,20 @@ impl BaubleContext {
     ) -> (Vec<crate::Object>, BaubleErrors) {
         let ids = paths
             .into_iter()
-            .map(
-                |(path, source)| match self.get_file_id(preprocess_path(path.borrow())) {
+            .map(|(path, source)| {
+                let processed_path = preprocess_path(path.borrow());
+                let file_id = self
+                    .root_node
+                    .walk(processed_path, |node| node.source)
+                    .flatten();
+                match file_id {
                     Some(id) => {
                         *self.file_mut(id).1 = Source::from(source.into());
                         id
                     }
                     None => self.register_file(path.borrow(), source),
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         self.reload_files(ids)
@@ -669,9 +674,16 @@ impl BaubleContext {
             .flatten()
     }
 
-    /// if there is any associated file for `path`, get the ID of that file.
+    /// If there is any associated file for `path`, get the ID of that file.
+    ///
+    /// `path` doesn't need to be the path of a file, it can be the path of anything in a file.
+    ///
+    /// Note, if a file `a` exists and a file `a::b::c` exists, `a::b` will get the ID of the file
+    /// at `a`.
     pub fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
-        self.root_node.find_file_id(path)
+        self.root_node
+            .walk_find(path, |node| node.source)
+            .map(|(_, s)| s)
     }
 
     /// Get the module path of `file`.
