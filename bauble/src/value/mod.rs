@@ -8,12 +8,12 @@ use rust_decimal::Decimal;
 use symbols::RefCopy;
 
 use crate::{
+    BaubleErrors, FileId, VariantKind,
     context::PathReference,
     parse::{ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
-    BaubleErrors, FileId, VariantKind,
 };
 
 mod convert;
@@ -23,8 +23,8 @@ mod symbols;
 
 pub use convert::AdditionalUnspannedObjects;
 pub(crate) use convert::AnyVal;
-use convert::{no_attr, value_type, AdditionalObjects, ConvertMeta, ConvertValue};
-pub use display::{display_formatted, DisplayConfig, IndentedDisplay};
+use convert::{AdditionalObjects, ConvertMeta, ConvertValue, no_attr, value_type};
+pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
