@@ -6,10 +6,10 @@
 use std::{borrow::Borrow, collections::HashMap};
 
 use crate::{
-    Spanned,
-    parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
+    parse::{allowed_in_raw_literal, ParseVal, ParseValues, PathTreeEnd, PathTreeNode},
     path::TypePath,
     types::{TypeKind, TypeRegistry},
+    Spanned,
 };
 
 use super::{Attributes, FieldsKind, Object, UnspannedVal, Val, Value, ValueContainer, ValueTrait};
@@ -30,16 +30,22 @@ impl Default for DisplayConfig {
     }
 }
 
-/// Display something that implements `IndentedDisplay`.
+/// Display something that implements [`IndentedDisplay`].
+///
+/// # Main ways to call this
+///
+/// * `CTX` is [`TypeRegistry`] and `V` is `[[Object](Object)]`. Sub-objects in this slice will
+///   only be displayed if they appear inline in other objects in the slice.
+/// * `CTX` is `(&TypeRegistry, &[Object])` and `V` implements `IndentedDisplay<ValueDisplayCtx<'_,
+///   V>>` (e.g. [`UnspannedVal`]). The provided slice of objects is necessary to display sub-objects
+///   inline if `V` contains any.
 pub fn display_formatted<CTX, V: IndentedDisplay<CTX> + ?Sized>(
     v: &V,
     ctx: &CTX,
     config: &DisplayConfig,
 ) -> String {
     let mut s = String::new();
-
     Formatter::start(config, ctx, &mut s).write_line(|l| v.indented_display(l));
-
     s
 }
 
@@ -635,6 +641,31 @@ impl ValueCtx<UnspannedVal> for ValueDisplayCtx<'_, UnspannedVal> {
 
     fn type_registry(&self) -> Option<&TypeRegistry> {
         Some(self.types)
+    }
+}
+
+/// IndentedDisplay impl where context includes slice of objects that contain any needed
+/// sub-objects.
+impl<'b, V: ValueTrait<Inner = V> + for<'a> IndentedDisplay<ValueDisplayCtx<'a, V>>>
+    IndentedDisplay<(&'b TypeRegistry, &'b [Object<V>])> for V
+where
+    for<'a> ValueDisplayCtx<'a, V>: ValueCtx<V>,
+{
+    fn indented_display(&self, mut w: LineWriter<(&'b TypeRegistry, &'b [Object<V>])>) {
+        let mut inlined_refs = HashMap::new();
+        let objects = w.ctx().1;
+        for object in objects.iter() {
+            // !is_writable indicates this is a sub-object
+            if !object.object_path.is_writable() {
+                inlined_refs.insert(object.object_path.borrow(), &object.value);
+            }
+        }
+        let ctx = ValueDisplayCtx::<'_, V> {
+            inlined_refs,
+            types: w.ctx().0,
+        };
+        let w = w.with_ctx(&ctx);
+        self.indented_display(w);
     }
 }
 
