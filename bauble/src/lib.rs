@@ -1,38 +1,4 @@
-//! Bauble is Rust-inspired human-readable text format for representing various Rust-like data, such as enums or structs.
-//!
-//! Data represented by Bauble can be parsed and stored in memory in the form of a corresponding type on Rust which implements
-//! the [`Bauble`] trait. In this way, Bauble is a format very useful for specifying information processed to Rust in a way
-//! that remains very consistent to the actual Rust code itself that makes use of the information.
-//!
-//! The code making use of Bauble has to construct a [`BaubleContext`] in order to provide the parsing step enough information
-//! for recognizing the different types inside of the Bauble source. Once a context has been created, that context can then be
-//! used for parsing various Bauble source files and extract the newly parsed data back as typed values that can be used to
-//! update the state of the program.
-//!
-//! # BaubleContext
-//!
-//! [`BaubleContext`] is used to register various Bauble source files to parse information from, as well as maintaining a type
-//! registry where every known type to Bauble is provided. All interactions with Bauble require a context.
-//!
-//! # Deriving Bauble
-//!
-//! In order to represent a type inside of Bauble, you must implement the `Bauble` trait for that type. To make this easier,
-//! Bauble has a custom derive macro `#[derive(Bauble)]`.
-//!
-//! Here is a following example of using `#[derive(Bauble)]` to create a Bauble parsable type.
-//! ```
-//! # use bauble::Bauble;
-//!
-//! #[derive(Bauble)]
-//! struct TypeInBauble {
-//!    a_number: u32,
-//!    a_string: String,
-//!    a_bool: bool,
-//! }
-//! ```
-//!
-//! More information on the [`Bauble`] derive macro exists in its documentation.
-
+#![doc = include_str!("../../OVERVIEW.md")]
 #![feature(iterator_try_collect, let_chains, ptr_metadata)]
 #![warn(missing_docs)]
 
