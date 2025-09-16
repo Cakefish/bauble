@@ -18,7 +18,7 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{AdditionalUnspannedObjects, Bauble, BaubleAllocator, value::UnspannedVal};
+use crate::{value::UnspannedVal, AdditionalUnspannedObjects, Bauble, BaubleAllocator};
 
 #[allow(missing_docs)]
 pub type Extra = IndexMap<String, String>;
@@ -276,7 +276,7 @@ impl TypeRegistry {
 
         // The element at index 0 is always any trait
         let any_trait = this.get_or_register_trait::<dyn std::any::Any>();
-        this.types[any_trait.0.0].kind = TypeKind::Trait(TypeSet(SealedTypeSet::All));
+        this.types[any_trait.0 .0].kind = TypeKind::Trait(TypeSet(SealedTypeSet::All));
 
         // The element at index 1 is any trait.
         let any_id = this.get_or_register_type::<crate::Val, crate::DefaultAllocator>();
@@ -445,7 +445,7 @@ impl TypeRegistry {
 
     fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
         for tr in ty.meta.traits.iter() {
-            let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
+            let TypeKind::Trait(types) = &mut self.types[tr.0 .0].kind else {
                 panic!("Invariant")
             };
 
@@ -517,7 +517,7 @@ impl TypeRegistry {
         }
 
         if let Some(ty) = ty.meta.generic_base_type {
-            let TypeKind::Generic(types) = &mut self.types[ty.0.0].kind else {
+            let TypeKind::Generic(types) = &mut self.types[ty.0 .0].kind else {
                 panic!("`generic_base_type` pointing to a type that isn't `TypeKind::Generic`")
             };
 
@@ -618,165 +618,30 @@ impl TypeRegistry {
                 return Err(TypeSystemError::InstantiableErrors);
             }
 
-            let instantiated_object_map: HashMap<_, _> = objects
-                .into_iter()
-                .map(|obj| (obj.object_path, obj.value))
-                .collect();
-
-            let loaded_object_map: HashMap<_, _> = loaded_objects
-                .into_iter()
-                .map(|obj| {
-                    (
-                        obj.object_path,
-                        (obj.value.value.span, obj.value.into_unspanned()),
-                    )
-                })
-                .collect();
-
-            let mut missing_objects = Vec::new();
-
-            /// Compare two objects and recursively compare their sub-objects (aka sub-assets)
-            /// while ignoring differences in the paths that refer to those sub-objects (instead
-            /// checking that the values in the sub-objects are indentical).
-            fn compare_objects<'a>(
-                src: &str,
-                instantiated: &UnspannedVal,
-                loaded: &UnspannedVal,
-                inst_map: &HashMap<TypePath, UnspannedVal>,
-                loaded_map: &HashMap<TypePath, (crate::Span, UnspannedVal)>,
-            ) -> Result<(), TypeSystemError<'a>> {
-                let inquality_err = || {
-                    TypeSystemError::ConstructInequality(
-                        src.to_string(),
-                        instantiated.clone(),
-                        loaded.clone(),
-                    )
-                };
-
-                instantiated.attributes.iter().try_for_each(|(n, a)| {
-                    match loaded.attributes.get(n) {
-                        Some((_, b)) => compare_objects(src, a, b, inst_map, loaded_map),
-                        None => Err(inquality_err()),
-                    }
-                })?;
-
-                match (&instantiated.value, &loaded.value) {
-                    (crate::Value::Ref(a), crate::Value::Ref(b)) => {
-                        // Not being writable means this is a sub-asset, so compare the sub assets
-                        // rather than the paths to them.
-                        //
-                        // Note, this means object comparison will pass even when the paths to sub
-                        // assets change.
-                        if !a.is_writable() {
-                            let a = inst_map.get(a).unwrap();
-                            let (_, b) = loaded_map.get(b).unwrap();
-                            compare_objects(src, a, b, inst_map, loaded_map)?;
-                        } else if a != b {
-                            return Err(inquality_err());
+            if let Err(crate::CompareObjectsError {
+                mismatched,
+                missing,
+                new,
+            }) = crate::compare_object_sets(objects.into_iter(), loaded_objects.into_iter())
+            {
+                return Err(
+                    if let Some((_, span, original, new)) = mismatched.into_iter().next() {
+                        let src = source
+                            .chars()
+                            .skip(span.start)
+                            .take(span.end - span.start)
+                            .collect();
+                        TypeSystemError::ConstructInequality(src, original, new)
+                    } else {
+                        TypeSystemError::MissingObjects {
+                            instantiated_missing: missing
+                                .into_iter()
+                                .map(|(path, _val)| path)
+                                .collect(),
+                            loaded_unknown: new.into_iter().map(|(path, _val)| path).collect(),
                         }
-                    }
-                    (crate::Value::Tuple(a), crate::Value::Tuple(b))
-                    | (crate::Value::Array(a), crate::Value::Array(b))
-                    | (
-                        crate::Value::Struct(crate::FieldsKind::Unnamed(a)),
-                        crate::Value::Struct(crate::FieldsKind::Unnamed(b)),
-                    ) => {
-                        if a.len() != b.len() {
-                            return Err(inquality_err());
-                        } else if let Some(err) = a.iter().zip(b.iter()).find_map(|(a, b)| {
-                            compare_objects(src, a, b, inst_map, loaded_map).err()
-                        }) {
-                            return Err(err);
-                        }
-                    }
-                    (crate::Value::Map(a), crate::Value::Map(b)) => {
-                        if a.len() != b.len() {
-                            return Err(inquality_err());
-                        } else if let Some(err) =
-                            a.iter().zip(b.iter()).find_map(|((k_a, v_a), (k_b, v_b))| {
-                                compare_objects(src, k_a, k_b, inst_map, loaded_map)
-                                    .err()
-                                    .or_else(|| {
-                                        compare_objects(src, v_a, v_b, inst_map, loaded_map).err()
-                                    })
-                            })
-                        {
-                            return Err(err);
-                        }
-                    }
-                    (
-                        crate::Value::Struct(crate::FieldsKind::Unit),
-                        crate::Value::Struct(crate::FieldsKind::Unit),
-                    ) => {}
-                    (
-                        crate::Value::Struct(crate::FieldsKind::Named(a)),
-                        crate::Value::Struct(crate::FieldsKind::Named(b)),
-                    ) => {
-                        if a.len() != b.len() {
-                            return Err(inquality_err());
-                        } else if let Some(err) = a.iter().find_map(|(n, a)| match b.get(n) {
-                            Some(b) => compare_objects(src, a, b, inst_map, loaded_map).err(),
-                            None => Some(inquality_err()),
-                        }) {
-                            return Err(err);
-                        }
-                    }
-                    (crate::Value::Or(a), crate::Value::Or(b)) => {
-                        if a != b {
-                            return Err(inquality_err());
-                        }
-                    }
-                    (crate::Value::Primitive(a), crate::Value::Primitive(b)) => {
-                        if a != b {
-                            return Err(inquality_err());
-                        }
-                    }
-                    (crate::Value::Transparent(a), crate::Value::Transparent(b)) => {
-                        compare_objects(src, a, b, inst_map, loaded_map)?;
-                    }
-                    (crate::Value::Enum(n_a, a), crate::Value::Enum(n_b, b)) => {
-                        if n_a != n_b {
-                            return Err(inquality_err());
-                        }
-
-                        compare_objects(src, a, b, inst_map, loaded_map)?;
-                    }
-                    _ => {
-                        return Err(inquality_err());
-                    }
-                };
-
-                Ok(())
-            }
-
-            for (s, a, b) in instantiated_object_map.iter().filter_map(|(k, a)| {
-                if !k.is_writable() {
-                    // Don't compare sub-assets, they will be compared by recursion in `compare_objects`
-                    None
-                } else if let Some((span, b)) = loaded_object_map.get(k) {
-                    Some((*span, a, b))
-                } else {
-                    missing_objects.push(k.clone());
-                    None
-                }
-            }) {
-                let s: String = source.chars().skip(s.start).take(s.end - s.start).collect();
-
-                compare_objects(&s, a, b, &instantiated_object_map, &loaded_object_map)?;
-            }
-
-            let unknown_objects: Vec<_> = loaded_object_map
-                .into_keys()
-                // `k.is_writable()` indicates that this is not a sub-asset, `compare_objects`
-                // handles checking for those so we don't produce an error if their paths change.
-                .filter(|k| !instantiated_object_map.contains_key(k) && k.is_writable())
-                .collect();
-
-            if !missing_objects.is_empty() || !unknown_objects.is_empty() {
-                return Err(TypeSystemError::MissingObjects {
-                    instantiated_missing: missing_objects,
-                    loaded_unknown: unknown_objects,
-                });
+                    },
+                );
             }
         }
 
@@ -891,7 +756,7 @@ impl TypeRegistry {
     pub fn add_trait_dependency(&mut self, ty: TypeId, tr: TraitId) {
         self.types[ty.0].meta.traits.push(tr);
 
-        let TypeKind::Trait(tr) = &mut self.types[tr.0.0].kind else {
+        let TypeKind::Trait(tr) = &mut self.types[tr.0 .0].kind else {
             unreachable!("Invariant");
         };
 

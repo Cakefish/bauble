@@ -8,12 +8,12 @@ use rust_decimal::Decimal;
 use symbols::RefCopy;
 
 use crate::{
-    BaubleErrors, FileId, VariantKind,
     context::PathReference,
     parse::{ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
+    BaubleErrors, FileId, VariantKind,
 };
 
 mod convert;
@@ -23,8 +23,8 @@ mod symbols;
 
 pub use convert::AdditionalUnspannedObjects;
 pub(crate) use convert::AnyVal;
-use convert::{AdditionalObjects, ConvertMeta, ConvertValue, no_attr, value_type};
-pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
+use convert::{no_attr, value_type, AdditionalObjects, ConvertMeta, ConvertValue};
+pub use display::{display_formatted, DisplayConfig, IndentedDisplay};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
@@ -1109,5 +1109,184 @@ fn create_object(
             ty: *value.ty,
         }
         .spanned(value.span()))
+    }
+}
+
+/// Compare two objects and recursively compare their sub-objects (aka sub-assets)
+/// while ignoring differences in the paths that refer to those sub-objects (instead
+/// checking that the values in the sub-objects are indentical).
+///
+/// On error returns (original_val, loaded_val) for the objects that did not match. These may be a
+/// pair of sub-objects rather than the top level objects.
+fn compare_objects(
+    original: &UnspannedVal,
+    loaded: &UnspannedVal,
+    orig_map: &HashMap<TypePath, UnspannedVal>,
+    loaded_map: &HashMap<TypePath, (crate::Span, UnspannedVal)>,
+) -> std::result::Result<(), (UnspannedVal, UnspannedVal)> {
+    let inquality_err = || (original.clone(), loaded.clone());
+
+    original
+        .attributes
+        .iter()
+        .try_for_each(|(n, a)| match loaded.attributes.get(n) {
+            Some((_, b)) => compare_objects(a, b, orig_map, loaded_map),
+            None => Err(inquality_err()),
+        })?;
+
+    match (&original.value, &loaded.value) {
+        (crate::Value::Ref(a), crate::Value::Ref(b)) => {
+            // Not being writable means this is a sub-asset, so compare the sub assets
+            // rather than the paths to them.
+            //
+            // Note, this means object comparison will pass even when the paths to sub
+            // assets change.
+            if !a.is_writable() {
+                let a = orig_map.get(a).unwrap();
+                let (_, b) = loaded_map.get(b).unwrap();
+                compare_objects(a, b, orig_map, loaded_map)
+            } else if a == b {
+                Ok(())
+            } else {
+                Err(inquality_err())
+            }
+        }
+        (crate::Value::Tuple(a), crate::Value::Tuple(b))
+        | (crate::Value::Array(a), crate::Value::Array(b))
+        | (
+            crate::Value::Struct(crate::FieldsKind::Unnamed(a)),
+            crate::Value::Struct(crate::FieldsKind::Unnamed(b)),
+        ) => {
+            if a.len() != b.len() {
+                Err(inquality_err())
+            } else {
+                a.iter()
+                    .zip(b.iter())
+                    .try_for_each(|(a, b)| compare_objects(a, b, orig_map, loaded_map))
+            }
+        }
+        (crate::Value::Map(a), crate::Value::Map(b)) => {
+            if a.len() != b.len() {
+                Err(inquality_err())
+            } else {
+                a.iter()
+                    .zip(b.iter())
+                    .try_for_each(|((k_a, v_a), (k_b, v_b))| {
+                        compare_objects(k_a, k_b, orig_map, loaded_map)?;
+                        compare_objects(v_a, v_b, orig_map, loaded_map)
+                    })
+            }
+        }
+        (
+            crate::Value::Struct(crate::FieldsKind::Unit),
+            crate::Value::Struct(crate::FieldsKind::Unit),
+        ) => Ok(()),
+        (
+            crate::Value::Struct(crate::FieldsKind::Named(a)),
+            crate::Value::Struct(crate::FieldsKind::Named(b)),
+        ) => {
+            if a.len() != b.len() {
+                Err(inquality_err())
+            } else {
+                a.iter().try_for_each(|(n, a)| match b.get(n) {
+                    Some(b) => compare_objects(a, b, orig_map, loaded_map),
+                    None => Err(inquality_err()),
+                })
+            }
+        }
+        (crate::Value::Or(a), crate::Value::Or(b)) => {
+            if a == b {
+                Ok(())
+            } else {
+                Err(inquality_err())
+            }
+        }
+        (crate::Value::Primitive(a), crate::Value::Primitive(b)) => {
+            if a == b {
+                Ok(())
+            } else {
+                Err(inquality_err())
+            }
+        }
+        (crate::Value::Transparent(a), crate::Value::Transparent(b)) => {
+            compare_objects(a, b, orig_map, loaded_map)
+        }
+        (crate::Value::Enum(n_a, a), crate::Value::Enum(n_b, b)) => {
+            if n_a != n_b {
+                Err(inquality_err())
+            } else {
+                compare_objects(a, b, orig_map, loaded_map)
+            }
+        }
+        _ => Err(inquality_err()),
+    }
+}
+
+/// Error returned by [`compare_object_sets`].
+pub struct CompareObjectsError {
+    /// Objects with the same path but non-equal content.
+    pub mismatched: Vec<(TypePath, crate::Span, UnspannedVal, UnspannedVal)>,
+    /// Objects from the original set that are missing in the new set.
+    pub missing: Vec<(TypePath, UnspannedVal)>,
+    /// Objects only found in the new set.
+    pub new: Vec<(TypePath, UnspannedVal)>,
+}
+
+/// Compares two sets of objects and returns an error with the list of mismatched, missing, and new
+/// objects if they don't match.
+///
+/// This is used to test that `Object`s content is preserved in a round-trip through the text format.
+///
+/// Ignores differences in the paths of sub-assets and only compares their content where they
+/// appear in the parent objects.
+pub fn compare_object_sets(
+    original: impl Iterator<Item = Object<UnspannedVal>>,
+    loaded: impl Iterator<Item = Object>,
+) -> std::result::Result<(), CompareObjectsError> {
+    let original_object_map: HashMap<_, _> =
+        original.map(|obj| (obj.object_path, obj.value)).collect();
+    let loaded_object_map: HashMap<_, _> = loaded
+        .map(|obj| {
+            (
+                obj.object_path,
+                (obj.value.value.span, obj.value.into_unspanned()),
+            )
+        })
+        .collect();
+
+    let mut missing = Vec::new();
+    let mut mismatched = Vec::new();
+
+    for (k, a) in original_object_map.iter() {
+        // Don't compare sub-assets, they will be compared by recursion in `compare_objects`
+        if k.is_writable() {
+            if let Some((span, b)) = loaded_object_map.get(k) {
+                if let Err((original, new)) =
+                    compare_objects(a, b, &original_object_map, &loaded_object_map)
+                {
+                    mismatched.push((k.to_owned(), *span, original, new));
+                }
+            } else {
+                missing.push((k.to_owned(), a.clone()));
+            }
+        }
+    }
+
+    let new = loaded_object_map
+        .into_iter()
+        // `k.is_writable()` indicates that this is not a sub-asset, `compare_objects`
+        // handles checking for those so we don't produce an error if their paths change.
+        .filter(|(k, _)| !original_object_map.contains_key(k) && k.is_writable())
+        .map(|(k, (_span, b))| (k, b))
+        .collect::<Vec<_>>();
+
+    if mismatched.is_empty() && missing.is_empty() && new.is_empty() {
+        Ok(())
+    } else {
+        Err(CompareObjectsError {
+            mismatched,
+            missing,
+            new,
+        })
     }
 }
