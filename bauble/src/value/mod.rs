@@ -21,8 +21,9 @@ mod display;
 mod error;
 mod symbols;
 
+pub use convert::AdditionalUnspannedObjects;
 pub(crate) use convert::AnyVal;
-use convert::{ConvertMeta, ConvertValue, no_attr, value_type};
+use convert::{AdditionalObjects, ConvertMeta, ConvertValue, no_attr, value_type};
 pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
@@ -184,6 +185,7 @@ impl<V: ValueContainer> Attributes<V> {
         self.0.values()
     }
 
+    /// Iterate the values of all attributes mutably.
     pub fn values_mut(&mut self) -> impl ExactSizeIterator<Item = &mut V> {
         self.0.values_mut()
     }
@@ -213,6 +215,7 @@ impl<V: ValueContainer> Attributes<V> {
         &self.0
     }
 
+    /// Get the inner fields value mutably.
     pub fn get_inner_mut(&mut self) -> &mut Fields<V> {
         &mut self.0
     }
@@ -923,20 +926,7 @@ pub(crate) fn convert_values(
         });
     }
 
-    let mut objects = Vec::new();
-    let mut name_allocs = HashMap::new();
-    let mut add_value = |name: TypePathElem<&str>, val: Val, symbols: &Symbols| {
-        let idx = *name_allocs
-            .entry(name.to_owned())
-            .and_modify(|i| *i += 1u64)
-            .or_insert(0);
-        let name = TypePathElem::new(format!("{name}@{idx}"))
-            .expect("idx is just a number, and we know name is a valid path elem.");
-
-        objects.push(create_object(path, name.borrow(), val, symbols)?);
-
-        Ok(Value::Ref(path.join(&name)))
-    };
+    let mut additional_objects = AdditionalObjects::new(path.to_owned());
 
     let mut node_removals = Vec::new();
     for scc in petgraph::algo::tarjan_scc(&copy_graph) {
@@ -981,7 +971,7 @@ pub(crate) fn convert_values(
         ($name:expr) => {
             ConvertMeta {
                 symbols: &symbols,
-                add_value: &mut add_value,
+                additional_objects: &mut additional_objects,
                 object_name: $name,
                 default_span,
             }
@@ -1040,6 +1030,8 @@ pub(crate) fn convert_values(
         }
     }
 
+    let mut objects = additional_objects.into_objects();
+
     if err.is_empty() {
         objects.extend(ok);
         Ok(objects)
@@ -1089,11 +1081,11 @@ fn find_copy_refs<'a>(
 }
 
 /// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
-fn convert_object<F: FnMut(TypePathElem<&str>, Val, &Symbols) -> Result<Value>>(
+fn convert_object(
     path: TypePath<&str>,
     value: &ParseVal,
     expected_type: TypeId,
-    mut meta: ConvertMeta<F>,
+    mut meta: ConvertMeta,
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
 

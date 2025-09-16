@@ -18,7 +18,7 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{Bauble, BaubleAllocator, value::UnspannedVal};
+use crate::{AdditionalUnspannedObjects, Bauble, BaubleAllocator, value::UnspannedVal};
 
 #[allow(missing_docs)]
 pub type Extra = IndexMap<String, String>;
@@ -135,8 +135,8 @@ pub struct Variant {
     pub extra_validation: Option<ValidationFunction>,
     /// Extra data attached by the user to the variant.
     pub extra: Extra,
-    /// The default value to be assigned to this if there's a `default` value.
-    pub default: Option<UnspannedVal>,
+    /// Function that produces the default value to be assigned to this if there's a `default` value.
+    pub default: Option<DefaultFunction>,
 }
 
 impl Variant {
@@ -184,8 +184,8 @@ impl Variant {
     }
 
     #[allow(missing_docs)]
-    pub fn with_default(mut self, value: UnspannedVal) -> Self {
-        self.default = Some(value);
+    pub fn with_default(mut self, f: DefaultFunction) -> Self {
+        self.default = Some(f);
         self
     }
 }
@@ -200,7 +200,11 @@ pub enum TypeSystemError<'a> {
         ty: TypePath<&'a str>,
     },
     InstantiableErrors,
-    ConstructInequality(UnspannedVal, UnspannedVal),
+    ConstructInequality(String, UnspannedVal, UnspannedVal),
+    MissingObjects {
+        instantiated_missing: Vec<TypePath>,
+        loaded_unknown: Vec<TypePath>,
+    },
 }
 
 impl Display for TypeSystemError<'_> {
@@ -225,13 +229,20 @@ impl Display for TypeSystemError<'_> {
                 f,
                 "Errors while trying to read default instantiated objects"
             ),
-            TypeSystemError::ConstructInequality(a, b) => {
+            TypeSystemError::ConstructInequality(s, a, b) => {
                 write!(
                     f,
                     "The constructed instantiated type, and the value read from the instantiated \
-                    value formatted as text are not equal.\nInstantiated: {a:#?}\nRead: {b:#?}"
+                    value formatted as text are not equal.\nBauble:\n{s}\n\nInstantiated: {a:#?}\nRead: {b:#?}"
                 )
             }
+            TypeSystemError::MissingObjects {
+                instantiated_missing,
+                loaded_unknown,
+            } => write!(
+                f,
+                "There were missing and/or unknown objects.\nMissing: {instantiated_missing:?}\nUnknown: {loaded_unknown:?}"
+            ),
         }
     }
 }
@@ -433,9 +444,6 @@ impl TypeRegistry {
     }
 
     fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
-        if let Some(d) = ty.meta.default.as_mut() {
-            d.ty = id;
-        }
         for tr in ty.meta.traits.iter() {
             let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
                 panic!("Invariant")
@@ -541,6 +549,7 @@ impl TypeRegistry {
                     .collect(),
             ));
         }
+        let file = TypePath::new("validate").unwrap();
 
         if assert_instanciable {
             let mut objects = Vec::new();
@@ -556,17 +565,36 @@ impl TypeRegistry {
                     continue;
                 }
 
-                let object_path = TypePath::new(format!("{}_{i}", ty.meta.path)).unwrap();
+                let object_name =
+                    TypePathElem::new(format!("{}_{i}", ty.meta.path.get_end().unwrap().1))
+                        .unwrap();
 
-                let Some(value) = self.instantiate(ty_id) else {
+                let object_path = file.join(&object_name);
+
+                let mut additonal = AdditionalUnspannedObjects::new(file, object_name.borrow());
+
+                let Some(value) = self.instantiate(ty_id, &mut additonal) else {
                     return Err(TypeSystemError::NotInstantiable {
                         ty_id,
                         ty: ty.meta.path.borrow(),
                     });
                 };
 
+                for (name, value) in additonal.into_objects() {
+                    objects.push(crate::Object {
+                        object_path: file.join(&name),
+                        value,
+                    })
+                }
+
                 objects.push(crate::Object { object_path, value })
             }
+
+            // Check that instantiated objects match after being serialized to bauble text and
+            // parsed.
+            //
+            // Changes in sub-asset paths are specifically ignored, only the content of the
+            // sub-assets must match.
 
             let source = crate::display_formatted(
                 objects.as_slice(),
@@ -580,7 +608,7 @@ impl TypeRegistry {
 
             let mut ctx = crate::BaubleContext::from(self.clone());
 
-            ctx.register_file(TypePath::new("validate").unwrap(), source);
+            ctx.register_file(file, source.clone());
 
             let (loaded_objects, errors) = ctx.load_all();
 
@@ -590,11 +618,165 @@ impl TypeRegistry {
                 return Err(TypeSystemError::InstantiableErrors);
             }
 
-            for (a, b) in objects.into_iter().zip(loaded_objects) {
-                let unspanned = b.value.into_unspanned();
-                if a.value != unspanned {
-                    return Err(TypeSystemError::ConstructInequality(a.value, unspanned));
+            let instantiated_object_map: HashMap<_, _> = objects
+                .into_iter()
+                .map(|obj| (obj.object_path, obj.value))
+                .collect();
+
+            let loaded_object_map: HashMap<_, _> = loaded_objects
+                .into_iter()
+                .map(|obj| {
+                    (
+                        obj.object_path,
+                        (obj.value.value.span, obj.value.into_unspanned()),
+                    )
+                })
+                .collect();
+
+            let mut missing_objects = Vec::new();
+
+            /// Compare two objects and recursively compare their sub-objects (aka sub-assets)
+            /// while ignoring differences in the paths that refer to those sub-objects (instead
+            /// checking that the values in the sub-objects are indentical).
+            fn compare_objects<'a>(
+                src: &str,
+                instantiated: &UnspannedVal,
+                loaded: &UnspannedVal,
+                inst_map: &HashMap<TypePath, UnspannedVal>,
+                loaded_map: &HashMap<TypePath, (crate::Span, UnspannedVal)>,
+            ) -> Result<(), TypeSystemError<'a>> {
+                let inquality_err = || {
+                    TypeSystemError::ConstructInequality(
+                        src.to_string(),
+                        instantiated.clone(),
+                        loaded.clone(),
+                    )
+                };
+
+                instantiated.attributes.iter().try_for_each(|(n, a)| {
+                    match loaded.attributes.get(n) {
+                        Some((_, b)) => compare_objects(src, a, b, inst_map, loaded_map),
+                        None => Err(inquality_err()),
+                    }
+                })?;
+
+                match (&instantiated.value, &loaded.value) {
+                    (crate::Value::Ref(a), crate::Value::Ref(b)) => {
+                        // Not being writable means this is a sub-asset, so compare the sub assets
+                        // rather than the paths to them.
+                        //
+                        // Note, this means object comparison will pass even when the paths to sub
+                        // assets change.
+                        if !a.is_writable() {
+                            let a = inst_map.get(a).unwrap();
+                            let (_, b) = loaded_map.get(b).unwrap();
+                            compare_objects(src, a, b, inst_map, loaded_map)?;
+                        } else if a != b {
+                            return Err(inquality_err());
+                        }
+                    }
+                    (crate::Value::Tuple(a), crate::Value::Tuple(b))
+                    | (crate::Value::Array(a), crate::Value::Array(b))
+                    | (
+                        crate::Value::Struct(crate::FieldsKind::Unnamed(a)),
+                        crate::Value::Struct(crate::FieldsKind::Unnamed(b)),
+                    ) => {
+                        if a.len() != b.len() {
+                            return Err(inquality_err());
+                        } else if let Some(err) = a.iter().zip(b.iter()).find_map(|(a, b)| {
+                            compare_objects(src, a, b, inst_map, loaded_map).err()
+                        }) {
+                            return Err(err);
+                        }
+                    }
+                    (crate::Value::Map(a), crate::Value::Map(b)) => {
+                        if a.len() != b.len() {
+                            return Err(inquality_err());
+                        } else if let Some(err) =
+                            a.iter().zip(b.iter()).find_map(|((k_a, v_a), (k_b, v_b))| {
+                                compare_objects(src, k_a, k_b, inst_map, loaded_map)
+                                    .err()
+                                    .or_else(|| {
+                                        compare_objects(src, v_a, v_b, inst_map, loaded_map).err()
+                                    })
+                            })
+                        {
+                            return Err(err);
+                        }
+                    }
+                    (
+                        crate::Value::Struct(crate::FieldsKind::Unit),
+                        crate::Value::Struct(crate::FieldsKind::Unit),
+                    ) => {}
+                    (
+                        crate::Value::Struct(crate::FieldsKind::Named(a)),
+                        crate::Value::Struct(crate::FieldsKind::Named(b)),
+                    ) => {
+                        if a.len() != b.len() {
+                            return Err(inquality_err());
+                        } else if let Some(err) = a.iter().find_map(|(n, a)| match b.get(n) {
+                            Some(b) => compare_objects(src, a, b, inst_map, loaded_map).err(),
+                            None => Some(inquality_err()),
+                        }) {
+                            return Err(err);
+                        }
+                    }
+                    (crate::Value::Or(a), crate::Value::Or(b)) => {
+                        if a != b {
+                            return Err(inquality_err());
+                        }
+                    }
+                    (crate::Value::Primitive(a), crate::Value::Primitive(b)) => {
+                        if a != b {
+                            return Err(inquality_err());
+                        }
+                    }
+                    (crate::Value::Transparent(a), crate::Value::Transparent(b)) => {
+                        compare_objects(src, a, b, inst_map, loaded_map)?;
+                    }
+                    (crate::Value::Enum(n_a, a), crate::Value::Enum(n_b, b)) => {
+                        if n_a != n_b {
+                            return Err(inquality_err());
+                        }
+
+                        compare_objects(src, a, b, inst_map, loaded_map)?;
+                    }
+                    _ => {
+                        return Err(inquality_err());
+                    }
+                };
+
+                Ok(())
+            }
+
+            for (s, a, b) in instantiated_object_map.iter().filter_map(|(k, a)| {
+                if !k.is_writable() {
+                    // Don't compare sub-assets, they will be compared by recursion in `compare_objects`
+                    None
+                } else if let Some((span, b)) = loaded_object_map.get(k) {
+                    Some((*span, a, b))
+                } else {
+                    missing_objects.push(k.clone());
+                    None
                 }
+            }) {
+                let s: String = source.chars().skip(s.start).take(s.end - s.start).collect();
+
+                compare_objects(&s, a, b, &instantiated_object_map, &loaded_object_map)?;
+            }
+
+            let unknown_objects: Vec<_> = loaded_object_map
+                .into_keys()
+                // `k.is_writable()` indicates that this is not a sub-asset, `compare_objects`
+                // handles checking for those so we don't produce an error if their paths change.
+                .filter(|k| !instantiated_object_map.contains_key(k) && k.is_writable())
+                .collect();
+
+            if !missing_objects.is_empty() || !unknown_objects.is_empty() {
+                return Err(TypeSystemError::MissingObjects {
+                    instantiated_missing: missing_objects,
+                    loaded_unknown: unknown_objects,
+                });
             }
         }
 
@@ -829,48 +1011,56 @@ impl TypeRegistry {
     }
 
     /// Create the default value of this type.
-    pub fn instantiate(&self, ty_id: TypeId) -> Option<UnspannedVal> {
+    pub fn instantiate(
+        &self,
+        ty_id: TypeId,
+        additional_objects: &mut AdditionalUnspannedObjects,
+    ) -> Option<UnspannedVal> {
         let ty = self.key_type(ty_id);
 
         if let Some(default) = &ty.meta.default {
-            return Some(default.clone().with_type(ty_id));
+            return Some(default(additional_objects, self, ty_id).with_type(ty_id));
         }
 
-        let construct_unnamed = |fields: &UnnamedFields| {
-            fields
-                .required
-                .iter()
-                .map(|f| {
-                    if let Some(d) = &f.default {
-                        Some(d.clone())
-                    } else {
-                        self.instantiate(f.id)
-                    }
-                })
-                .collect::<Option<Vec<_>>>()
-        };
-
-        let construct_named = |fields: &NamedFields| {
-            fields
-                .required
-                .iter()
-                .map(|(s, f)| {
-                    Some((
-                        s.clone(),
+        let construct_unnamed =
+            |fields: &UnnamedFields, additional_objects: &mut AdditionalUnspannedObjects| {
+                fields
+                    .required
+                    .iter()
+                    .map(|f| {
                         if let Some(d) = &f.default {
-                            d.clone()
+                            Some(d.clone())
                         } else {
-                            self.instantiate(f.id)?
-                        },
-                    ))
-                })
-                .collect::<Option<IndexMap<String, UnspannedVal>>>()
-        };
+                            self.instantiate(f.id, additional_objects)
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()
+            };
+
+        let construct_named =
+            |fields: &NamedFields, additional_objects: &mut AdditionalUnspannedObjects| {
+                fields
+                    .required
+                    .iter()
+                    .map(|(s, f)| {
+                        Some((
+                            s.clone(),
+                            if let Some(d) = &f.default {
+                                d.clone()
+                            } else {
+                                self.instantiate(f.id, additional_objects)?
+                            },
+                        ))
+                    })
+                    .collect::<Option<IndexMap<String, UnspannedVal>>>()
+            };
 
         let value = match &ty.kind {
-            TypeKind::Tuple(fields) => crate::Value::Tuple(construct_unnamed(fields)?),
+            TypeKind::Tuple(fields) => {
+                crate::Value::Tuple(construct_unnamed(fields, additional_objects)?)
+            }
             TypeKind::Array(array) => crate::Value::Array(if let Some(l) = array.len {
-                vec![self.instantiate(array.ty.id)?; l]
+                vec![self.instantiate(array.ty.id, additional_objects)?; l]
             } else {
                 Vec::new()
             }),
@@ -878,8 +1068,8 @@ impl TypeRegistry {
                 // TODO: Is it a problem that the keys will be duplicates?
                 vec![
                     (
-                        self.instantiate(map.key.id)?,
-                        self.instantiate(map.value.id)?
+                        self.instantiate(map.key.id, additional_objects)?,
+                        self.instantiate(map.value.id, additional_objects)?
                     );
                     l
                 ]
@@ -890,23 +1080,22 @@ impl TypeRegistry {
                 crate::Value::Struct(match fields {
                     Fields::Unit => crate::FieldsKind::Unit,
                     Fields::Unnamed(fields) => {
-                        crate::FieldsKind::Unnamed(construct_unnamed(fields)?)
+                        crate::FieldsKind::Unnamed(construct_unnamed(fields, additional_objects)?)
                     }
-                    Fields::Named(fields) => crate::FieldsKind::Named(construct_named(fields)?),
+                    Fields::Named(fields) => {
+                        crate::FieldsKind::Named(construct_named(fields, additional_objects)?)
+                    }
                 })
             }
             TypeKind::Enum { variants } => variants.iter().find_map(|(variant, ty)| {
-                self.instantiate(ty)
+                self.instantiate(ty, additional_objects)
                     .map(|v| crate::Value::Enum(variant.to_owned(), Box::new(v)))
             })?,
             TypeKind::Or(_) => crate::Value::Or(Vec::new()),
-            TypeKind::Ref(inner) => {
-                if self.instantiate(*inner).is_some() {
-                    crate::Value::Primitive(crate::PrimitiveValue::Default)
-                } else {
-                    return None;
-                }
-            }
+            TypeKind::Ref(inner) => additional_objects.in_type(*inner, |additional_objects| {
+                self.instantiate(*inner, additional_objects)
+                    .map(|v| additional_objects.add_object(v))
+            })?,
             TypeKind::Primitive(primitive) => crate::Value::Primitive(match primitive {
                 Primitive::Any => crate::PrimitiveValue::Unit,
                 Primitive::Num => crate::PrimitiveValue::Num(rust_decimal::Decimal::ZERO),
@@ -919,9 +1108,10 @@ impl TypeRegistry {
             TypeKind::Transparent(ty) => {
                 let inner = self.key_type(*ty);
                 crate::Value::Transparent(Box::new(if let TypeKind::Trait(tr) = &inner.kind {
-                    self.iter_type_set(tr).find_map(|ty| self.instantiate(ty))?
+                    self.iter_type_set(tr)
+                        .find_map(|ty| self.instantiate(ty, additional_objects))?
                 } else {
-                    self.instantiate(*ty)?
+                    self.instantiate(*ty, additional_objects)?
                 }))
             }
             TypeKind::Trait(tr) => {
@@ -932,7 +1122,9 @@ impl TypeRegistry {
                         .path
                         .cmp(&self.key_type(*b).meta.path)
                 });
-                return v.into_iter().find_map(|t| self.instantiate(t));
+                return v
+                    .into_iter()
+                    .find_map(|t| self.instantiate(t, additional_objects));
             }
             TypeKind::Generic(_) => return None,
         };
@@ -940,14 +1132,29 @@ impl TypeRegistry {
         Some(UnspannedVal {
             ty: ty_id,
             value,
-            attributes: crate::Attributes::from(construct_named(&ty.meta.attributes)?),
+            attributes: crate::Attributes::from(construct_named(
+                &ty.meta.attributes,
+                additional_objects,
+            )?),
         })
     }
 }
 
-#[allow(missing_docs)]
+/// The function type for the validation function for [`TypeMeta`].
 pub type ValidationFunction =
     fn(val: &crate::Val, registry: &TypeRegistry) -> Result<(), crate::ConversionError>;
+
+/// Function that creates a instance of the default value. Stored in [`TypeMeta`].
+///
+/// * `&mut AdditionalUnspannedObjects` allows creating sub-assets if the new value needs to
+///   reference sub-assets.
+/// * `&TypeRegistry` allows calling [`TypeRegistry::instantiate`] to create new default instances
+///   of contained types and is used to get type information of contained types.
+/// * `TypeId` is the ID of the type. This allows the function to retrieve information about the
+///   current type using the `TypeRegistry` parameter, such as type information about
+///   fields/variants that are needed to instantiate them.
+pub type DefaultFunction =
+    fn(&mut AdditionalUnspannedObjects, &TypeRegistry, TypeId) -> UnspannedVal;
 
 /// Meta information on a type registered within a Bauble context.
 #[derive(Default, Clone, Debug)]
@@ -958,8 +1165,8 @@ pub struct TypeMeta {
     pub generic_base_type: Option<GenericTypeId>,
     /// The traits implemented by the type.
     pub traits: Vec<TraitId>,
-    /// The optional default value of the type.
-    pub default: Option<UnspannedVal>,
+    /// Optional function to create a default value of the type.
+    pub default: Option<DefaultFunction>,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.
