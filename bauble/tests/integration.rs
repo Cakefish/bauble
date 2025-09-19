@@ -121,3 +121,15 @@ fn new_nested_reload_paths() {
     test(&[a], &[new_a, new_ab, new_abc]);
     test(&[a], &[new_a, new_abc, new_ab]);
 }
+
+#[test]
+fn duplicate_objects() {
+    // TODO: would be better for this to fail rather than taking the last object? What if the
+    // objects are different types and something references the first one?
+    bauble::bauble_test!(
+        [Test]
+        "test = integration::Test{ x: -5, y: 5 }\n\
+        test = integration::Test{ x: -5, y: 4 }"
+        [Test { x: -5, y: 4 }]
+    );
+}
