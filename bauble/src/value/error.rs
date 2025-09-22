@@ -85,6 +85,10 @@ pub enum ConversionError {
     NotInstantiable {
         ty: TypeId,
     },
+    /// Expected type `ty` to be generic.
+    ExpectedGeneric {
+        ty: TypeId,
+    },
     Custom(CustomError),
 }
 
@@ -156,6 +160,10 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
             ConversionError::NotInstantiable { ty } => Cow::Owned(format!(
                 "Can't construct a default value of the type {}",
+                types.key_type(*ty).meta.path
+            )),
+            ConversionError::ExpectedGeneric { ty } => Cow::Owned(format!(
+                "Expected type `{}` to be a generic type",
                 types.key_type(*ty).meta.path
             )),
             ConversionError::Custom(custom) => custom.message.clone(),
@@ -292,6 +300,9 @@ impl BaubleError for Spanned<ConversionError> {
                     crate::path::PathError::MissingDelimiterStart(_) => "Malformed path",
                     crate::path::PathError::TooManyElements => "Path had too many elements",
                     crate::path::PathError::ZeroElements => "Path had no elements",
+                    crate::path::PathError::DuplicateGenerics => {
+                        "Path has too many generic parameters specified at the end"
+                    }
                 };
 
                 let mut errors = vec![(Cow::Borrowed(generic).spanned(self.span), Level::Error)];
@@ -659,6 +670,9 @@ impl BaubleError for Spanned<ConversionError> {
             ),
             ConversionError::NotInstantiable { .. } => {
                 Cow::Borrowed("Consider specifying this value manually")
+            }
+            ConversionError::ExpectedGeneric { .. } => {
+                Cow::Borrowed("This type is not a valid generic type")
             }
             ConversionError::Custom(custom) => return custom.labels.clone(),
         };

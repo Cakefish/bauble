@@ -8,12 +8,12 @@ use rust_decimal::Decimal;
 use symbols::RefCopy;
 
 use crate::{
+    BaubleErrors, FileId, VariantKind,
     context::PathReference,
     parse::{ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
-    BaubleErrors, FileId, VariantKind,
 };
 
 mod convert;
@@ -23,8 +23,8 @@ mod symbols;
 
 pub use convert::AdditionalUnspannedObjects;
 pub(crate) use convert::AnyVal;
-use convert::{no_attr, value_type, AdditionalObjects, ConvertMeta, ConvertValue};
-pub use display::{display_formatted, DisplayConfig, IndentedDisplay};
+use convert::{AdditionalObjects, ConvertMeta, ConvertValue, no_attr, value_type};
+pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
 pub(crate) use symbols::Symbols;
@@ -1024,7 +1024,13 @@ pub(crate) fn convert_values(
 
         let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
 
-        match convert_object(path, &binding.value, ty, meta!(ident)) {
+        match convert_object(
+            binding.type_path.as_ref(),
+            path,
+            &binding.value,
+            ty,
+            meta!(ident),
+        ) {
             Ok(obj) => ok.push(obj),
             Err(e) => err.push(e),
         }
@@ -1082,12 +1088,19 @@ fn find_copy_refs<'a>(
 
 /// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
 fn convert_object(
+    ty_path: Option<&Path>,
     path: TypePath<&str>,
     value: &ParseVal,
     expected_type: TypeId,
     mut meta: ConvertMeta,
 ) -> Result<Object> {
-    let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
+    let force_ty_generics =
+        if let Some((_, generic)) = ty_path.and_then(|path| path.split_generic()) {
+            Some(meta.symbols.resolve_type(generic)?)
+        } else {
+            None
+        };
+    let value = value.convert(meta.reborrow(), expected_type, no_attr(), force_ty_generics)?;
 
     create_object(path, meta.object_name, value, meta.symbols)
 }

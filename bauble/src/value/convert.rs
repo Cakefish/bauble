@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
+use chumsky::container::Seq;
+
 use crate::{
     ConversionError, FieldsKind, PrimitiveValue, Span,
     parse::ParseVal,
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
-    types::{self, TypeId},
+    types::{self, TypeId, TypeKind},
     value::Fields,
 };
 
@@ -45,7 +47,7 @@ fn set_attributes<C: ConvertValue>(
             .spanned(ident.span));
         }
 
-        let value = value.convert(meta.reborrow(), ty.id, no_attr())?;
+        let value = value.convert(meta.reborrow(), ty.id, no_attr(), None)?;
 
         val.attributes.insert(ident, value);
     }
@@ -450,6 +452,7 @@ where
         mut meta: ConvertMeta<'a>,
         expected_type: TypeId,
         extra_attributes: Option<&'a Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         // Resolve copy refs.
         if let Value::Ref(r) = &value.value
@@ -473,7 +476,12 @@ where
                         extra.0.insert(i, v.container_to_any());
                     }
 
-                    val.convert(meta.reborrow(), expected_type, Some(&extra))
+                    val.convert(
+                        meta.reborrow(),
+                        expected_type,
+                        Some(&extra),
+                        force_generic_arg,
+                    )
                 }
                 _ => val.convert(
                     meta.reborrow(),
@@ -483,6 +491,7 @@ where
                     } else {
                         Some(attributes.value)
                     },
+                    force_generic_arg,
                 ),
             }
             .map_err(|err| {
@@ -509,10 +518,59 @@ where
             value.span,
         )?;
 
+        let span = value.span;
         let types = meta.symbols.ctx.type_registry();
         let ty = types.key_type(ty_id.value);
 
-        let span = value.span;
+        println!("{:?}", ty.kind);
+        println!("{:?}", force_generic_arg);
+        println!("{:?}", val_ty);
+
+        // If the type is generic, and the value is compatible with the generic type,
+        // the parse the generic type as if the value type.
+        if let TypeKind::Generic(set) = &ty.kind
+            && let Some(force_generic_arg) = force_generic_arg
+        {
+            let mut ty = ty.meta.path.clone();
+            let inner_ty = meta.symbols.ctx.type_registry().key_type(force_generic_arg);
+            if matches!(inner_ty.kind, TypeKind::Generic(_)) {
+                return Err(Spanned::new(
+                    span,
+                    ConversionError::Custom(crate::CustomError::new(
+                        "Currently nested generic types are unsupported in other generic types",
+                    )),
+                ));
+            }
+
+            let inner_ty = inner_ty.meta.path.clone();
+            ty.push_generic(
+                TypePath::new(inner_ty.to_string())
+                    .map_err(|err| Spanned::new(span, err))?
+                    .borrow(),
+            )
+            .expect("should never fail");
+            let ty = 'found_ty: {
+                for c in meta.symbols.ctx.type_registry().iter_type_set(set) {
+                    if meta.symbols.ctx.type_registry().key_type(c).meta.path == ty {
+                        break 'found_ty c;
+                    }
+                }
+                return Err(ConversionError::Custom(crate::CustomError::new(
+                    "invalid generic parameter",
+                ))
+                .spanned(ty_id.span));
+            };
+            return Self::convert_inner(
+                value,
+                attributes,
+                val_ty,
+                meta,
+                ty,
+                extra_attributes,
+                None,
+            );
+        }
+
         let expected_err = || {
             ConversionError::ExpectedExactType {
                 expected: expected_type,
@@ -522,6 +580,7 @@ where
         };
 
         if !ty.kind.instanciable() {
+            println!("TRIGGER!");
             Err(expected_err())?
         }
 
@@ -553,7 +612,7 @@ where
                             .spanned(value.get_span(&meta))
                     })?;
 
-                    seq.push(value.convert(meta.reborrow(), ty, no_attr())?);
+                    seq.push(value.convert(meta.reborrow(), ty, no_attr(), None)?);
                 }
 
                 seq
@@ -613,23 +672,26 @@ where
                 value: &C1,
                 meta: ConvertMeta,
                 expected_type: TypeId,
+                force_geneirc_arg: Option<TypeId>,
             ) -> Result<Val>
             where
                 C1: ConvertValue,
             {
                 match std::mem::replace(self, ExtraAttributes::None) {
-                    ExtraAttributes::None => value.convert(meta, expected_type, no_attr()),
+                    ExtraAttributes::None => {
+                        value.convert(meta, expected_type, no_attr(), force_geneirc_arg)
+                    }
                     ExtraAttributes::BorrowedA(attributes) => {
-                        value.convert(meta, expected_type, Some(attributes))
+                        value.convert(meta, expected_type, Some(attributes), force_geneirc_arg)
                     }
                     ExtraAttributes::BorrowedB(attributes) => {
-                        value.convert(meta, expected_type, Some(attributes))
+                        value.convert(meta, expected_type, Some(attributes), force_geneirc_arg)
                     }
                     ExtraAttributes::BorrowedC(attributes) => {
-                        value.convert(meta, expected_type, Some(attributes))
+                        value.convert(meta, expected_type, Some(attributes), force_geneirc_arg)
                     }
                     ExtraAttributes::Owned(attributes) => {
-                        value.convert(meta, expected_type, Some(&attributes))
+                        value.convert(meta, expected_type, Some(&attributes), force_geneirc_arg)
                     }
                 }
             }
@@ -643,6 +705,7 @@ where
                 val_ty: Option<Spanned<TypeId>>,
                 meta: ConvertMeta,
                 expected_type: TypeId,
+                force_geneirc_arg: Option<TypeId>,
             ) -> Result<Val>
             where
                 C1: ConvertValue,
@@ -655,6 +718,7 @@ where
                         meta,
                         expected_type,
                         no_attr(),
+                        force_geneirc_arg,
                     ),
                     ExtraAttributes::BorrowedA(extra_attributes) => Outer::convert_inner(
                         value,
@@ -663,6 +727,7 @@ where
                         meta,
                         expected_type,
                         Some(extra_attributes),
+                        force_geneirc_arg,
                     ),
                     ExtraAttributes::BorrowedB(extra_attributes) => Outer::convert_inner(
                         value,
@@ -671,6 +736,7 @@ where
                         meta,
                         expected_type,
                         Some(extra_attributes),
+                        force_geneirc_arg,
                     ),
                     ExtraAttributes::BorrowedC(extra_attributes) => Outer::convert_inner(
                         value,
@@ -679,6 +745,7 @@ where
                         meta,
                         expected_type,
                         Some(extra_attributes),
+                        force_geneirc_arg,
                     ),
                     ExtraAttributes::Owned(extra_attributes) => Outer::convert_inner(
                         value,
@@ -687,6 +754,7 @@ where
                         meta,
                         expected_type,
                         Some(&extra_attributes),
+                        force_geneirc_arg,
                     ),
                 }
             }
@@ -737,7 +805,8 @@ where
                             continue;
                         };
 
-                        new_attrs.insert(ident, v.convert(meta.reborrow(), ty.id, no_attr())?);
+                        new_attrs
+                            .insert(ident, v.convert(meta.reborrow(), ty.id, no_attr(), None)?);
                     }
 
                     if new_attrs.is_empty() {
@@ -790,7 +859,10 @@ where
                     continue;
                 };
                 // We checked that `new_attributes` didn't contain this field.
-                new_attrs.insert(ident.clone(), v.convert(meta.reborrow(), ty.id, no_attr())?);
+                new_attrs.insert(
+                    ident.clone(),
+                    v.convert(meta.reborrow(), ty.id, no_attr(), None)?,
+                );
             }
 
             if empty {
@@ -872,7 +944,12 @@ where
                     let mut values = Vec::with_capacity(arr.len());
 
                     for value in arr {
-                        values.push(value.convert(meta.reborrow(), array_type.ty.id, no_attr())?);
+                        values.push(value.convert(
+                            meta.reborrow(),
+                            array_type.ty.id,
+                            no_attr(),
+                            None,
+                        )?);
                     }
 
                     Value::Array(values)
@@ -893,8 +970,8 @@ where
 
                     for (key, value) in map {
                         values.push((
-                            key.convert(meta.reborrow(), map_type.key.id, no_attr())?,
-                            value.convert(meta.reborrow(), map_type.value.id, no_attr())?,
+                            key.convert(meta.reborrow(), map_type.key.id, no_attr(), None)?,
+                            value.convert(meta.reborrow(), map_type.value.id, no_attr(), None)?,
                         ));
                     }
 
@@ -933,8 +1010,10 @@ where
                                 .spanned(span))?
                             };
 
-                            new_fields
-                                .insert(field, value.convert(meta.reborrow(), ty.id, no_attr())?);
+                            new_fields.insert(
+                                field,
+                                value.convert(meta.reborrow(), ty.id, no_attr(), None)?,
+                            );
                         }
 
                         FieldsKind::Named(new_fields)
@@ -957,7 +1036,12 @@ where
                         )?;
                         (
                             variant.map(|v| v.to_owned()),
-                            extra_attributes.convert_with(value, meta.reborrow(), ty)?,
+                            extra_attributes.convert_with(
+                                value,
+                                meta.reborrow(),
+                                ty,
+                                force_generic_arg,
+                            )?,
                         )
                     }
                     // Otherwise see if we have the value of an `EnumVariant` or its generic type.
@@ -977,6 +1061,7 @@ where
                                 Some(raw_val_type),
                                 meta.reborrow(),
                                 variant_ty,
+                                force_generic_arg,
                             )?,
                         )
                     }
@@ -998,6 +1083,7 @@ where
                                             raw_val_type,
                                             meta.reborrow(),
                                             ty,
+                                            force_generic_arg,
                                         )
                                         .map_err(|err| variant_errors.push((ty, Box::new(err))))
                                         .ok()?,
@@ -1087,6 +1173,7 @@ where
                         raw_val_type,
                         meta.with_object_name(object_name.borrow()),
                         *ty,
+                        force_generic_arg,
                     )?;
 
                     meta.additional_objects
@@ -1122,7 +1209,12 @@ where
                 }
                 // Either we get a transparent value,
                 (types::TypeKind::Transparent(ty), Value::Transparent(value)) => {
-                    let val = extra_attributes.convert_with(value, meta.reborrow(), *ty)?;
+                    let val = extra_attributes.convert_with(
+                        value,
+                        meta.reborrow(),
+                        *ty,
+                        force_generic_arg,
+                    )?;
 
                     Value::Transparent(Box::new(val))
                 }
@@ -1140,6 +1232,7 @@ where
                         val_ty,
                         meta.reborrow(),
                         *ty,
+                        force_generic_arg,
                     )?;
 
                     Value::Transparent(Box::new(val))
@@ -1151,6 +1244,7 @@ where
                         value,
                         meta.reborrow(),
                         expected_type,
+                        force_generic_arg,
                     )?;
                 }
                 (_, Value::Primitive(PrimitiveValue::Default)) => {
@@ -1233,6 +1327,7 @@ pub(super) trait ConvertValue: ValueContainer {
         meta: ConvertMeta<'a>,
         expected_type: TypeId,
         extra_attributes: Option<&'a Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val>;
 }
 
@@ -1264,6 +1359,7 @@ impl ConvertValue for UnspannedVal {
         meta: ConvertMeta<'a>,
         expected_type: TypeId,
         extra_attributes: Option<&'a Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         let val_ty = Some(self.ty.spanned(meta.default_span));
         Self::convert_inner(
@@ -1273,6 +1369,7 @@ impl ConvertValue for UnspannedVal {
             meta,
             expected_type,
             extra_attributes,
+            force_generic_arg,
         )
     }
 }
@@ -1309,6 +1406,7 @@ impl ConvertValue for Val {
         meta: ConvertMeta<'_>,
         expected_type: TypeId,
         extra_attributes: Option<&Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         let types = meta.symbols.ctx.type_registry();
         let (is_same, can_infer, instanciable) = (
@@ -1336,6 +1434,7 @@ impl ConvertValue for Val {
                     meta,
                     expected_type,
                     extra_attributes,
+                    force_generic_arg,
                 ),
 
                 types::TypeKind::Trait(_) | types::TypeKind::Generic(_) => {
@@ -1400,6 +1499,7 @@ impl ConvertValue for CopyValInner {
         meta: ConvertMeta<'a>,
         expected_type: TypeId,
         extra_attributes: Option<&'a Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         Self::convert_inner(
             self.value.as_ref(),
@@ -1408,6 +1508,7 @@ impl ConvertValue for CopyValInner {
             meta,
             expected_type,
             extra_attributes,
+            force_generic_arg,
         )
     }
 }
@@ -1429,10 +1530,15 @@ impl ConvertValue for CopyVal {
         meta: ConvertMeta,
         expected_type: TypeId,
         extra_attributes: Option<&Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         match self {
-            CopyVal::Copy(val) => val.convert(meta, expected_type, extra_attributes),
-            CopyVal::Resolved(val) => val.convert(meta, expected_type, extra_attributes),
+            CopyVal::Copy(val) => {
+                val.convert(meta, expected_type, extra_attributes, force_generic_arg)
+            }
+            CopyVal::Resolved(val) => {
+                val.convert(meta, expected_type, extra_attributes, force_generic_arg)
+            }
         }
     }
 }
@@ -1479,6 +1585,7 @@ impl ConvertValue for ParseVal {
         meta: ConvertMeta,
         expected_type: TypeId,
         extra_attributes: Option<&Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         let ty = value_type(self, meta.symbols)?;
 
@@ -1489,6 +1596,7 @@ impl ConvertValue for ParseVal {
             meta,
             expected_type,
             extra_attributes,
+            force_generic_arg,
         )
     }
 }
@@ -1512,12 +1620,17 @@ impl ConvertValue for AnyVal<'_> {
         meta: ConvertMeta,
         expected_type: TypeId,
         extra_attributes: Option<&Attributes<C>>,
+        force_generic_arg: Option<TypeId>,
     ) -> Result<Val> {
         match self {
-            AnyVal::Parse(v) => v.convert(meta, expected_type, extra_attributes),
-            AnyVal::Copy(v) => v.convert(meta, expected_type, extra_attributes),
-            AnyVal::Complete(v) => v.convert(meta, expected_type, extra_attributes),
-            AnyVal::Unspanned(v) => v.convert(meta, expected_type, extra_attributes),
+            AnyVal::Parse(v) => v.convert(meta, expected_type, extra_attributes, force_generic_arg),
+            AnyVal::Copy(v) => v.convert(meta, expected_type, extra_attributes, force_generic_arg),
+            AnyVal::Complete(v) => {
+                v.convert(meta, expected_type, extra_attributes, force_generic_arg)
+            }
+            AnyVal::Unspanned(v) => {
+                v.convert(meta, expected_type, extra_attributes, force_generic_arg)
+            }
         }
     }
 }
@@ -1533,7 +1646,7 @@ pub(super) fn convert_copy_value(value: &ParseVal, mut meta: ConvertMeta) -> Res
             default_value_type(meta.symbols, value.value.primitive_type(), Some(*val_type))
                 .unwrap_or(val_type.value);
         value
-            .convert(meta, val_type, no_attr())
+            .convert(meta, val_type, no_attr(), None)
             .map(CopyVal::Resolved)
     } else {
         let mut parse_attributes = || {

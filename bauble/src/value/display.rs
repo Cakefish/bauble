@@ -6,10 +6,10 @@
 use std::{borrow::Borrow, collections::HashMap};
 
 use crate::{
-    parse::{allowed_in_raw_literal, ParseVal, ParseValues, PathTreeEnd, PathTreeNode},
+    Spanned,
+    parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
     path::TypePath,
     types::{TypeKind, TypeRegistry},
-    Spanned,
 };
 
 use super::{Attributes, FieldsKind, Object, UnspannedVal, Val, Value, ValueContainer, ValueTrait};
@@ -716,13 +716,7 @@ impl<CTX> IndentedDisplay<CTX> for PathTreeNode {
                 w.write("}");
             }
             PathTreeEnd::Everything => w.write("*"),
-            PathTreeEnd::PathEnd(path_end) => match path_end {
-                crate::parse::PathEnd::WithIdent(s) => {
-                    w.write("*::");
-                    w.write(s);
-                }
-                crate::parse::PathEnd::Ident(s) => w.write(s),
-            },
+            PathTreeEnd::PathEnd(path_end) => w.write(&path_end.to_string()),
         }
     }
 }

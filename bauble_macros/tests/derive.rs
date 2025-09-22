@@ -378,3 +378,40 @@ fn test_trait() {
         [Trans(Box::new(Foo(32))), Trans(Box::new(Bar("meow".to_string())))]
     );
 }
+
+#[test]
+fn test_generic() {
+    #[derive(Bauble, Debug, PartialEq, Eq)]
+    struct Foo<T: for<'a> Bauble<'a>>(T);
+
+    #[derive(Bauble, Debug, PartialEq, Eq)]
+    struct Bar(u32);
+
+    #[derive(Bauble, Debug, PartialEq, Eq)]
+    struct Str(String);
+
+    bauble_test!(
+        [Foo<Bar>, Foo<Str>, Bar, Str]
+        r#"
+        use derive::{Foo, Bar, Str};
+
+        a: Foo<Bar> = Foo(Bar(24))
+        b: Foo<Str> = Foo(Str("test"))
+        "#
+        [
+            Foo(Bar(24)),
+            Foo(Str(String::from("test"))),
+        ]
+    );
+
+    let ctx = __TEST_CTX.get().unwrap().read().unwrap();
+    let Some(ty) = ctx
+        .type_registry()
+        .get_type::<Foo<Bar>, bauble::DefaultAllocator>()
+    else {
+        panic!("no!!");
+    };
+    println!("{ty:?}");
+
+    panic!();
+}

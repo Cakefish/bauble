@@ -18,7 +18,7 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{value::UnspannedVal, AdditionalUnspannedObjects, Bauble, BaubleAllocator};
+use crate::{AdditionalUnspannedObjects, Bauble, BaubleAllocator, value::UnspannedVal};
 
 #[allow(missing_docs)]
 pub type Extra = IndexMap<String, String>;
@@ -276,7 +276,7 @@ impl TypeRegistry {
 
         // The element at index 0 is always any trait
         let any_trait = this.get_or_register_trait::<dyn std::any::Any>();
-        this.types[any_trait.0 .0].kind = TypeKind::Trait(TypeSet(SealedTypeSet::All));
+        this.types[any_trait.0.0].kind = TypeKind::Trait(TypeSet(SealedTypeSet::All));
 
         // The element at index 1 is any trait.
         let any_id = this.get_or_register_type::<crate::Val, crate::DefaultAllocator>();
@@ -445,7 +445,7 @@ impl TypeRegistry {
 
     fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
         for tr in ty.meta.traits.iter() {
-            let TypeKind::Trait(types) = &mut self.types[tr.0 .0].kind else {
+            let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
                 panic!("Invariant")
             };
 
@@ -517,7 +517,7 @@ impl TypeRegistry {
         }
 
         if let Some(ty) = ty.meta.generic_base_type {
-            let TypeKind::Generic(types) = &mut self.types[ty.0 .0].kind else {
+            let TypeKind::Generic(types) = &mut self.types[ty.0.0].kind else {
                 panic!("`generic_base_type` pointing to a type that isn't `TypeKind::Generic`")
             };
 
@@ -756,7 +756,7 @@ impl TypeRegistry {
     pub fn add_trait_dependency(&mut self, ty: TypeId, tr: TraitId) {
         self.types[ty.0].meta.traits.push(tr);
 
-        let TypeKind::Trait(tr) = &mut self.types[tr.0 .0].kind else {
+        let TypeKind::Trait(tr) = &mut self.types[tr.0.0].kind else {
             unreachable!("Invariant");
         };
 
@@ -831,7 +831,6 @@ impl TypeRegistry {
     /// If this type is generic and its path isn't writable this will return the generic types path.
     pub fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
         let p = self.key_type(ty).meta.path.borrow();
-
         if p.is_writable() {
             Some(p)
         } else if let Some(t) = self.key_type(ty).meta.generic_base_type {
@@ -1298,6 +1297,8 @@ impl From<Primitive> for TypeKind {
 
 impl TypeKind {
     /// If the type may be instanciated (created) inside of Bauble.
+    ///
+    /// `monomorphized`: if a generic type can be resolved to a concrete type.
     pub fn instanciable(&self) -> bool {
         match self {
             TypeKind::Tuple(_)
