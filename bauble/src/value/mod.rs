@@ -762,29 +762,20 @@ pub(crate) fn resolve_delayed(
 pub(crate) fn register_assets(
     path: TypePath<&str>,
     ctx: &mut crate::context::BaubleContext,
-    default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
     values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
     let mut errors = Vec::new();
     let mut delayed = Vec::new();
 
-    // Add default uses to symbols
-    let default_uses = default_uses
-        .into_iter()
-        .map(|(key, val)| (key, RefCopy::Ref(val)))
-        .collect();
-    let mut symbols = Symbols {
-        ctx: &*ctx,
-        uses: default_uses,
-    };
+    let mut symbols = Symbols::new(ctx);
     // Add `uses` to local `Symbols` instance
-    for use_ in &values.uses {
-        if let Err(e) = symbols.add_use(use_) {
+    for use_path in &values.uses {
+        if let Err(e) = symbols.add_use(use_path) {
             errors.push(e);
         }
     }
 
-    // Move uses in/out of `Symbols` every loop so we have mutable access to `ctx` at certain
+    // Move `uses` in/out of `Symbols` every loop so we have mutable access to `ctx` at certain
     // points.
     let Symbols { mut uses, .. } = symbols;
 

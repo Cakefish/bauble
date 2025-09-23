@@ -173,6 +173,13 @@ impl BaubleContextBuilder {
             panic!("Type system error: {e}");
         }
         let mut root_node = CtxNode::new(TypePath::empty());
+        // Every default use is added as a child node of the root with a redirect reference that
+        // points to the full path.
+        //
+        // As children of the root they are directly referencable by the provided name in any file.
+        //
+        // If other references are available at the same name, they will be preferred over the
+        // redirect.
         for (id, path) in self.default_uses.0 {
             root_node.add_node(id.borrow()).reference.redirect = Some(path);
         }
@@ -609,7 +616,7 @@ impl BaubleContext {
             // Need a partial borrow here.
             let (path, _) = self.file(*file);
             let path = path.to_owned();
-            match crate::value::register_assets(path.borrow(), self, [], values) {
+            match crate::value::register_assets(path.borrow(), self, values) {
                 Ok(d) => {
                     delayed.extend(d);
                 }
