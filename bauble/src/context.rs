@@ -12,13 +12,6 @@ pub type Source = ariadne::Source<String>;
 #[derive(Clone, Default)]
 struct DefaultUses(IndexMap<TypePathElem, TypePath>);
 
-#[derive(Default, Clone, Debug)]
-struct InnerReference {
-    ty: Option<TypeId>,
-    asset: Option<TypeId>,
-    redirect: Option<TypePath>,
-}
-
 /// A type containing multiple references generally derived from a path.
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
@@ -159,8 +152,6 @@ impl BaubleContextBuilder {
         self
     }
 
-    // TODO: documentation
-    #[allow(missing_docs)]
     /// # Panics
     ///
     /// Can panic if `T`'s `TypeKind` isn't a primitive.
@@ -201,9 +192,29 @@ impl BaubleContextBuilder {
     }
 }
 
+#[derive(Default, Clone, Debug)]
+struct InnerReference {
+    ty: Option<TypeId>,
+    asset: Option<TypeId>,
+    redirect: Option<TypePath>,
+}
+
+/// Represents a name in one or multiple of the type, asset, module, and default use namespaces.
+///
+/// If there is a module at this name, this holds a list of the `CtxNode`s in that module.
 #[derive(Clone, Debug)]
 struct CtxNode {
+    /// This name can potentially reference:
+    /// * A type
+    /// * An asset
+    /// * A default use (aka `InnerReference::redirect`) (TODO: actually look into this, I don't
+    ///   understand why these are only added to the root node so I don't actually know how they
+    ///   work)
+    /// * A module (not represented here but via the `Self::children` field).
     reference: InnerReference,
+    /// Full path to this node.
+    ///
+    /// This is the path to reach this node from the root.
     path: TypePath,
     /// `Some` when this node is the top level module of a file (currently inline modules don't
     /// exist but there is some allowance for them).
@@ -217,9 +228,9 @@ impl CtxNode {
     fn new(path: TypePath) -> Self {
         Self {
             path,
-            reference: Default::default(),
-            source: Default::default(),
-            children: Default::default(),
+            reference: InnerReference::default(),
+            source: None,
+            children: IndexMap::<_, _>::default(),
         }
     }
 
