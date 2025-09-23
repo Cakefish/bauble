@@ -2,7 +2,7 @@
 use bauble::Bauble;
 use bauble::BaubleContext;
 use bauble::Object;
-use bauble::path::TypePath;
+use bauble::path::{TypePath, TypePathElem};
 
 #[derive(Bauble, PartialEq, Debug)]
 struct Test {
@@ -63,7 +63,7 @@ fn test_reload(
 
     // Test initial parsing from source
     for file in start {
-        ctx.register_file(file.path.borrow(), &file.content); // format!("\n{}\n", inner_content));
+        ctx.register_file(file.path.borrow(), &file.content);
     }
 
     let (objects, errors) = ctx.load_all();
@@ -124,12 +124,81 @@ fn new_nested_reload_paths() {
 
 #[test]
 fn duplicate_objects() {
-    // TODO: would be better for this to fail rather than taking the last object? What if the
-    // objects are different types and something references the first one?
+    // TODO: make this fail!
     bauble::bauble_test!(
         [Test]
         "test = integration::Test{ x: -5, y: 5 }\n\
         test = integration::Test{ x: -5, y: 4 }"
         [Test { x: -5, y: 4 }]
+    );
+}
+
+fn test_load(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder), files: &[&TestFile]) {
+    // Test that parsed objects convert into typed values that match the provided test values.
+    let compare_objects = |objects: Vec<Object>, files: &[&TestFile], ctx: &BaubleContext| {
+        let mut objects = objects.into_iter();
+        for test_value in files.iter().flat_map(|f| &f.expected_values) {
+            let object = objects.next().expect("Not as many objects as test expects");
+            test_value(object, ctx);
+        }
+
+        if objects.next().is_some() {
+            panic!("More objects than test expects");
+        }
+    };
+
+    let mut ctx = bauble::BaubleContextBuilder::new();
+    with_ctx_builder(&mut ctx);
+    let mut ctx = ctx.build();
+    ctx.type_registry()
+        .validate(true)
+        .expect("Invalid type registry");
+
+    // Test initial parsing from source
+    for file in files {
+        ctx.register_file(file.path.borrow(), &file.content);
+    }
+
+    let (objects, errors) = ctx.load_all();
+    if !errors.is_empty() {
+        bauble::print_errors(Err::<(), _>(errors), &ctx);
+        panic!("Error converting");
+    }
+    compare_objects(objects, files, &ctx);
+}
+
+#[test]
+fn empty_module() {
+    let a = &test_file!(
+        "a",
+        "use a::empty_module;\n\
+         test = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+
+    let empty_module = &test_file!("a::empty_module", "",);
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, empty_module],
+    );
+}
+
+#[test]
+fn default_uses() {
+    let a = &test_file!("a", "test = Test { x: -5, y: 5 }", Test { x: -5, y: 5 },);
+    let a_b = &test_file!("a::b", "test = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+            ctx.with_default_use(
+                TypePathElem::new("Test").unwrap().to_owned(),
+                TypePath::new("integration::Test").unwrap().to_owned(),
+            );
+        },
+        &[a, a_b],
     );
 }
