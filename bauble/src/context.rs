@@ -760,7 +760,7 @@ impl BaubleContext {
     }
 
     /// Get all the references starting from `path` which belong to `kind`, with an optional maximum depth of `max_depth`.
-    pub fn ref_kinds(
+    pub fn refs_of_kind(
         &self,
         path: TypePath<&str>,
         kind: crate::value::RefKind,
