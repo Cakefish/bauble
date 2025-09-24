@@ -1021,36 +1021,36 @@ where
                     if matches!(f, FieldsKind::Unit) {
                         if let Some(val_type) = raw_val_type {
                             match &types.key_type(val_type.value).kind {
-                            types::TypeKind::EnumVariant {
-                                variant,
-                                enum_type,
-                                fields,
-                            } => {
-                                debug_assert!(matches!(fields, types::Fields::Unit));
-                                debug_assert_eq!(*enum_type, *ty_id);
-                                debug_assert!(variants.variants.contains(variant));
+                                types::TypeKind::EnumVariant {
+                                    variant,
+                                    enum_type,
+                                    fields,
+                                } => {
+                                    debug_assert!(matches!(fields, types::Fields::Unit));
+                                    debug_assert_eq!(*enum_type, *ty_id);
+                                    debug_assert!(variants.variants.contains(variant));
 
-                                Value::Or(vec![variant.clone().spanned(span)])
+                                    Value::Or(vec![variant.clone().spanned(span)])
+                                }
+
+                                types::TypeKind::Generic(generic) => types
+                                    .iter_type_set(generic)
+                                    .next()
+                                    .map(|t| {
+                                        if let types::TypeKind::EnumVariant { variant, .. } =
+                                            &types.key_type(t).kind
+                                        {
+                                            Value::Or(vec![variant.clone().spanned(span)])
+                                        } else {
+                                            unreachable!(
+                                                "Our type checking should make sure this can't happen"
+                                            )
+                                        }
+                                    })
+                                    .expect("Our type checking should make sure this can't happen"),
+
+                                _ => Err(expected_err())?,
                             }
-
-                            types::TypeKind::Generic(generic) => types
-                                .iter_type_set(generic)
-                                .next()
-                                .map(|t| {
-                                    if let types::TypeKind::EnumVariant { variant, .. } =
-                                        &types.key_type(t).kind
-                                    {
-                                        Value::Or(vec![variant.clone().spanned(span)])
-                                    } else {
-                                        unreachable!(
-                                            "Our type checking should make sure this can't happen"
-                                        )
-                                    }
-                                })
-                                .expect("Our type checking should make sure this can't happen"),
-
-                            _ => Err(expected_err())?,
-                        }
                         } else {
                             Err(expected_err())?
                         }
