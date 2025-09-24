@@ -761,21 +761,28 @@ pub(crate) fn register_assets(
     default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
     values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
-    let mut uses = default_uses
-        .into_iter()
-        .map(|(key, val)| (key, RefCopy::Ref(val)))
-        .collect();
     let mut errors = Vec::new();
     let mut delayed = Vec::new();
 
-    let mut symbols = Symbols { ctx: &*ctx, uses };
+    // Add default uses to symbols
+    let default_uses = default_uses
+        .into_iter()
+        .map(|(key, val)| (key, RefCopy::Ref(val)))
+        .collect();
+    let mut symbols = Symbols {
+        ctx: &*ctx,
+        uses: default_uses,
+    };
+    // Add `uses` to local `Symbols` instance
     for use_ in &values.uses {
         if let Err(e) = symbols.add_use(use_) {
             errors.push(e);
         }
     }
 
-    Symbols { uses, .. } = symbols;
+    // Move uses in/out of `Symbols` every loop so we have mutable access to `ctx` at certain
+    // points.
+    let Symbols { mut uses, .. } = symbols;
 
     // TODO: Register these in a correct order to allow for assets referencing assets.
     for (ident, binding) in &values.values {
@@ -809,7 +816,7 @@ pub(crate) fn register_assets(
                 });
 
             if res.is_err()
-                && let Value::Ref(reference) = &binding.value.value.value
+                && let Value::Ref(reference) = &*binding.value.value
                 && let Ok(reference) = symbols.resolve_path(reference)
             {
                 delayed.push(DelayedRegister {
@@ -859,8 +866,8 @@ pub(crate) fn convert_values(
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
     let mut use_symbols = Symbols::new(default_symbols.ctx);
     let mut use_errors = Vec::new();
-    for use_ in values.uses {
-        if let Err(e) = use_symbols.add_use(&use_) {
+    for use_path in values.uses {
+        if let Err(e) = use_symbols.add_use(&use_path) {
             use_errors.push(e);
         }
     }

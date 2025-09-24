@@ -101,7 +101,7 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
         return Ok(Some(symbols.resolve_type(ty)?.spanned(ty.span())));
     };
 
-    let ty = match &value.value.value {
+    let ty = match &*value.value {
         Value::Ref(path) => {
             // Don't resolve types of copy types.
             if let Some(ident) = path.as_ident()
