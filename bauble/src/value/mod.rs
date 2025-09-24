@@ -678,6 +678,8 @@ pub(crate) fn resolve_delayed(
         delayed.retain(|d| {
             if let Some(r) = match &d.reference.value {
                 PathKind::Direct(path) => ctx.get_ref(path.borrow()),
+                // TODO: what if indirect path becomes ambiguous due to later registered items that
+                // were delayed?
                 PathKind::Indirect(path, ident) => {
                     ctx.ref_with_ident(path.borrow(), ident.borrow())
                 }
@@ -722,6 +724,8 @@ pub(crate) fn resolve_delayed(
                             .spanned(scc[0].span),
                         )
                     } else {
+                        // TODO: Is this path possible? Wouldn't Ref have to refer to itself for
+                        // scc.len() == 1?
                         errors.push(
                             ConversionError::RefError(Box::new(RefError {
                                 // TODO: Could pass uses here for better suggestions.

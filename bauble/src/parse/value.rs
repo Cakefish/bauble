@@ -9,6 +9,7 @@ use indexmap::IndexMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathEnd {
+    // TODO: document how this syntax works?
     /// path::*::ident
     WithIdent(Ident),
     /// path::ident

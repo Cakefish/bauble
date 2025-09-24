@@ -82,6 +82,7 @@ impl<'a> Symbols<'a> {
     }
 
     pub fn add(&mut self, symbols: Symbols) {
+        // TODO: what about conflicting entries?
         self.uses.extend(symbols.uses)
     }
 
