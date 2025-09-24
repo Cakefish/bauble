@@ -231,8 +231,9 @@ impl CtxNode {
         };
 
         if let Some(redirect) = self.reference.redirect.as_ref()
-            && let Some(mut reference) = root.walk(redirect.borrow(), |node| node.reference(root))
+            && let Some(node) = root.node_at(redirect.borrow())
         {
+            let mut reference = node.reference(root);
             reference.combine_override(this);
             this = reference;
         }
@@ -290,20 +291,16 @@ impl CtxNode {
 
         find_inner(self, ident, visit).ok()
     }
-    fn walk<'a, R>(
-        &'a self,
-        path: TypePath<&str>,
-        visit: impl FnOnce(&'a CtxNode) -> R,
-    ) -> Option<R> {
-        if path.is_empty() {
-            Some(visit(self))
+
+    /// Gets node found at the end of the walking the provided path from the current node.
+    ///
+    /// Returns `None` if no node exists at this path.
+    fn node_at(&self, path: TypePath<&str>) -> Option<&Self> {
+        if let Some((root, rest)) = path.split_start() {
+            self.children.get(&root).and_then(|node| node.node_at(rest))
+        // Path is empty, get current node.
         } else {
-            let Some((root, rest)) = path.split_start() else {
-                unreachable!("We checked that the path wasn't empty")
-            };
-            self.children
-                .get(&root)
-                .and_then(|node| node.walk(rest, visit))
+            Some(self)
         }
     }
 
@@ -344,20 +341,13 @@ impl CtxNode {
         walk_find_inner(self, path, &mut visit)
     }
 
-    fn walk_mut<R>(
-        &mut self,
-        path: TypePath<&str>,
-        visit: impl FnOnce(&mut CtxNode) -> R,
-    ) -> Option<R> {
-        if path.is_empty() {
-            Some(visit(self))
-        } else {
-            let Some((root, rest)) = path.split_start() else {
-                unreachable!("We checked that the path wasn't empty")
-            };
+    fn node_at_mut(&mut self, path: TypePath<&str>) -> Option<&mut Self> {
+        if let Some((root, rest)) = path.split_start() {
             self.children
                 .get_mut(&root)
-                .and_then(|node| node.walk_mut(rest, visit))
+                .and_then(|node| node.node_at_mut(rest))
+        } else {
+            Some(self)
         }
     }
 
@@ -513,8 +503,8 @@ impl BaubleContext {
                 let processed_path = preprocess_path(path.borrow());
                 let file_id = self
                     .root_node
-                    .walk(processed_path, |node| node.source)
-                    .flatten();
+                    .node_at(processed_path)
+                    .and_then(|node| node.source);
                 match file_id {
                     Some(id) => {
                         *self.file_mut(id).1 = Source::from(source.into());
@@ -558,8 +548,9 @@ impl BaubleContext {
         for file in files.iter() {
             // Need a partial borrow here.
             let (path, _) = &self.files[file.0];
-            self.root_node
-                .walk_mut(path.borrow(), |node| node.clear_child_assets());
+            if let Some(node) = self.root_node.node_at_mut(path.borrow()) {
+                node.clear_child_assets();
+            }
         }
 
         let mut file_values = Vec::with_capacity(files.len());
@@ -656,13 +647,14 @@ impl BaubleContext {
     /// bauble item at the current path.
     pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
         self.root_node
-            .walk(path, |node| node.reference(&self.root_node))
+            .node_at(path)
+            .map(|node| node.reference(&self.root_node))
     }
 
     /// Takes a path to a module in bauble, and if the path is valid, return the meta information
     /// of all items inside of thatm module (not recursive).
     pub fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
-        self.root_node.walk(path, |node| {
+        self.root_node.node_at(path).map(|node| {
             node.children
                 .iter()
                 .map(|(key, child_node)| (key.to_owned(), child_node.reference(&self.root_node)))
@@ -677,17 +669,15 @@ impl BaubleContext {
         path: TypePath<&str>,
         ident: TypePathElem<&str>,
     ) -> Option<PathReference> {
-        self.root_node
-            .walk(path, |node| {
-                node.iter_all_children(None)
-                    .filter(|node| node.path.ends_with(*ident.borrow()))
-                    .map(|node| node.reference(&self.root_node))
-                    .reduce(|a, mut b| {
-                        b.combine_override(a);
-                        b
-                    })
-            })
-            .flatten()
+        self.root_node.node_at(path).and_then(|node| {
+            node.iter_all_children(None)
+                .filter(|node| node.path.ends_with(*ident.borrow()))
+                .map(|node| node.reference(&self.root_node))
+                .reduce(|a, mut b| {
+                    b.combine_override(a);
+                    b
+                })
+        })
     }
 
     /// If there is any associated file for `path`, get the ID of that file.
@@ -727,7 +717,8 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| node.iter_all_children(max_depth))
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
             .filter(|node| node.reference(&self.root_node).asset.is_some())
@@ -741,7 +732,8 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| node.iter_all_children(max_depth))
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
             .filter(|node| node.reference(&self.root_node).ty.is_some())
@@ -755,7 +747,8 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| node.iter_all_children(max_depth))
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
             .filter(|node| node.reference(&self.root_node).module.is_some())
@@ -770,7 +763,8 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> + Clone {
         self.root_node
-            .walk(path, |node| node.iter_all_children(max_depth))
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
             .filter(move |node| {
