@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::HashMap};
 use crate::{
     BaubleContext,
     context::PathReference,
-    parse::{Path, PathEnd, PathTreeEnd, Use},
+    parse::{Path, PathEnd, PathTreeEnd, PathTreeNode},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
@@ -75,7 +75,7 @@ impl<'a> Symbols<'a> {
         self.uses.extend(symbols.uses)
     }
 
-    pub fn add_use(&mut self, use_: &Use) -> Result<()> {
+    pub fn add_use(&mut self, use_path: &Spanned<PathTreeNode>) -> Result<()> {
         fn add_use_inner(
             this: &mut Symbols,
             leading: TypePath,
@@ -154,7 +154,7 @@ impl<'a> Symbols<'a> {
         }
 
         let mut leading = TypePath::empty();
-        for l in use_.leading.iter() {
+        for l in use_path.leading.iter() {
             leading.push_str(l).map_err(|e| e.spanned(l.span))?;
             if self.ctx.get_ref(leading.borrow()).is_none() {
                 return Err(ConversionError::RefError(Box::new(RefError {
@@ -166,7 +166,7 @@ impl<'a> Symbols<'a> {
                 .spanned(l.span));
             }
         }
-        add_use_inner(self, leading, &use_.end)
+        add_use_inner(self, leading, &use_path.end)
     }
 
     pub(super) fn try_resolve_copy<'b>(
