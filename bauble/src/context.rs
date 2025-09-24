@@ -304,12 +304,14 @@ impl CtxNode {
         }
     }
 
-    /// Tries to find with `visit`. If `path` doesn't return `Some` when passed to `visit`, we
-    /// run `visit` with the parent node and so on.
+    /// Tries to find node where `visit` returns `Some`.
     ///
-    /// Returns the path that we got the result from and `R`.
+    /// We start at the end of `path` and walk up to the current node. Stops when `Some` is
+    /// returned by `visit`.
     ///
-    /// Returns None if `path` doesn't exist.
+    /// Returns the path that we got `Some` from and `R`.
+    ///
+    /// Returns `None` if `path` doesn't exist or if all `visit`ed nodes produced `None`.
     fn walk_find<'a, R: 'a>(
         &'a self,
         path: TypePath<&str>,
@@ -319,26 +321,27 @@ impl CtxNode {
             node: &'a CtxNode,
             path: TypePath<&str>,
             visit: &mut impl FnMut(&'a CtxNode) -> Option<R>,
-        ) -> Option<(TypePath, R)> {
-            if path.is_empty() {
-                Some((TypePath::empty(), visit(node)?))
-            } else {
-                let Some((root, rest)) = path.split_start() else {
-                    unreachable!("We checked that the path wasn't empty")
+        ) -> Result<Option<(TypePath, R)>, ()> {
+            if let Some((root, rest)) = path.split_start() {
+                let Some(child_node) = node.children.get(&root) else {
+                    // Path doesn't exist
+                    return Err(());
                 };
-                let child_node = node.children.get(&root)?;
-                match walk_find_inner(child_node, rest, visit) {
+                walk_find_inner(child_node, rest, visit).map(|maybe| match maybe {
                     Some((mut path, r)) => {
                         path.push_start(root.into());
 
                         Some((path, r))
                     }
-                    None => Some((TypePath::empty(), visit(node)?)),
-                }
+                    None => visit(node).map(|r| (TypePath::empty(), r)),
+                })
+            } else {
+                // Path is empty
+                Ok(visit(node).map(|r| (TypePath::empty(), r)))
             }
         }
 
-        walk_find_inner(self, path, &mut visit)
+        walk_find_inner(self, path, &mut visit).ok().flatten()
     }
 
     fn node_at_mut(&mut self, path: TypePath<&str>) -> Option<&mut Self> {
