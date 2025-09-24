@@ -579,14 +579,16 @@ impl BaubleContext {
 
         let mut delayed = Vec::new();
 
-        for (file, values) in files.iter().zip(file_values.iter()).filter(|(file, _)| {
-            if skip_iter.peek() == Some(file) {
-                skip_iter.next();
-                false
-            } else {
-                true
-            }
-        }) {
+        // TODO: won't this have a mismatch in the `zip` when some files were skipped and not
+        // pushed to `file_values`? (similar for loop below)
+
+        // Register assets from each successfully parsed file into the context.
+        for (file, values) in files
+            .iter()
+            .zip(file_values.iter())
+            // Skip files with errors
+            .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
+        {
             // Need a partial borrow here.
             let (path, _) = self.file(*file);
             let path = path.to_owned();
@@ -603,6 +605,7 @@ impl BaubleContext {
         }
 
         skip.extend(new_skip);
+
         // TODO: Less hacky way to get which files errored here?
         if let Err(e) = crate::value::resolve_delayed(delayed, self) {
             // We want to skip any files that had errors.
@@ -622,14 +625,12 @@ impl BaubleContext {
 
         let mut skip_iter = skip.iter().copied().peekable();
 
-        for (file, values) in files.iter().zip(file_values).filter(|(file, _)| {
-            if skip_iter.peek() == Some(file) {
-                skip_iter.next();
-                false
-            } else {
-                true
-            }
-        }) {
+        for (file, values) in files
+            .iter()
+            .zip(file_values)
+            // Skip files with errors
+            .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
+        {
             match crate::value::convert_values(*file, values, &crate::value::Symbols::new(&*self)) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
