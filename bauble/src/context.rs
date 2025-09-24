@@ -240,11 +240,12 @@ impl CtxNode {
         this
     }
 
-    fn filter<'a>(
+    /// Recursively iterate all children of this node with an optional max depth of `max_depth`.
+    fn iter_all_children<'a>(
         &'a self,
-        filter: impl Fn(&CtxNode) -> bool + Copy,
         max_depth: Option<usize>,
-    ) -> impl Iterator<Item = TypePath<&'a str>> + Clone {
+    ) -> impl Iterator<Item = &'a Self> + Clone {
+        // pre-order depth first traversal
         let mut stack: Vec<(usize, indexmap::map::Values<'a, TypePathElem, CtxNode>)> = Vec::new();
         stack.push((0, self.children.values()));
         std::iter::from_fn(move || {
@@ -259,9 +260,7 @@ impl CtxNode {
                     stack.push((new_depth, inner.children.values()));
                 }
 
-                if filter(inner) {
-                    return Some(inner.path.borrow());
-                }
+                return Some(inner);
             }
 
             None
@@ -664,8 +663,9 @@ impl BaubleContext {
     ) -> Option<PathReference> {
         self.root_node
             .walk(path, |node| {
-                node.filter(|node| node.path.ends_with(*ident.borrow()), None)
-                    .filter_map(|n| self.root_node.walk(n, |n| n.reference(&self.root_node)))
+                node.iter_all_children(None)
+                    .filter(|node| node.path.ends_with(*ident.borrow()))
+                    .map(|node| node.reference(&self.root_node))
                     .reduce(|a, mut b| {
                         b.combine_override(a);
                         b
@@ -711,14 +711,11 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| {
-                node.filter(
-                    |node| node.reference(&self.root_node).asset.is_some(),
-                    max_depth,
-                )
-            })
+            .walk(path, |node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(|node| node.reference(&self.root_node).asset.is_some())
+            .map(|node| node.path.borrow())
     }
 
     /// Get all the types starting from `path`, with an optional maximum depth of `max_depth`.
@@ -728,14 +725,11 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| {
-                node.filter(
-                    |node| node.reference(&self.root_node).ty.is_some(),
-                    max_depth,
-                )
-            })
+            .walk(path, |node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(|node| node.reference(&self.root_node).ty.is_some())
+            .map(|node| node.path.borrow())
     }
 
     /// Get all the modules starting from `path`, with an optional maximum depth of `max_depth`.
@@ -745,14 +739,11 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| {
-                node.filter(
-                    |node| node.reference(&self.root_node).module.is_some(),
-                    max_depth,
-                )
-            })
+            .walk(path, |node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(|node| node.reference(&self.root_node).module.is_some())
+            .map(|node| node.path.borrow())
     }
 
     /// Get all the references starting from `path` which belong to `kind`, with an optional maximum depth of `max_depth`.
@@ -763,22 +754,19 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> + Clone {
         self.root_node
-            .walk(path, move |node| {
-                node.filter(
-                    move |node| {
-                        let r = node.reference(&self.root_node);
-                        match kind {
-                            crate::value::RefKind::Module => r.module.is_some(),
-                            crate::value::RefKind::Asset => r.asset.is_some(),
-                            crate::value::RefKind::Type => r.ty.is_some(),
-                            crate::value::RefKind::Any => true,
-                        }
-                    },
-                    max_depth,
-                )
-            })
+            .walk(path, |node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(move |node| {
+                let r = node.reference(&self.root_node);
+                match kind {
+                    crate::value::RefKind::Module => r.module.is_some(),
+                    crate::value::RefKind::Asset => r.asset.is_some(),
+                    crate::value::RefKind::Type => r.ty.is_some(),
+                    crate::value::RefKind::Any => true,
+                }
+            })
+            .map(|node| node.path.borrow())
     }
 }
 
