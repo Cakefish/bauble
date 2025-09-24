@@ -36,30 +36,53 @@ macro_rules! test_file {
     };
 }
 
-fn test_reload(
-    register_types: &dyn Fn(&mut bauble::BaubleContextBuilder),
-    start: &[&TestFile],
-    new: &[&TestFile],
-) {
-    // Test that parsed objects convert into typed values that match the provided test values.
-    let compare_objects = |objects: Vec<Object>, files: &[&TestFile], ctx: &BaubleContext| {
-        let mut objects = objects.into_iter();
-        for test_value in files.iter().flat_map(|f| &f.expected_values) {
-            let object = objects.next().expect("Not as many objects as test expects");
-            test_value(object, ctx);
-        }
+// Test that parsed objects convert into typed values that match the provided test values.
+fn compare_objects(objects: Vec<Object>, files: &[&TestFile], ctx: &BaubleContext) {
+    let mut objects = objects.into_iter();
+    for (index, test_value) in files.iter().flat_map(|f| &f.expected_values).enumerate() {
+        let object = objects.next().unwrap_or_else(|| {
+            panic!("{} objects found, test expects more", index);
+        });
+        test_value(object, ctx);
+    }
 
-        if objects.next().is_some() {
-            panic!("More objects than test expects");
-        }
-    };
+    if objects.next().is_some() {
+        panic!("More objects than test expects");
+    }
+}
 
+fn make_ctx(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder)) -> bauble::BaubleContext {
     let mut ctx = bauble::BaubleContextBuilder::new();
-    register_types(&mut ctx);
-    let mut ctx = ctx.build();
+    with_ctx_builder(&mut ctx);
+    let ctx = ctx.build();
     ctx.type_registry()
         .validate(true)
         .expect("Invalid type registry");
+    ctx
+}
+
+fn test_load(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder), files: &[&TestFile]) {
+    let mut ctx = make_ctx(with_ctx_builder);
+
+    // Test initial parsing from source
+    for file in files {
+        ctx.register_file(file.path.borrow(), &file.content);
+    }
+
+    let (objects, errors) = ctx.load_all();
+    if !errors.is_empty() {
+        bauble::print_errors(Err::<(), _>(errors), &ctx);
+        panic!("Error converting");
+    }
+    compare_objects(objects, files, &ctx);
+}
+
+fn test_reload(
+    with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder),
+    start: &[&TestFile],
+    new: &[&TestFile],
+) {
+    let mut ctx = make_ctx(with_ctx_builder);
 
     // Test initial parsing from source
     for file in start {
@@ -80,6 +103,29 @@ fn test_reload(
         panic!("Error converting reload");
     }
     compare_objects(objects, new, &ctx);
+}
+
+/// Doesn't fail test when some files have errors as long as they had no expected values.
+///
+/// Expects at least one error.
+fn test_load_partial(
+    with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder),
+    files: &[&TestFile],
+) {
+    let mut ctx = make_ctx(with_ctx_builder);
+
+    // Test initial parsing from source
+    for file in files {
+        ctx.register_file(file.path.borrow(), &file.content);
+    }
+
+    let (objects, errors) = ctx.load_all();
+    if errors.is_empty() {
+        panic!("At least one error is expected");
+    } else {
+        bauble::print_errors(Err::<(), _>(errors), &ctx);
+    }
+    compare_objects(objects, files, &ctx);
 }
 
 #[test]
@@ -133,40 +179,6 @@ fn duplicate_objects() {
     );
 }
 
-fn test_load(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder), files: &[&TestFile]) {
-    // Test that parsed objects convert into typed values that match the provided test values.
-    let compare_objects = |objects: Vec<Object>, files: &[&TestFile], ctx: &BaubleContext| {
-        let mut objects = objects.into_iter();
-        for test_value in files.iter().flat_map(|f| &f.expected_values) {
-            let object = objects.next().expect("Not as many objects as test expects");
-            test_value(object, ctx);
-        }
-
-        if objects.next().is_some() {
-            panic!("More objects than test expects");
-        }
-    };
-
-    let mut ctx = bauble::BaubleContextBuilder::new();
-    with_ctx_builder(&mut ctx);
-    let mut ctx = ctx.build();
-    ctx.type_registry()
-        .validate(true)
-        .expect("Invalid type registry");
-
-    // Test initial parsing from source
-    for file in files {
-        ctx.register_file(file.path.borrow(), &file.content);
-    }
-
-    let (objects, errors) = ctx.load_all();
-    if !errors.is_empty() {
-        bauble::print_errors(Err::<(), _>(errors), &ctx);
-        panic!("Error converting");
-    }
-    compare_objects(objects, files, &ctx);
-}
-
 #[test]
 fn empty_module() {
     let a = &test_file!(
@@ -200,5 +212,28 @@ fn default_uses() {
             );
         },
         &[a, a_b],
+    );
+}
+
+/// Test that successful files are handled correctly when some files fail to parse.
+#[test]
+fn some_files_fail() {
+    let a = &test_file!(
+        "a",
+        "test = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let b = &test_file!("b", "This file fails to parse",);
+    let c = &test_file!(
+        "c",
+        "test = integration::Test { x: -3, y: 3 }",
+        Test { x: -3, y: 3 },
+    );
+
+    test_load_partial(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, b, c],
     );
 }
