@@ -68,24 +68,6 @@ pub mod private {
     pub use indexmap::IndexMap;
 }
 
-use parse::ParseValues;
-
-fn parse(file_id: FileId, ctx: &BaubleContext) -> Result<ParseValues, BaubleErrors> {
-    use chumsky::Parser;
-
-    let parser = parse::parser();
-    let result = parser.parse(parse::ParserSource { file_id, ctx });
-
-    result.into_result().map_err(|errors| {
-        BaubleErrors::from(
-            errors
-                .into_iter()
-                .map(|e| e.into_owned())
-                .collect::<Vec<_>>(),
-        )
-    })
-}
-
 // TODO(@docs)
 #[allow(missing_docs)]
 #[macro_export]

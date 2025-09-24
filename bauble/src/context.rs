@@ -528,6 +528,22 @@ impl BaubleContext {
         self.reload_files(ids)
     }
 
+    fn parse(&self, file_id: FileId) -> Result<crate::parse::ParseValues, BaubleErrors> {
+        use chumsky::Parser;
+
+        let parser = crate::parse::parser();
+        let result = parser.parse(crate::parse::ParserSource { file_id, ctx: self });
+
+        result.into_result().map_err(|errors| {
+            BaubleErrors::from(
+                errors
+                    .into_iter()
+                    .map(|e| e.into_owned())
+                    .collect::<Vec<_>>(),
+            )
+        })
+    }
+
     /// This clears asset references in any of the file modules.
     fn reload_files<I: IntoIterator<Item = FileId>>(
         &mut self,
@@ -552,7 +568,7 @@ impl BaubleContext {
         // Parse values, and return any errors.
         let mut errors = BaubleErrors::empty();
         for file in files.iter() {
-            let values = match crate::parse(*file, self) {
+            let values = match self.parse(*file) {
                 Ok(values) => values,
                 Err(err) => {
                     skip.push(*file);
