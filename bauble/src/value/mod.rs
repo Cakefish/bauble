@@ -564,7 +564,7 @@ pub enum PrimitiveValue {
 
 /// A parsed but untyped value from Bauble.
 ///
-/// This is the fundemtnal building block of interpreteting Bauble.
+/// This is the fundamental building block of interpreteting Bauble.
 /// For a typed version with attributes, see [`Val`].
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
@@ -660,6 +660,8 @@ impl PathKind {
 }
 
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
+///
+/// What they are referencing needs to be loaded in order to determine their type.
 pub struct DelayedRegister {
     pub asset: Spanned<TypePath>,
     pub reference: Spanned<PathKind>,
@@ -711,6 +713,7 @@ pub(crate) fn resolve_delayed(
             for scc in petgraph::algo::tarjan_scc(&graph) {
                 if scc.len() == 1 {
                     if map[&scc[0]].could_be(scc[0].borrow()) {
+                        // Ref refers to itself
                         errors.push(
                             ConversionError::Cycle(vec![(
                                 scc[0].to_string().spanned(scc[0].span),
@@ -781,6 +784,7 @@ pub(crate) fn register_assets(
         let path = path.join(ident);
         let mut symbols = Symbols { ctx: &*ctx, uses };
 
+        // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path {
             symbols.resolve_type(ty)
         } else {
@@ -865,6 +869,7 @@ pub(crate) fn convert_values(
 
     let path = symbols.ctx.get_file_path(file);
 
+    // Add asset
     for (symbol, _) in &values.values {
         let ident = TypePathElem::new(symbol.as_str()).expect("Invariant");
         let path = path.join(&ident);
@@ -1080,7 +1085,8 @@ fn find_copy_refs<'a>(
     }
 }
 
-/// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
+/// Converts a parsed value to a object value. With a conversion context and existing symbols. Also
+/// does some rudementory checking if the symbols are okay.
 fn convert_object(
     path: TypePath<&str>,
     value: &ParseVal,

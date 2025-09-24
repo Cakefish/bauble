@@ -234,6 +234,8 @@ impl CtxNode {
             && let Some(node) = root.node_at(redirect.borrow())
         {
             let mut reference = node.reference(root);
+            // Overlaps in the same namespace don't introduce errors here,
+            // NOTE: Names in the current node take priority over those from the redirect.
             reference.combine_override(this);
             this = reference;
         }
@@ -361,6 +363,10 @@ impl CtxNode {
             && self.source.is_none()
     }
 
+    /// Clears all assets in the module this node references (if any).
+    ///
+    /// Does not recurse into other files, but will clear inline submodules in the current file (if
+    /// that feature is added).
     fn clear_child_assets(&mut self) {
         self.children.retain(|_, node| {
             if node.source.is_some() {
@@ -451,9 +457,9 @@ fn preprocess_path(path: TypePath<&str>) -> TypePath<&str> {
 }
 
 impl BaubleContext {
-    /// `path` describes the bauble "module" that the file corresponds to. That is it say, what prefix path
-    /// is necessary inside of bauble to reference the context of this file.
-    /// `source` is the string of Bauble text to be parsed.
+    /// * `path` describes the bauble "module" that the file corresponds to. That is it say, what
+    ///   prefix path is necessary inside of bauble to reference the context of this file.
+    /// * `source` is the string of Bauble text to be parsed.
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) -> FileId {
         let path = preprocess_path(path);
         let node = self.root_node.build_nodes(path);
@@ -648,7 +654,7 @@ impl BaubleContext {
     }
 
     /// Takes a path in bauble, and if the path is valid, return meta information about the
-    /// bauble item at the current path.
+    /// bauble item at that path.
     pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
         self.root_node
             .node_at(path)
@@ -656,7 +662,7 @@ impl BaubleContext {
     }
 
     /// Takes a path to a module in bauble, and if the path is valid, return the meta information
-    /// of all items inside of thatm module (not recursive).
+    /// of all items inside of that module (not recursive).
     pub fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
         self.root_node.node_at(path).map(|node| {
             node.children
@@ -666,8 +672,14 @@ impl BaubleContext {
         })
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Recursively searches all children of the node at `path` for node with path ending in
+    /// `ident`.
+    ///
+    /// Returns the [`PathReference`] from [`CtxNode::reference`]. If multiple nodes are found with
+    /// `ident`, the refs from these will be combined (potentially overriding each other).
+    //
+    // TODO: couldn't this overriding lead to unexpected behavior? Should we return an error when
+    // there are multiple results in the same namespace?
     pub fn ref_with_ident(
         &self,
         path: TypePath<&str>,

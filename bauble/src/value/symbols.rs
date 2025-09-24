@@ -11,10 +11,14 @@ use crate::{
 
 use super::{ConversionError, CopyVal, PathKind, RefError, RefKind, Result};
 
+/// This either a reference to another value or a "copy" value which was copied into here.
 #[derive(Clone, Debug)]
 pub(super) enum RefCopy {
+    /// Unresolved copy value.
     Unresolved,
+    /// Resolved copy value.
     Resolved(CopyVal),
+    /// Reference to a type, asset, or module?
     Ref(PathReference),
 }
 
@@ -42,9 +46,15 @@ impl RefCopy {
     }
 }
 
+/// Representation of item names available in the current module.
+///
+/// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
+/// There are also copy values (TODO: which overlap all namespaces?).
 #[derive(Clone)]
 pub(crate) struct Symbols<'a> {
     pub(super) ctx: &'a BaubleContext,
+    // Map of identifiers to ref-copies (which can be unresolved-copy, resolved-copy, or reference)
+    // A resolved copy is either `CopyVal::Copy` or `CopyVal::Resolved(Val)`
     pub(super) uses: HashMap<TypePathElem, RefCopy>,
 }
 
