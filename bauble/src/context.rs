@@ -566,10 +566,13 @@ impl BaubleContext {
         &mut self,
         new_files: I,
     ) -> (Vec<crate::Object>, BaubleErrors) {
-        let mut files = std::mem::take(&mut self.retry_files);
-        files.extend(new_files);
-        files.sort_unstable();
-        files.dedup();
+        let files = {
+            let mut files = std::mem::take(&mut self.retry_files);
+            files.extend(new_files);
+            files.sort_unstable();
+            files.dedup();
+            files
+        };
 
         // Clear any previous assets that were loaded by these files.
         for file in files.iter() {
@@ -582,37 +585,24 @@ impl BaubleContext {
 
         let mut file_values = Vec::with_capacity(files.len());
 
-        let mut skip = Vec::new();
+        let mut new_retry = Vec::new();
         // Parse values, and return any errors.
         let mut errors = BaubleErrors::empty();
-        for file in files.iter() {
-            let values = match self.parse(*file) {
-                Ok(values) => values,
+        for &file in files.iter() {
+            match self.parse(file) {
+                Ok(values) => file_values.push((file, values)),
                 Err(err) => {
-                    skip.push(*file);
+                    new_retry.push(file);
                     errors.extend(err);
-                    continue;
                 }
-            };
-
-            file_values.push(values);
+            }
         }
 
-        let mut skip_iter = skip.iter().copied().peekable();
-        let mut new_skip = Vec::new();
-
         let mut delayed = Vec::new();
-
-        // TODO: won't this have a mismatch in the `zip` when some files were skipped and not
-        // pushed to `file_values`? (similar for loop below)
+        let mut skip = Vec::new();
 
         // Register assets from each successfully parsed file into the context.
-        for (file, values) in files
-            .iter()
-            .zip(file_values.iter())
-            // Skip files with errors
-            .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
-        {
+        for (file, values) in file_values.iter() {
             // Need a partial borrow here.
             let (path, _) = self.file(*file);
             let path = path.to_owned();
@@ -622,13 +612,11 @@ impl BaubleContext {
                 }
                 Err(e) => {
                     // Skip files that errored on registering.
-                    new_skip.push(*file);
+                    skip.push(*file);
                     errors.extend(BaubleErrors::from(e));
                 }
             }
         }
-
-        skip.extend(new_skip);
 
         // TODO: Less hacky way to get which files errored here?
         if let Err(e) = crate::value::resolve_delayed(delayed, self) {
@@ -649,19 +637,21 @@ impl BaubleContext {
 
         let mut skip_iter = skip.iter().copied().peekable();
 
-        for (file, values) in files
-            .iter()
-            .zip(file_values)
+        for (file, values) in file_values
+            .into_iter()
             // Skip files with errors
             .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
         {
-            match crate::value::convert_values(*file, values, &crate::value::Symbols::new(&*self)) {
+            match crate::value::convert_values(file, values, &crate::value::Symbols::new(&*self)) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
             }
         }
 
-        self.retry_files.extend(skip);
+        new_retry.extend(skip);
+        new_retry.sort_unstable();
+        new_retry.dedup();
+        self.retry_files.extend(new_retry);
 
         (objects, errors)
     }
