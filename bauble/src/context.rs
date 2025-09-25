@@ -399,10 +399,11 @@ impl CtxNode {
     fn build_type(&mut self, id: TypeId, type_registry: &TypeRegistry) {
         let ty = type_registry.key_type(id);
         let node = self.build_nodes(ty.meta.path.borrow());
-        if let Some(ty) = node.reference.ty
-            && ty != id
+        if let Some(ty_id) = node.reference.ty
+            && ty_id != id
         {
-            panic!("Multiple types with the same path");
+            let path = ty.meta.path.borrow();
+            panic!("Multiple types with the same path: {path}");
         }
         node.reference.ty = Some(id);
     }
