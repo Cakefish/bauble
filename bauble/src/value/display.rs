@@ -6,10 +6,10 @@
 use std::{borrow::Borrow, collections::HashMap};
 
 use crate::{
-    parse::{allowed_in_raw_literal, ParseVal, ParseValues, PathTreeEnd, PathTreeNode},
+    Spanned,
+    parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
     path::TypePath,
     types::{TypeKind, TypeRegistry},
-    Spanned,
 };
 
 use super::{Attributes, FieldsKind, Object, UnspannedVal, Val, Value, ValueContainer, ValueTrait};

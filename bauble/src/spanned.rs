@@ -9,8 +9,9 @@ use std::{
 use crate::context::FileId;
 
 /// Represents a span in the parsed source of the Bauble context.
-/// This type correspond to the byte offset of the first character and the byte offset of the last character
-/// in a file.
+///
+/// This type corresponds to the byte offset in a file of the first character and the byte offset
+/// just past the last character.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     /// The offset to the first character covered by the span.
