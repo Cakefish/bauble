@@ -403,15 +403,4 @@ fn test_generic() {
             Foo(Str(String::from("test"))),
         ]
     );
-
-    let ctx = __TEST_CTX.get().unwrap().read().unwrap();
-    let Some(ty) = ctx
-        .type_registry()
-        .get_type::<Foo<Bar>, bauble::DefaultAllocator>()
-    else {
-        panic!("no!!");
-    };
-    println!("{ty:?}");
-
-    panic!();
 }

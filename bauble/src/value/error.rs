@@ -300,9 +300,6 @@ impl BaubleError for Spanned<ConversionError> {
                     crate::path::PathError::MissingDelimiterStart(_) => "Malformed path",
                     crate::path::PathError::TooManyElements => "Path had too many elements",
                     crate::path::PathError::ZeroElements => "Path had no elements",
-                    crate::path::PathError::DuplicateGenerics => {
-                        "Path has too many generic parameters specified at the end"
-                    }
                 };
 
                 let mut errors = vec![(Cow::Borrowed(generic).spanned(self.span), Level::Error)];

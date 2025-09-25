@@ -1024,13 +1024,7 @@ pub(crate) fn convert_values(
 
         let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
 
-        match convert_object(
-            binding.type_path.as_ref(),
-            path,
-            &binding.value,
-            ty,
-            meta!(ident),
-        ) {
+        match convert_object(path, &binding.value, ty, meta!(ident)) {
             Ok(obj) => ok.push(obj),
             Err(e) => err.push(e),
         }
@@ -1088,19 +1082,12 @@ fn find_copy_refs<'a>(
 
 /// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
 fn convert_object(
-    ty_path: Option<&Path>,
     path: TypePath<&str>,
     value: &ParseVal,
     expected_type: TypeId,
     mut meta: ConvertMeta,
 ) -> Result<Object> {
-    let force_ty_generics =
-        if let Some((_, generic)) = ty_path.and_then(|path| path.split_generic()) {
-            Some(meta.symbols.resolve_type(generic)?)
-        } else {
-            None
-        };
-    let value = value.convert(meta.reborrow(), expected_type, no_attr(), force_ty_generics)?;
+    let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
 
     create_object(path, meta.object_name, value, meta.symbols)
 }
