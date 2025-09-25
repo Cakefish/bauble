@@ -180,8 +180,6 @@ pub enum PathError {
     ///
     /// `TypePathElem` needs one element.
     ZeroElements,
-    /// A generic argument was specified right after another generic argument.
-    DuplicateGenerics,
 }
 
 /// A result type with an implicit `PathError`.
@@ -280,17 +278,6 @@ impl TypePath {
     pub fn push_str(&mut self, other: &str) -> Result<()> {
         self.push(TypePath::new(other)?);
         Ok(())
-    }
-
-    pub fn push_generic(&mut self, generic: TypePath<&str>) -> Result<()> {
-        if !self.0.ends_with('>') {
-            self.0 += "<";
-            self.0 += generic.0;
-            self.0 += ">";
-            Ok(())
-        } else {
-            Err(PathError::DuplicateGenerics)
-        }
     }
 }
 
@@ -428,23 +415,6 @@ impl<S: AsRef<str>> TypePath<S> {
                     == Some(PATH_SEPERATOR))
     }
 
-    /// Check if the path is a path to a generic item.
-    pub fn is_generic(&self) -> bool {
-        self.as_str().ends_with('>')
-    }
-
-    /// Split the path into the main generic type, and the generic key.
-    /// If the path is not is not a generic path, then return `None`.
-    pub fn split_generic(&self) -> Option<(TypePath<&str>, TypePath<&str>)> {
-        if self.is_generic() {
-            let (l, r) = self.as_str().rsplit_once('<')?;
-            let r = r.strip_suffix('>')?;
-            Some((TypePath::new_unchecked(l), TypePath::new_unchecked(r)))
-        } else {
-            None
-        }
-    }
-
     /// Returns true if this type path is something that is allowed to be
     /// written in the bauble format.
     ///
@@ -452,63 +422,14 @@ impl<S: AsRef<str>> TypePath<S> {
     /// - The path is non-empty.
     /// - All the path segments are valid rust identifiers.
     pub fn is_writable(&self) -> bool {
-        let mut parsed_generic = false;
         !self.is_empty()
             && self.iter().all(|part| {
-                // If a generic has been parsed already, the assumption that a generic argument
-                // is specified at the end of a path breaks, and the path is not writable.
-                if parsed_generic {
-                    return false;
-                }
+                let mut s = part.as_str().chars();
 
-                let mut s = part.as_str().chars().peekable();
-
-                if !s
-                    .next()
+                s.next()
                     .expect("Invariant, path parts aren't empty.")
                     .is_ident_start()
-                {
-                    return false;
-                }
-
-                // Consume valid identifier characters.
-                s.by_ref()
-                    .take_while(|c| c.is_ident_continue())
-                    .for_each(|_| {});
-
-                if s.peek().is_none() {
-                    // All remaining characters of the part were valid identififier characters.
-                    true
-                } else {
-                    // Expect a generic argument.
-
-                    parsed_generic = true;
-                    if s.next() != Some('<') {
-                        return false;
-                    }
-                    let inner_path = s.clone();
-                    let mut depth = 1;
-                    let mut len = 0;
-                    for n in s.by_ref() {
-                        if n == '>' {
-                            depth -= 1;
-                            if depth == 0 {
-                                // We have reached the end of the generic argument
-                                break;
-                            }
-                        }
-
-                        len += 1;
-                    }
-
-                    if s.peek().is_none() {
-                        // TODO: does the inner path have to be writable too?
-                        TypePath::new(inner_path.take(len).collect::<String>()).is_ok()
-                    } else {
-                        // If `s` is not empty at this point, then the path is malformed.
-                        false
-                    }
-                }
+                    && s.all(|c| c.is_ident_continue())
             })
     }
 }

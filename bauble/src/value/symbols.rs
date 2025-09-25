@@ -149,46 +149,6 @@ impl<'a> Symbols<'a> {
                         .spanned(end.span));
                     }
                 }
-                PathTreeEnd::PathEnd(PathEnd::IdentGeneric(ident, gen_path)) => {
-                    let path_end =
-                        TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                    let mut path = leading.join(&path_end);
-                    path.push_generic(
-                        TypePath::new(gen_path.to_string())
-                            .map_err(|e| Spanned::new(gen_path.span, e))?
-                            .borrow(),
-                    )
-                    .map_err(|e| e.spanned(gen_path.span))?;
-                    if let Some(reference) = this.ctx.get_ref(path.borrow()) {
-                        this.add_ref(path_end.to_owned(), reference)
-                            .map_err(|e| e.spanned(ident.span))?;
-                    } else {
-                        return Err(ConversionError::RefError(Box::new(RefError {
-                            uses: None,
-                            path: PathKind::Direct(path),
-                            path_ref: PathReference::empty(),
-                            kind: RefKind::Any,
-                        }))
-                        .spanned(end.span));
-                    }
-                }
-                PathTreeEnd::PathEnd(PathEnd::WithIdentGeneric(ident, gen_path)) => {
-                    let fmt = format!("{ident}<{gen_path}>",);
-                    let path_end =
-                        TypePathElem::new(fmt.as_str()).map_err(|e| e.spanned(ident.span))?;
-                    if let Some(reference) = this.ctx.ref_with_ident(leading.borrow(), path_end) {
-                        this.add_ref(path_end.to_owned(), reference)
-                            .map_err(|e| e.spanned(ident.span))?;
-                    } else {
-                        return Err(ConversionError::RefError(Box::new(RefError {
-                            uses: None,
-                            path: PathKind::Indirect(leading, path_end.to_owned()),
-                            path_ref: PathReference::empty(),
-                            kind: RefKind::Any,
-                        }))
-                        .spanned(end.span));
-                    }
-                }
             }
             Ok(())
         }
@@ -276,37 +236,11 @@ impl<'a> Symbols<'a> {
                     .map_err(|p| p.spanned(raw_path.span()))?;
                 PathKind::Direct(leading)
             }
-            PathEnd::WithIdentGeneric(ident, path) => PathKind::Indirect(
-                leading,
-                TypePathElem::new(format!("{ident}<{path}>"))
-                    .map_err(|p| p.spanned(raw_path.span()))?,
-            ),
-            PathEnd::IdentGeneric(ident, path) => {
-                leading
-                    .push_str(ident.as_str())
-                    .map_err(|p| p.spanned(raw_path.span()))?;
-                leading
-                    .push_generic(
-                        TypePath::new(path.to_string())
-                            .map_err(|e| Spanned::new(path.span, e))?
-                            .borrow(),
-                    )
-                    .map_err(|p| p.spanned(raw_path.span()))?;
-                PathKind::Direct(leading)
-            }
         };
         Ok(path.spanned(raw_path.span()))
     }
 
     pub fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<PathReference>> {
-        // In case the type is generic, split the type into its base path and
-        // the inner generic argument.
-        if matches!(ref_kind, RefKind::Type)
-            && let Some((ty_path, ..)) = raw_path.split_generic()
-        {
-            return self.resolve_item(&ty_path, RefKind::Type);
-        }
-
         let path = self.resolve_path(raw_path)?;
         match &path.value {
             PathKind::Direct(path) => {
