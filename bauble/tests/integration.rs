@@ -169,13 +169,40 @@ fn new_nested_reload_paths() {
 }
 
 #[test]
+#[should_panic]
 fn duplicate_objects() {
-    // TODO: make this fail!
-    bauble::bauble_test!(
-        [Test]
+    let a = &test_file!(
+        "a",
         "test = integration::Test{ x: -5, y: 5 }\n\
-        test = integration::Test{ x: -5, y: 4 }"
-        [Test { x: -5, y: 4 }]
+        test = integration::Test{ x: -5, y: 4 }",
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a],
+    );
+}
+
+// NOTE: This currently fails because `b::test` isn't allowed by itself but if we add support for
+// that we still want this case to fail.
+#[test]
+#[should_panic]
+fn duplicate_objects_across_files() {
+    let a = &test_file!(
+        "a",
+        "b::test = integration::Test{ x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let ab = &test_file!("a::b", "test = integration::Test{ x: -5, y: 5 }",);
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, ab],
     );
 }
 
@@ -201,7 +228,7 @@ fn empty_module() {
 #[test]
 fn default_uses() {
     let a = &test_file!("a", "test = Test { x: -5, y: 5 }", Test { x: -5, y: 5 },);
-    let a_b = &test_file!("a::b", "test = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
+    let ab = &test_file!("a::b", "test = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
 
     test_load(
         &|ctx| {
@@ -211,7 +238,7 @@ fn default_uses() {
                 TypePath::new("integration::Test").unwrap().to_owned(),
             );
         },
-        &[a, a_b],
+        &[a, ab],
     );
 }
 
