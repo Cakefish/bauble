@@ -770,6 +770,7 @@ pub(crate) fn register_assets(
     let mut symbols = Symbols::new(ctx);
     // Add `uses` to local `Symbols` instance
     for use_path in &values.uses {
+        // TODO: This will error if the referenced file is yet to be passed register_assets
         if let Err(e) = symbols.add_use(use_path) {
             errors.push(e);
         }
@@ -784,7 +785,7 @@ pub(crate) fn register_assets(
         let span = ident.span;
         let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
         let path = path.join(ident);
-        let mut symbols = Symbols { ctx: &*ctx, uses };
+        let symbols = Symbols { ctx: &*ctx, uses };
 
         // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path {
@@ -827,18 +828,22 @@ pub(crate) fn register_assets(
 
         match ty {
             Ok(ty) => {
+                Symbols { uses, .. } = symbols;
+                let ref_ty = ctx.register_asset(path.borrow(), ty);
+                let mut symbols = Symbols { ctx: &*ctx, uses };
+                // Add to Symbols::uses so other items in the same file can directly reference this
+                // without full path.
                 if let Err(e) = symbols.add_ref(
                     ident.to_owned(),
                     PathReference {
                         ty: None,
-                        asset: Some((ty, path.clone())),
+                        asset: Some((ref_ty, path.clone())),
                         module: None,
                     },
                 ) {
                     errors.push(e.spanned(binding.value.value.span));
                 }
                 Symbols { uses, .. } = symbols;
-                ctx.register_asset(path.borrow(), ty);
             }
             Err(err) => {
                 Symbols { uses, .. } = symbols;
