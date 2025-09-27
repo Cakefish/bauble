@@ -9,11 +9,11 @@ use crate::{
     types::{self, TypeId},
 };
 
-use super::{Ident, PathKind, RefCopy};
+use super::{Ident, PathKind};
 
 #[derive(Clone, Debug)]
 pub struct RefError {
-    pub(super) uses: Option<HashMap<TypePathElem, RefCopy>>,
+    pub(super) uses: Option<HashMap<TypePathElem, PathReference>>,
     pub(super) path: PathKind,
     pub(super) path_ref: PathReference,
     pub(super) kind: RefKind,
@@ -78,10 +78,6 @@ pub enum ConversionError {
     },
     PathError(crate::path::PathError),
     Cycle(Vec<(Spanned<String>, Vec<Spanned<String>>)>),
-    ErrorInCopy {
-        copy: Spanned<TypePathElem>,
-        error: Box<Spanned<ConversionError>>,
-    },
     NotInstantiable {
         ty: TypeId,
     },
@@ -152,7 +148,6 @@ impl BaubleError for Spanned<ConversionError> {
                 "Expected the type `{}`",
                 types.key_type(*expected).meta.path
             )),
-            ConversionError::ErrorInCopy { error, .. } => return error.msg_general(ctx),
             ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
             ConversionError::NotInstantiable { ty } => Cow::Owned(format!(
                 "Can't construct a default value of the type {}",
@@ -578,16 +573,7 @@ impl BaubleError for Spanned<ConversionError> {
                             && let Some(uses) = &ref_err.uses
                         {
                             if let Some(suggestions) = get_suggestions(
-                                uses.iter()
-                                    .filter(|(_, p)| match p {
-                                        RefCopy::Unresolved => false,
-                                        RefCopy::Resolved(_) => false,
-                                        RefCopy::Ref(path_reference) => {
-                                            path_reference.asset.is_some()
-                                        }
-                                    })
-                                    .map(|(ident, _)| ident.as_str())
-                                    .chain(options),
+                                uses.keys().map(|ident| ident.as_str()).chain(options),
                                 path.as_str(),
                             ) {
                                 errs.push((
@@ -639,20 +625,6 @@ impl BaubleError for Spanned<ConversionError> {
                 };
 
                 Cow::Owned(s)
-            }
-            ConversionError::ErrorInCopy { copy, error } => {
-                let mut v = error.msgs_specific(ctx);
-
-                v.push((
-                    Spanned::new(copy.span, Cow::Borrowed("In this copy value")),
-                    Level::Info,
-                ));
-                v.push((
-                    Spanned::new(self.span, Cow::Borrowed("In this copy reference")),
-                    Level::Info,
-                ));
-
-                return v;
             }
             ConversionError::UnregisteredAsset => Cow::Borrowed(
                 "This asset hasn't been registered with `BaubleContext::register_asset`",
