@@ -735,36 +735,6 @@ impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseValues {
             written = true;
         }
 
-        let mut iter = self.copies.iter();
-
-        if let Some((ident, binding)) = iter.next() {
-            if written {
-                w.write("\n\n");
-            }
-
-            w.write("copy ");
-            w.write(ident);
-            if let Some(ty) = &binding.type_path {
-                w.write(": ");
-                w.fmt(ty);
-            }
-            w.write(" = ");
-            binding.value.indented_display(w.reborrow());
-        }
-
-        for (ident, binding) in iter {
-            w.write("\n\n");
-
-            w.write("copy ");
-            w.write(ident);
-            if let Some(ty) = &binding.type_path {
-                w.write(": ");
-                w.fmt(ty);
-            }
-            w.write(" = ");
-            binding.value.indented_display(w.reborrow());
-        }
-
         let mut iter = self.values.iter();
 
         if let Some((ident, binding)) = iter.next() {

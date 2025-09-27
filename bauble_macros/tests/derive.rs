@@ -116,17 +116,14 @@ fn test_std_types() {
     bauble_test!(
         [Test]
         r#"
-        copy key = "🔑"
-        copy value = Some("💖")
-
         test = derive::Test {
             a: [(2, 0), (1, -1), (5, 10)],
             b: {
-                $key: [true, true, false],
+                "🔑": [true, true, false],
                 "no key": [false, true],
             },
             c: {
-                [1, 2, 3]: [$value, None, Some("hi")],
+                [1, 2, 3]: [Some("💖"), None, Some("hi")],
             },
         }
         "#
@@ -141,6 +138,31 @@ fn test_std_types() {
                     ([1, 2, 3], [Some("💖".to_string()), None, Some("hi".to_string())]),
                 ]),
             },
+        ]
+    );
+}
+
+#[test]
+fn test_complex_flatten() {
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(flatten)]
+    struct Inner(
+        u32,
+        #[bauble(attribute = a, default)] u32,
+        #[bauble(attribute = b)] u32,
+    );
+
+    #[derive(Bauble, PartialEq, Debug)]
+    #[bauble(flatten)]
+    struct Transparent(Inner, #[bauble(attribute = a)] u32);
+
+    bauble_test!(
+        [Transparent]
+        r#"
+        a: derive::Transparent = #[a = 1, b = 2] 3
+        "#
+        [
+            Transparent(Inner(3, 0, 2), 1),
         ]
     );
 }

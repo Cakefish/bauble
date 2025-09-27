@@ -639,18 +639,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             .boxed()
     }
 
-    enum ItemType {
-        Value,
-        Copy,
-    }
-
     uses.then(
-        just("copy")
-            .padded()
-            .ignore_then(binding(ident, object.clone(), path.clone(), comments))
-            .map(|binding| (binding, ItemType::Copy))
-            .or(binding(ident, object, path.clone(), comments)
-                .map(|binding| (binding, ItemType::Value)))
+        binding(ident, object, path.clone(), comments)
             .repeated()
             .collect::<Vec<_>>(),
     )
@@ -659,24 +649,17 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             ParseValues {
                 uses,
                 values: IndexMap::default(),
-                copies: IndexMap::default(),
             },
-            |mut values, ((ident, type_path, value), ty)| {
+            |mut values, (ident, type_path, value)| {
                 let binding = Binding { type_path, value };
-                match ty {
-                    ItemType::Value => {
-                        if values.values.contains_key(&ident) {
-                            emitter.emit(Rich::custom(
-                                ident.span,
-                                "This identifier was already used".to_string(),
-                            ));
-                        }
-                        values.values.insert(ident, binding);
-                    }
-                    ItemType::Copy => {
-                        values.copies.insert(ident, binding);
-                    }
+
+                if values.values.contains_key(&ident) {
+                    emitter.emit(Rich::custom(
+                        ident.span,
+                        "This identifier was already used".to_string(),
+                    ));
                 }
+                values.values.insert(ident, binding);
                 values
             },
         )

@@ -1,11 +1,7 @@
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-};
+use std::{collections::HashMap, hash::Hash};
 
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
-use symbols::RefCopy;
 
 use crate::{
     BaubleErrors, FileId, VariantKind,
@@ -97,38 +93,12 @@ impl<V: ValueTrait> ValueContainer for V {
     }
 }
 
-impl ValueContainer for CopyVal {
-    type ContainerField = Ident;
-
-    fn has_attributes(&self) -> bool {
-        match self {
-            CopyVal::Copy(v) => v.has_attributes(),
-            CopyVal::Resolved(v) => v.has_attributes(),
-        }
-    }
-
-    fn container_ty(&self) -> TypeId {
-        match self {
-            CopyVal::Copy(v) => v.ty(),
-            CopyVal::Resolved(v) => v.ty(),
-        }
-    }
-
-    fn container_to_any(&self) -> AnyVal {
-        match self {
-            CopyVal::Copy(v) => v.to_any(),
-            CopyVal::Resolved(v) => v.to_any(),
-        }
-    }
-}
-
 impl ValueContainer for AnyVal<'_> {
     type ContainerField = Ident;
 
     fn has_attributes(&self) -> bool {
         match self {
             AnyVal::Parse(v) => v.has_attributes(),
-            AnyVal::Copy(v) => v.has_attributes(),
             AnyVal::Complete(v) => v.has_attributes(),
             AnyVal::Unspanned(v) => v.has_attributes(),
         }
@@ -137,7 +107,6 @@ impl ValueContainer for AnyVal<'_> {
     fn container_ty(&self) -> TypeId {
         match self {
             AnyVal::Parse(v) => v.ty(),
-            AnyVal::Copy(v) => v.ty(),
             AnyVal::Complete(v) => v.ty(),
             AnyVal::Unspanned(v) => v.ty(),
         }
@@ -449,71 +418,6 @@ impl UnspannedVal {
                     .collect(),
             )
             .spanned(span),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CopyValInner {
-    ty: Option<Spanned<TypeId>>,
-    value: Spanned<Value<CopyValInner>>,
-    attributes: Spanned<Attributes<CopyVal>>,
-}
-
-impl ValueTrait for CopyValInner {
-    type Inner = CopyVal;
-
-    type Ref = TypePath;
-
-    type Variant = Spanned<TypePathElem>;
-
-    type Field = Ident;
-
-    fn ty(&self) -> TypeId {
-        *self
-            .ty
-            .as_deref()
-            .unwrap_or(&types::TypeRegistry::any_type())
-    }
-
-    fn attributes(&self) -> &Attributes<Self::Inner> {
-        &self.attributes
-    }
-
-    fn value(&self) -> &Value<Self> {
-        &self.value
-    }
-
-    fn to_any(&self) -> AnyVal {
-        AnyVal::Copy(self)
-    }
-}
-
-impl SpannedValue for CopyValInner {
-    fn type_span(&self) -> crate::Span {
-        self.ty.map(|s| s.span).unwrap_or(self.value.span)
-    }
-
-    fn value_span(&self) -> crate::Span {
-        self.value.span
-    }
-
-    fn attributes_span(&self) -> crate::Span {
-        self.attributes.span
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum CopyVal {
-    Copy(CopyValInner),
-    Resolved(Val),
-}
-
-impl CopyVal {
-    fn span(&self) -> crate::Span {
-        match self {
-            CopyVal::Copy(val) => val.span(),
-            CopyVal::Resolved(val) => val.span(),
         }
     }
 }
@@ -980,79 +884,7 @@ pub(crate) fn convert_values(
 
     symbols.add(use_symbols);
 
-    for (symbol, _) in &values.copies {
-        let span = symbol.span;
-        let symbol = match TypePathElem::new(symbol.as_str()).map_err(|e| e.spanned(span)) {
-            Ok(s) => s,
-            Err(e) => {
-                use_errors.push(e.into());
-                continue;
-            }
-        };
-        symbols.uses.insert(symbol.to_owned(), RefCopy::Unresolved);
-    }
-
-    let mut spans = HashMap::new();
-    let mut contained_spans =
-        HashMap::<TypePathElem<&str>, Vec<Spanned<TypePathElem<&str>>>>::new();
-    let mut copy_graph = petgraph::graphmap::DiGraphMap::new();
-
-    for (symbol, value) in &values.copies {
-        let span = symbol.span;
-        let symbol = match TypePathElem::new(symbol.as_str()).map_err(|e| e.spanned(span)) {
-            Ok(s) => s,
-            Err(e) => {
-                use_errors.push(e.into());
-                continue;
-            }
-        };
-
-        spans.insert(symbol, span);
-        copy_graph.add_node(symbol);
-        find_copy_refs(&value.value, &symbols, &mut |s| {
-            copy_graph.add_edge(symbol, s.value, ());
-            contained_spans.entry(symbol).or_default().push(s);
-        });
-    }
-
     let mut additional_objects = AdditionalObjects::new(path.to_owned());
-
-    let mut node_removals = Vec::new();
-    for scc in petgraph::algo::tarjan_scc(&copy_graph) {
-        if scc.len() == 1
-            && contained_spans
-                .get(&scc[0])
-                .is_none_or(|i| i.iter().all(|s| s.value != scc[0]))
-        {
-            continue;
-        }
-        let scc_set = HashSet::<TypePathElem<&str>>::from_iter(scc.iter().copied());
-        use_errors.push(
-            ConversionError::Cycle(
-                scc.iter()
-                    .map(|s| {
-                        (
-                            s.to_string().spanned(spans[s]),
-                            contained_spans
-                                .get(s)
-                                .into_iter()
-                                .flatten()
-                                .filter(|s| scc_set.contains(&s.value))
-                                .map(|s| (*s).map(|s| s.to_string()))
-                                .collect(),
-                        )
-                    })
-                    .collect(),
-            )
-            .spanned(spans[&scc[0]]),
-        );
-
-        node_removals.extend(scc);
-    }
-
-    for removal in node_removals {
-        copy_graph.remove_node(removal);
-    }
 
     let default_span = crate::Span::new(file, 0..0);
 
@@ -1065,27 +897,6 @@ pub(crate) fn convert_values(
                 default_span,
             }
         };
-    }
-
-    match petgraph::algo::toposort(&copy_graph, None) {
-        Ok(order) => {
-            let order = order.into_iter().map(|o| o.to_owned()).collect::<Vec<_>>();
-            for item in order {
-                let val = match convert::convert_copy_value(
-                    &values.copies[item.as_str()].value,
-                    meta!(item.borrow()),
-                ) {
-                    Ok(v) => v,
-                    Err(err) => {
-                        use_errors.push(err);
-                        continue;
-                    }
-                };
-
-                symbols.uses.insert(item.to_owned(), RefCopy::Resolved(val));
-            }
-        }
-        Err(_) => unreachable!("We removed all scc before running toposort"),
     }
 
     let mut ok = Vec::new();
@@ -1126,46 +937,6 @@ pub(crate) fn convert_values(
         Ok(objects)
     } else {
         Err(err.into())
-    }
-}
-
-fn find_copy_refs<'a>(
-    val: &ParseVal,
-    symbols: &'a Symbols,
-    found: &mut impl FnMut(Spanned<TypePathElem<&'a str>>),
-) {
-    for obj in val.attributes.values() {
-        find_copy_refs(obj, symbols, found)
-    }
-
-    match &val.value.value {
-        Value::Ref(reference) => {
-            if let Some(ident) = reference.as_ident() {
-                if let Some((ident, _)) = symbols.try_resolve_copy(&ident) {
-                    found(ident.spanned(reference.span()))
-                }
-            }
-        }
-        Value::Map(map) => {
-            for (k, v) in map.iter() {
-                find_copy_refs(k, symbols, found);
-                find_copy_refs(v, symbols, found);
-            }
-        }
-        Value::Struct(FieldsKind::Named(fields)) => {
-            for obj in fields.values() {
-                find_copy_refs(obj, symbols, found)
-            }
-        }
-        Value::Enum(_, inner) | Value::Transparent(inner) => find_copy_refs(inner, symbols, found),
-        Value::Tuple(fields)
-        | Value::Array(fields)
-        | Value::Struct(FieldsKind::Unnamed(fields)) => {
-            for obj in fields.iter() {
-                find_copy_refs(obj, symbols, found);
-            }
-        }
-        Value::Or(_) | Value::Primitive(_) | Value::Struct(FieldsKind::Unit) => {}
     }
 }
 
