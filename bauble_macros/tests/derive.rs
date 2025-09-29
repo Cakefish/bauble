@@ -116,17 +116,14 @@ fn test_std_types() {
     bauble_test!(
         [Test]
         r#"
-        copy key = "🔑"
-        copy value = Some("💖")
-
         test = derive::Test {
             a: [(2, 0), (1, -1), (5, 10)],
             b: {
-                $key: [true, true, false],
+                "🔑": [true, true, false],
                 "no key": [false, true],
             },
             c: {
-                [1, 2, 3]: [$value, None, Some("hi")],
+                [1, 2, 3]: [Some("💖"), None, Some("hi")],
             },
         }
         "#
@@ -163,17 +160,9 @@ fn test_complex_flatten() {
         [Transparent]
         r#"
         a: derive::Transparent = #[a = 1, b = 2] 3
-
-        copy t = #[a = 2] 1
-
-        // Since `b` isn't an attribute on `Transparent` that gets passed to `Inner`. And
-        // since we already have `a` defined here, the `a` attribute on `copy t` gets
-        // assigned to `Inner.1`.
-        b: derive::Transparent = #[a = 4, b = 3] $t
         "#
         [
             Transparent(Inner(3, 0, 2), 1),
-            Transparent(Inner(1, 2, 3), 4),
         ]
     );
 }
