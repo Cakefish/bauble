@@ -58,7 +58,7 @@ fn resolve_type(
     expected_type: TypeId,
     val_type: &mut Option<Spanned<TypeId>>,
     primitive_type: Option<types::Primitive>,
-    span: crate::Span,
+    span: Span,
 ) -> Result<Spanned<TypeId>> {
     let types = symbols.ctx.type_registry();
     let ty = if types.key_type(expected_type).kind.instanciable() {
@@ -264,7 +264,7 @@ impl ConvertMeta<'_> {
 /// Also known as sub-assets.
 pub(super) struct AdditionalObjects {
     objects: Vec<super::Object>,
-    name_allocs: std::collections::HashMap<TypePathElem, u64>,
+    name_allocs: HashMap<TypePathElem, u64>,
     file_path: TypePath,
 }
 
@@ -336,12 +336,12 @@ impl AdditionalObjects {
 }
 
 enum NameAllocs<'a> {
-    Owned(std::collections::HashMap<TypePathElem, u64>),
-    Borrowed(&'a mut std::collections::HashMap<TypePathElem, u64>),
+    Owned(HashMap<TypePathElem, u64>),
+    Borrowed(&'a mut HashMap<TypePathElem, u64>),
 }
 
 impl NameAllocs<'_> {
-    fn get_mut(&mut self) -> &mut std::collections::HashMap<TypePathElem, u64> {
+    fn get_mut(&mut self) -> &mut HashMap<TypePathElem, u64> {
         match self {
             NameAllocs::Owned(m) => m,
             NameAllocs::Borrowed(m) => m,
@@ -364,7 +364,7 @@ impl<'a> AdditionalUnspannedObjects<'a> {
             file_path,
             object_name,
             objects: Vec::new(),
-            name_allocs: NameAllocs::Owned(std::collections::HashMap::default()),
+            name_allocs: NameAllocs::Owned(HashMap::default()),
         }
     }
 
