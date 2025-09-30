@@ -403,7 +403,11 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         res
     }
 
-    /// Add an additional object, and get a reference to it.
+    /// Adds an additional object, generating a name for it. Generated names follow the form
+    /// `"{object_name}@{idx}"`, or `"{object_name}&{ty}@{idx}"` if [`in_type()`](Self::in_type)
+    /// was used.
+    ///
+    /// Returns a [`Value::Ref`] referencing the added object.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
         let idx = *self
             .name_allocs
@@ -414,18 +418,38 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         let name = TypePathElem::new(format!("{}@{idx}", self.object_name))
             .expect("idx is just a number, and we know name is a valid path elem.");
 
+        self.add_object_with_name(name, val)
+    }
+
+    /// Adds an additional object, with the given name.
+    ///
+    /// Returns a [`Value::Ref`] referencing the added object.
+    pub fn add_object_with_name(
+        &mut self,
+        name: TypePathElem,
+        val: UnspannedVal,
+    ) -> Value<UnspannedVal> {
         let res = Value::Ref(self.file_path.join(&name));
-
         self.objects.push((name, val));
-
         res
     }
 
-    /// Get the additional objects.
+    /// Gets the additional objects. Returns an iterator of (name, value), in the order in which
+    /// the objects were added.
     pub fn into_objects(
         self,
     ) -> impl ExactSizeIterator<Item = (TypePathElem, UnspannedVal)> + use<> {
         self.objects.into_iter()
+    }
+
+    /// Gets the path to the file this was created for.
+    pub fn file_path(&self) -> &TypePath<&str> {
+        &self.file_path
+    }
+
+    /// Gets the name of the object this was created for.
+    pub fn object_name(&self) -> &TypePathElem<&str> {
+        &self.object_name
     }
 }
 
@@ -1021,36 +1045,36 @@ where
                     if matches!(f, FieldsKind::Unit) {
                         if let Some(val_type) = raw_val_type {
                             match &types.key_type(val_type.value).kind {
-                            types::TypeKind::EnumVariant {
-                                variant,
-                                enum_type,
-                                fields,
-                            } => {
-                                debug_assert!(matches!(fields, types::Fields::Unit));
-                                debug_assert_eq!(*enum_type, *ty_id);
-                                debug_assert!(variants.variants.contains(variant));
+                                types::TypeKind::EnumVariant {
+                                    variant,
+                                    enum_type,
+                                    fields,
+                                } => {
+                                    debug_assert!(matches!(fields, types::Fields::Unit));
+                                    debug_assert_eq!(*enum_type, *ty_id);
+                                    debug_assert!(variants.variants.contains(variant));
 
-                                Value::Or(vec![variant.clone().spanned(span)])
+                                    Value::Or(vec![variant.clone().spanned(span)])
+                                }
+
+                                types::TypeKind::Generic(generic) => types
+                                    .iter_type_set(generic)
+                                    .next()
+                                    .map(|t| {
+                                        if let types::TypeKind::EnumVariant { variant, .. } =
+                                            &types.key_type(t).kind
+                                        {
+                                            Value::Or(vec![variant.clone().spanned(span)])
+                                        } else {
+                                            unreachable!(
+                                                "Our type checking should make sure this can't happen"
+                                            )
+                                        }
+                                    })
+                                    .expect("Our type checking should make sure this can't happen"),
+
+                                _ => Err(expected_err())?,
                             }
-
-                            types::TypeKind::Generic(generic) => types
-                                .iter_type_set(generic)
-                                .next()
-                                .map(|t| {
-                                    if let types::TypeKind::EnumVariant { variant, .. } =
-                                        &types.key_type(t).kind
-                                    {
-                                        Value::Or(vec![variant.clone().spanned(span)])
-                                    } else {
-                                        unreachable!(
-                                            "Our type checking should make sure this can't happen"
-                                        )
-                                    }
-                                })
-                                .expect("Our type checking should make sure this can't happen"),
-
-                            _ => Err(expected_err())?,
-                        }
                         } else {
                             Err(expected_err())?
                         }
