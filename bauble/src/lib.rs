@@ -48,17 +48,16 @@ pub mod types;
 pub use bauble_macros::Bauble;
 
 pub use context::{BaubleContext, BaubleContextBuilder, FileId, PathReference, Source};
-pub use error::{print_errors, BaubleError, BaubleErrors, CustomError, Level};
+pub use error::{BaubleError, BaubleErrors, CustomError, Level, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use traits::{
     Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
 };
 pub use types::path;
 pub use value::{
-    compare_object_sets, display_formatted, AdditionalUnspannedObjects, Attributes,
-    CompareObjectsError, ConversionError, DisplayConfig, Fields, FieldsKind, IndentedDisplay, Map,
-    Object, PrimitiveValue, Sequence, SpannedValue, UnspannedVal, Val, Value, ValueContainer,
-    ValueTrait,
+    AdditionalUnspannedObjects, Attributes, CompareObjectsError, ConversionError, DisplayConfig,
+    Fields, FieldsKind, IndentedDisplay, Map, Object, PrimitiveValue, Sequence, SpannedValue,
+    UnspannedVal, Val, Value, ValueContainer, ValueTrait, compare_object_sets, display_formatted,
 };
 
 // re-exporting crates from other crates
