@@ -44,7 +44,7 @@ Note, in order for Bauble to recognize a type as implementing a specific trait, 
 Once you've registered all your types and traits to the builder, you can build the context.
 
 Once you have your context, it can be used to register Bauble source files using [`BaubleContext::register_file`].
-These will be parsed by the context when you invoke [`BaubleContext::reload_paths`].
+These will be parsed by the context when you invoke [`BaubleContext::load_all`].
 [`BaubleContext::reload_paths`] returns all Bauble 'objects' that were parsed, as well as any potential errors that occured when parsing the Bauble source.
 A Bauble object is a typed lexical element of Bauble.
 A Bauble object can be converted into a concrete value of type `T` that implements [`Bauble`] by passing the inner value to [`Bauble::from_bauble`].
@@ -98,7 +98,7 @@ Every asset, module, reference and registered type/trait in Bauble has a corresp
 A path consists of various elements. Similar to Rust, most elements are seperated by `::`, so `a::b` means element `b` which is a child of element `a`.
 An element here can be a module, type or object.
 There are things known as sub-objects which may be appended to the path of a regular object, which are effectively children of the current object.
-A sub-object's path is denoted by `<path to parent>&$ty@$idx` where `$ty` is the index of the type of the subject and `$idx` is the index of the sub-object to the parent (the first sub-oject being 0, the second 1, the third 2, etc).
+A sub-object's path is denoted by `<path to parent>&$ty@$idx` where `$ty` is the index of the type of the sub-object and `$idx` is the index of the sub-object to the parent (the first sub-oject being 0, the second 1, the third 2, etc).
 
 # References
 
