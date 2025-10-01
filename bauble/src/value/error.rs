@@ -85,6 +85,10 @@ pub enum ConversionError {
     NotInstantiable {
         ty: TypeId,
     },
+    /// Expected type `ty` to be generic.
+    ExpectedGeneric {
+        ty: TypeId,
+    },
     Custom(CustomError),
 }
 
@@ -156,6 +160,10 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
             ConversionError::NotInstantiable { ty } => Cow::Owned(format!(
                 "Can't construct a default value of the type {}",
+                types.key_type(*ty).meta.path
+            )),
+            ConversionError::ExpectedGeneric { ty } => Cow::Owned(format!(
+                "Expected type `{}` to be a generic type",
                 types.key_type(*ty).meta.path
             )),
             ConversionError::Custom(custom) => custom.message.clone(),
@@ -659,6 +667,9 @@ impl BaubleError for Spanned<ConversionError> {
             ),
             ConversionError::NotInstantiable { .. } => {
                 Cow::Borrowed("Consider specifying this value manually")
+            }
+            ConversionError::ExpectedGeneric { .. } => {
+                Cow::Borrowed("This type is not a valid generic type")
             }
             ConversionError::Custom(custom) => return custom.labels.clone(),
         };
