@@ -3,8 +3,7 @@ Bauble is Rust-inspired human-readable text format for representing various Rust
 Data represented by Bauble can be parsed and stored in memory in the form of a corresponding type on Rust which implements the [`Bauble`] trait.
 In this way, Bauble is a format very useful for specifying information processed to Rust in a way that remains very consistent to the actual Rust code itself that makes use of the information.
 
-The code making use of Bauble has to construct a [`BaubleContext`] in order to provide the parsing step enough information for recognizing the different types inside of the Bauble source.
-Once a context has been created, that context can then be used for parsing various Bauble source files and extract the newly parsed data back as typed values that can be used to update the state of the program.
+Once a context has been created, that context can then be used for parsing various Bauble source files and extracting the newly parsed data back as typed values that can be used to update the state of the program.
 
 # BaubleContext
 
@@ -99,7 +98,7 @@ Every asset, module, reference and registered type/trait in Bauble has a corresp
 A path consists of various elements. Similar to Rust, most elements are seperated by `::`, so `a::b` means element `b` which is a child of element `a`.
 An element here can be a module, type or object.
 There are things known as sub-objects which may be appended to the path of a regular object, which are effectively children of the current object.
-A sub-object's path is denoted by `<path to parent>&$ty@$idx` where `$ty` is the index of the type of the subject and `$idx` is the index of the subobject to the parent (the first subject being 0, the second 1, the third 2, etc).
+A sub-object's path is denoted by `<path to parent>&$ty@$idx` where `$ty` is the index of the type of the subject and `$idx` is the index of the sub-object to the parent (the first sub-oject being 0, the second 1, the third 2, etc).
 
 # References
 
@@ -110,6 +109,6 @@ References are specified using a bauble `Path`.
 # Sub-objects
 
 A single Bauble object may contain sub-objects.
-A sub-object is a reference value within a Bauble object which is not a reference, and rather an "inlined" object directly defined together with the object.
+A sub-object is a reference value within a Bauble object which is not written as a reference, and rather as an "inlined" object directly defined together with the object.
 Functionally sub-objects work similar to a regular reference with the difference being they are defined locally to the object where they are used and are not
 top level objects themselves.
