@@ -45,7 +45,7 @@ Once you've registered all your types and traits to the builder, you can build t
 
 Once you have your context, it can be used to register Bauble source files using [`BaubleContext::register_file`].
 These will be parsed by the context when you invoke [`BaubleContext::load_all`].
-[`BaubleContext::reload_paths`] returns all Bauble 'objects' that were parsed, as well as any potential errors that occured when parsing the Bauble source.
+[`BaubleContext::load_all`] returns all Bauble 'objects' that were parsed, as well as any potential errors that occured when parsing the Bauble source.
 A Bauble object is a typed lexical element of Bauble.
 A Bauble object can be converted into a concrete value of type `T` that implements [`Bauble`] by passing the inner value to [`Bauble::from_bauble`].
 Whether the conversion is successful depends on the implementation of the [`Bauble`] trait on the type `T`.
