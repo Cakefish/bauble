@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use crate::{
-    BaubleContext,
+    BaubleContext, CustomError,
     context::PathReference,
     parse::{Path, PathEnd, PathTreeEnd, Use},
     path::{TypePath, TypePathElem},
@@ -149,9 +149,12 @@ impl<'a> Symbols<'a> {
                         .spanned(end.span));
                     }
                 }
-                PathTreeEnd::PathEnd(PathEnd::IdentGeneric(..))
-                | PathTreeEnd::PathEnd(PathEnd::WithIdentGeneric(..)) => {
-                    panic!("Generic paths cannot be used in a use statement")
+                PathTreeEnd::PathEnd(PathEnd::IdentGeneric(ident, ..))
+                | PathTreeEnd::PathEnd(PathEnd::WithIdentGeneric(ident, ..)) => {
+                    return Err(ConversionError::Custom(CustomError::new(
+                        "Use cannot use generics",
+                    ))
+                    .spanned(ident.span));
                 }
             }
             Ok(())
@@ -240,12 +243,16 @@ impl<'a> Symbols<'a> {
                     .map_err(|p| p.spanned(raw_path.span()))?;
                 PathKind::Direct(leading)
             }
-            PathEnd::WithIdentGeneric(ident, generic) => PathKind::Indirect(
-                leading,
-                TypePathElem::new(format!("{ident}<{generic}>"))
-                    .map_err(|p| p.spanned(raw_path.span()))?,
-            ),
+            PathEnd::WithIdentGeneric(ident, generic) => {
+                let generic = self.resolve_path(&generic.value)?;
+                PathKind::Indirect(
+                    leading,
+                    TypePathElem::new(format!("{ident}<{generic}>"))
+                        .map_err(|p| p.spanned(raw_path.span()))?,
+                )
+            }
             PathEnd::IdentGeneric(ident, generic) => {
+                let generic = self.resolve_path(&generic.value)?;
                 leading
                     .push_str(&format!("{ident}<{generic}>"))
                     .map_err(|p| p.spanned(raw_path.span()))?;
@@ -296,6 +303,7 @@ impl<'a> Symbols<'a> {
                     }
                     PathKind::Indirect(type_path, type_path_elem) => {
                         if is_generic {
+                            let generic = resolve_path(symbols, generic, ref_kind)?;
                             PathKind::Indirect(
                                 type_path,
                                 TypePathElem::new(format!("{type_path_elem}<{generic}>")).unwrap(),
