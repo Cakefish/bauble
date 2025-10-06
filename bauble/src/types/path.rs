@@ -422,9 +422,43 @@ impl<S: AsRef<str>> TypePath<S> {
     /// - The path is non-empty.
     /// - All the path segments are valid rust identifiers.
     pub fn is_writable(&self) -> bool {
+        let mut generic_ending = false;
         !self.is_empty()
             && self.iter().all(|part| {
+                if generic_ending {
+                    // If a generic path, must end with generic argument.
+                    return false;
+                }
+
+                let s = part.as_str();
+
+                let has_generic = s.ends_with('>');
                 let mut s = part.as_str().chars();
+
+                if has_generic {
+                    generic_ending = true;
+                    let mut delim_c = 1;
+                    let s = s.by_ref().rev().skip(1);
+                    for c in s {
+                        if c == '>' {
+                            delim_c += 1;
+                        }
+                        if c == '<' {
+                            delim_c -= 1;
+                        }
+
+                        if delim_c == 0 {
+                            break;
+                        }
+                    }
+
+                    if delim_c != 0 {
+                        // no corresponding delimiter was found.
+                        return false;
+                    }
+
+                    // Assume inner argument to type are valid.
+                }
 
                 s.next()
                     .expect("Invariant, path parts aren't empty.")
