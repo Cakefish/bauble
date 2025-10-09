@@ -11,7 +11,7 @@ use crate::{
 
 use super::{ConversionError, CopyVal, PathKind, RefError, RefKind, Result};
 
-/// This either a reference to another value or a "copy" value which was copied into here.
+/// This is either a reference to another value or a "copy" value which was copied into here.
 #[derive(Clone, Debug)]
 pub(super) enum RefCopy {
     /// Unresolved copy value.

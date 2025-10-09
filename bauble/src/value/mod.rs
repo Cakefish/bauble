@@ -1087,8 +1087,8 @@ fn find_copy_refs<'a>(
     }
 }
 
-/// Converts a parsed value to a object value. With a conversion context and existing symbols. Also
-/// does some rudementory checking if the symbols are okay.
+/// Converts a parsed value to a object value using a conversion context and existing symbols. Also
+/// does some rudimentary checking if the symbols are okay.
 fn convert_object(
     path: TypePath<&str>,
     value: &ParseVal,
