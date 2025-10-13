@@ -12,13 +12,6 @@ pub type Source = ariadne::Source<String>;
 #[derive(Clone, Default)]
 struct DefaultUses(IndexMap<TypePathElem, TypePath>);
 
-#[derive(Default, Clone, Debug)]
-struct InnerReference {
-    ty: Option<TypeId>,
-    asset: Option<TypeId>,
-    redirect: Option<TypePath>,
-}
-
 /// A type containing multiple references generally derived from a path.
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
@@ -159,8 +152,6 @@ impl BaubleContextBuilder {
         self
     }
 
-    // TODO: documentation
-    #[allow(missing_docs)]
     /// # Panics
     ///
     /// Can panic if `T`'s `TypeKind` isn't a primitive.
@@ -182,6 +173,13 @@ impl BaubleContextBuilder {
             panic!("Type system error: {e}");
         }
         let mut root_node = CtxNode::new(TypePath::empty());
+        // Every default use is added as a child node of the root with a redirect reference that
+        // points to the full path.
+        //
+        // As children of the root they are directly referencable by the provided name in any file.
+        //
+        // If other references are available at the same name, they will be preferred over the
+        // redirect.
         for (id, path) in self.default_uses.0 {
             root_node.add_node(id.borrow()).reference.redirect = Some(path);
         }
@@ -201,10 +199,34 @@ impl BaubleContextBuilder {
     }
 }
 
+#[derive(Default, Clone, Debug)]
+struct InnerReference {
+    ty: Option<TypeId>,
+    asset: Option<TypeId>,
+    redirect: Option<TypePath>,
+}
+
+/// Represents a name in one or multiple of the type, asset, module, and default use namespaces.
+///
+/// If there is a module at this name, this holds a list of the `CtxNode`s in that module.
 #[derive(Clone, Debug)]
 struct CtxNode {
+    /// This name can potentially reference:
+    /// * A type
+    /// * An asset
+    /// * A default use (aka `InnerReference::redirect`) (TODO: actually look into this, I don't
+    ///   understand why these are only added to the root node so I don't actually know how they
+    ///   work)
+    /// * A module (not represented here but via the `Self::children` field).
     reference: InnerReference,
+    /// Full path to this node.
+    ///
+    /// This is the path to reach this node from the root.
     path: TypePath,
+    /// `Some` when this node is the top level module of a file (currently inline modules don't
+    /// exist but there is some allowance for them).
+    ///
+    /// Set in [`BaubleContext::register_file`].
     source: Option<FileId>,
     children: IndexMap<TypePathElem, CtxNode>,
 }
@@ -213,9 +235,9 @@ impl CtxNode {
     fn new(path: TypePath) -> Self {
         Self {
             path,
-            reference: Default::default(),
-            source: Default::default(),
-            children: Default::default(),
+            reference: InnerReference::default(),
+            source: None,
+            children: IndexMap::<_, _>::default(),
         }
     }
 
@@ -227,8 +249,11 @@ impl CtxNode {
         };
 
         if let Some(redirect) = self.reference.redirect.as_ref()
-            && let Some(mut reference) = root.walk(redirect.borrow(), |node| node.reference(root))
+            && let Some(node) = root.node_at(redirect.borrow())
         {
+            let mut reference = node.reference(root);
+            // Overlaps in the same namespace don't introduce errors here,
+            // NOTE: Names in the current node take priority over those from the redirect.
             reference.combine_override(this);
             this = reference;
         }
@@ -236,11 +261,12 @@ impl CtxNode {
         this
     }
 
-    fn filter<'a>(
+    /// Recursively iterate all children of this node with an optional max depth of `max_depth`.
+    fn iter_all_children<'a>(
         &'a self,
-        filter: impl Fn(&CtxNode) -> bool + Copy,
         max_depth: Option<usize>,
-    ) -> impl Iterator<Item = TypePath<&'a str>> + Clone {
+    ) -> impl Iterator<Item = &'a Self> + Clone {
+        // pre-order depth first traversal
         let mut stack: Vec<(usize, indexmap::map::Values<'a, TypePathElem, CtxNode>)> = Vec::new();
         stack.push((0, self.children.values()));
         std::iter::from_fn(move || {
@@ -255,9 +281,7 @@ impl CtxNode {
                     stack.push((new_depth, inner.children.values()));
                 }
 
-                if filter(inner) {
-                    return Some(inner.path.borrow());
-                }
+                return Some(inner);
             }
 
             None
@@ -287,29 +311,27 @@ impl CtxNode {
 
         find_inner(self, ident, visit).ok()
     }
-    fn walk<'a, R>(
-        &'a self,
-        path: TypePath<&str>,
-        visit: impl FnOnce(&'a CtxNode) -> R,
-    ) -> Option<R> {
-        if path.is_empty() {
-            Some(visit(self))
+
+    /// Gets node found at the end of the walking the provided path from the current node.
+    ///
+    /// Returns `None` if no node exists at this path.
+    fn node_at(&self, path: TypePath<&str>) -> Option<&Self> {
+        if let Some((root, rest)) = path.split_start() {
+            self.children.get(&root).and_then(|node| node.node_at(rest))
+        // Path is empty, get current node.
         } else {
-            let Some((root, rest)) = path.split_start() else {
-                unreachable!("We checked that the path wasn't empty")
-            };
-            self.children
-                .get(&root)
-                .and_then(|node| node.walk(rest, visit))
+            Some(self)
         }
     }
 
-    /// Tries to find with `visit`. If `path` doesn't return `Some` when passed to `visit`, we
-    /// run `visit` with the parent node and so on.
+    /// Tries to find node where `visit` returns `Some`.
     ///
-    /// Returns the path that we got the result from and `R`.
+    /// We start at the end of `path` and walk up to the current node. Stops when `Some` is
+    /// returned by `visit`.
     ///
-    /// Returns None if `path` doesn't exist.
+    /// Returns the path that we got `Some` from and `R`.
+    ///
+    /// Returns `None` if `path` doesn't exist or if all `visit`ed nodes produced `None`.
     fn walk_find<'a, R: 'a>(
         &'a self,
         path: TypePath<&str>,
@@ -319,42 +341,36 @@ impl CtxNode {
             node: &'a CtxNode,
             path: TypePath<&str>,
             visit: &mut impl FnMut(&'a CtxNode) -> Option<R>,
-        ) -> Option<(TypePath, R)> {
-            if path.is_empty() {
-                Some((TypePath::empty(), visit(node)?))
-            } else {
-                let Some((root, rest)) = path.split_start() else {
-                    unreachable!("We checked that the path wasn't empty")
+        ) -> Result<Option<(TypePath, R)>, ()> {
+            if let Some((root, rest)) = path.split_start() {
+                let Some(child_node) = node.children.get(&root) else {
+                    // Path doesn't exist
+                    return Err(());
                 };
-                let child_node = node.children.get(&root)?;
-                match walk_find_inner(child_node, rest, visit) {
+                walk_find_inner(child_node, rest, visit).map(|maybe| match maybe {
                     Some((mut path, r)) => {
                         path.push_start(root.into());
 
                         Some((path, r))
                     }
-                    None => Some((TypePath::empty(), visit(node)?)),
-                }
+                    None => visit(node).map(|r| (TypePath::empty(), r)),
+                })
+            } else {
+                // Path is empty
+                Ok(visit(node).map(|r| (TypePath::empty(), r)))
             }
         }
 
-        walk_find_inner(self, path, &mut visit)
+        walk_find_inner(self, path, &mut visit).ok().flatten()
     }
 
-    fn walk_mut<R>(
-        &mut self,
-        path: TypePath<&str>,
-        visit: impl FnOnce(&mut CtxNode) -> R,
-    ) -> Option<R> {
-        if path.is_empty() {
-            Some(visit(self))
-        } else {
-            let Some((root, rest)) = path.split_start() else {
-                unreachable!("We checked that the path wasn't empty")
-            };
+    fn node_at_mut(&mut self, path: TypePath<&str>) -> Option<&mut Self> {
+        if let Some((root, rest)) = path.split_start() {
             self.children
                 .get_mut(&root)
-                .and_then(|node| node.walk_mut(rest, visit))
+                .and_then(|node| node.node_at_mut(rest))
+        } else {
+            Some(self)
         }
     }
 
@@ -365,6 +381,10 @@ impl CtxNode {
             && self.source.is_none()
     }
 
+    /// Clears all assets in the module this node references (if any).
+    ///
+    /// Does not recurse into other files, but will clear inline submodules in the current file (if
+    /// that feature is added).
     fn clear_child_assets(&mut self) {
         self.children.retain(|_, node| {
             if node.source.is_some() {
@@ -415,10 +435,6 @@ impl CtxNode {
         }
         node.reference.asset = Some(ty);
     }
-
-    fn find_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
-        self.walk_find(path, |node| node.source).map(|(_, s)| s)
-    }
 }
 
 /// The ID associated with a context registered file.
@@ -459,9 +475,9 @@ fn preprocess_path(path: TypePath<&str>) -> TypePath<&str> {
 }
 
 impl BaubleContext {
-    /// `path` describes the bauble "module" that the file corresponds to. That is it say, what prefix path
-    /// is necessary inside of bauble to reference the context of this file.
-    /// `source` is the string of Bauble text to be parsed.
+    /// * `path` describes the bauble "module" that the file corresponds to. That is it say, what
+    ///   prefix path is necessary inside of bauble to reference the context of this file.
+    /// * `source` is the string of Bauble text to be parsed.
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) -> FileId {
         let path = preprocess_path(path);
         let node = self.root_node.build_nodes(path);
@@ -510,18 +526,39 @@ impl BaubleContext {
     ) -> (Vec<crate::Object>, BaubleErrors) {
         let ids = paths
             .into_iter()
-            .map(
-                |(path, source)| match self.get_file_id(preprocess_path(path.borrow())) {
+            .map(|(path, source)| {
+                let processed_path = preprocess_path(path.borrow());
+                let file_id = self
+                    .root_node
+                    .node_at(processed_path)
+                    .and_then(|node| node.source);
+                match file_id {
                     Some(id) => {
                         *self.file_mut(id).1 = Source::from(source.into());
                         id
                     }
                     None => self.register_file(path.borrow(), source),
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         self.reload_files(ids)
+    }
+
+    fn parse(&self, file_id: FileId) -> Result<crate::parse::ParseValues, BaubleErrors> {
+        use chumsky::Parser;
+
+        let parser = crate::parse::parser();
+        let result = parser.parse(crate::parse::ParserSource { file_id, ctx: self });
+
+        result.into_result().map_err(|errors| {
+            BaubleErrors::from(
+                errors
+                    .into_iter()
+                    .map(|e| e.into_owned())
+                    .collect::<Vec<_>>(),
+            )
+        })
     }
 
     /// This clears asset references in any of the file modules.
@@ -529,66 +566,58 @@ impl BaubleContext {
         &mut self,
         new_files: I,
     ) -> (Vec<crate::Object>, BaubleErrors) {
-        let mut files = std::mem::take(&mut self.retry_files);
-        files.extend(new_files);
-        files.sort_unstable();
-        files.dedup();
+        let files = {
+            let mut files = std::mem::take(&mut self.retry_files);
+            files.extend(new_files);
+            files.sort_unstable();
+            files.dedup();
+            files
+        };
 
         // Clear any previous assets that were loaded by these files.
         for file in files.iter() {
             // Need a partial borrow here.
             let (path, _) = &self.files[file.0];
-            self.root_node
-                .walk_mut(path.borrow(), |node| node.clear_child_assets());
+            if let Some(node) = self.root_node.node_at_mut(path.borrow()) {
+                node.clear_child_assets();
+            }
         }
 
         let mut file_values = Vec::with_capacity(files.len());
 
-        let mut skip = Vec::new();
+        let mut new_retry = Vec::new();
         // Parse values, and return any errors.
         let mut errors = BaubleErrors::empty();
-        for file in files.iter() {
-            let values = match crate::parse(*file, self) {
-                Ok(values) => values,
+        for &file in files.iter() {
+            match self.parse(file) {
+                Ok(values) => file_values.push((file, values)),
                 Err(err) => {
-                    skip.push(*file);
+                    new_retry.push(file);
                     errors.extend(err);
-                    continue;
                 }
-            };
-
-            file_values.push(values);
+            }
         }
 
-        let mut skip_iter = skip.iter().copied().peekable();
-        let mut new_skip = Vec::new();
-
         let mut delayed = Vec::new();
+        let mut skip = Vec::new();
 
-        for (file, values) in files.iter().zip(file_values.iter()).filter(|(file, _)| {
-            if skip_iter.peek() == Some(file) {
-                skip_iter.next();
-                false
-            } else {
-                true
-            }
-        }) {
+        // Register assets from each successfully parsed file into the context.
+        for (file, values) in file_values.iter() {
             // Need a partial borrow here.
             let (path, _) = self.file(*file);
             let path = path.to_owned();
-            match crate::value::register_assets(path.borrow(), self, [], values) {
+            match crate::value::register_assets(path.borrow(), self, values) {
                 Ok(d) => {
                     delayed.extend(d);
                 }
                 Err(e) => {
                     // Skip files that errored on registering.
-                    new_skip.push(*file);
+                    skip.push(*file);
                     errors.extend(BaubleErrors::from(e));
                 }
             }
         }
 
-        skip.extend(new_skip);
         // TODO: Less hacky way to get which files errored here?
         if let Err(e) = crate::value::resolve_delayed(delayed, self) {
             // We want to skip any files that had errors.
@@ -608,21 +637,21 @@ impl BaubleContext {
 
         let mut skip_iter = skip.iter().copied().peekable();
 
-        for (file, values) in files.iter().zip(file_values).filter(|(file, _)| {
-            if skip_iter.peek() == Some(file) {
-                skip_iter.next();
-                false
-            } else {
-                true
-            }
-        }) {
-            match crate::value::convert_values(*file, values, &crate::value::Symbols::new(&*self)) {
+        for (file, values) in file_values
+            .into_iter()
+            // Skip files with errors
+            .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
+        {
+            match crate::value::convert_values(file, values, &crate::value::Symbols::new(&*self)) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
             }
         }
 
-        self.retry_files.extend(skip);
+        new_retry.extend(skip);
+        new_retry.sort_unstable();
+        new_retry.dedup();
+        self.retry_files.extend(new_retry);
 
         (objects, errors)
     }
@@ -633,16 +662,17 @@ impl BaubleContext {
     }
 
     /// Takes a path in bauble, and if the path is valid, return meta information about the
-    /// bauble item at the current path.
+    /// bauble item at that path.
     pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
         self.root_node
-            .walk(path, |node| node.reference(&self.root_node))
+            .node_at(path)
+            .map(|node| node.reference(&self.root_node))
     }
 
     /// Takes a path to a module in bauble, and if the path is valid, return the meta information
-    /// of all items inside of thatm module (not recursive).
+    /// of all items inside of that module (not recursive).
     pub fn all_in(&self, path: TypePath<&str>) -> Option<Vec<(TypePathElem, PathReference)>> {
-        self.root_node.walk(path, |node| {
+        self.root_node.node_at(path).map(|node| {
             node.children
                 .iter()
                 .map(|(key, child_node)| (key.to_owned(), child_node.reference(&self.root_node)))
@@ -650,28 +680,40 @@ impl BaubleContext {
         })
     }
 
-    // TODO(@docs)
-    #[allow(missing_docs)]
+    /// Recursively searches all children of the node at `path` for node with path ending in
+    /// `ident`.
+    ///
+    /// Returns the [`PathReference`] from [`CtxNode::reference`]. If multiple nodes are found with
+    /// `ident`, the refs from these will be combined (potentially overriding each other).
+    //
+    // TODO: couldn't this overriding lead to unexpected behavior? Should we return an error when
+    // there are multiple results in the same namespace?
     pub fn ref_with_ident(
         &self,
         path: TypePath<&str>,
         ident: TypePathElem<&str>,
     ) -> Option<PathReference> {
-        self.root_node
-            .walk(path, |node| {
-                node.filter(|node| node.path.ends_with(*ident.borrow()), None)
-                    .filter_map(|n| self.root_node.walk(n, |n| n.reference(&self.root_node)))
-                    .reduce(|a, mut b| {
-                        b.combine_override(a);
-                        b
-                    })
-            })
-            .flatten()
+        self.root_node.node_at(path).and_then(|node| {
+            node.iter_all_children(None)
+                .filter(|node| node.path.ends_with(*ident.borrow()))
+                .map(|node| node.reference(&self.root_node))
+                .reduce(|a, mut b| {
+                    b.combine_override(a);
+                    b
+                })
+        })
     }
 
-    /// if there is any associated file for `path`, get the ID of that file.
+    /// If there is any associated file for `path`, get the ID of that file.
+    ///
+    /// `path` doesn't need to be the path of a file, it can be the path of anything in a file.
+    ///
+    /// Note, if a file `a` exists and a file `a::b::c` exists, `a::b` will get the ID of the file
+    /// at `a`.
     pub fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
-        self.root_node.find_file_id(path)
+        self.root_node
+            .walk_find(path, |node| node.source)
+            .map(|(_, s)| s)
     }
 
     /// Get the module path of `file`.
@@ -699,14 +741,12 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| {
-                node.filter(
-                    |node| node.reference(&self.root_node).asset.is_some(),
-                    max_depth,
-                )
-            })
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(|node| node.reference(&self.root_node).asset.is_some())
+            .map(|node| node.path.borrow())
     }
 
     /// Get all the types starting from `path`, with an optional maximum depth of `max_depth`.
@@ -716,14 +756,12 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| {
-                node.filter(
-                    |node| node.reference(&self.root_node).ty.is_some(),
-                    max_depth,
-                )
-            })
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(|node| node.reference(&self.root_node).ty.is_some())
+            .map(|node| node.path.borrow())
     }
 
     /// Get all the modules starting from `path`, with an optional maximum depth of `max_depth`.
@@ -733,40 +771,36 @@ impl BaubleContext {
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
-            .walk(path, |node| {
-                node.filter(
-                    |node| node.reference(&self.root_node).module.is_some(),
-                    max_depth,
-                )
-            })
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(|node| node.reference(&self.root_node).module.is_some())
+            .map(|node| node.path.borrow())
     }
 
     /// Get all the references starting from `path` which belong to `kind`, with an optional maximum depth of `max_depth`.
-    pub fn ref_kinds(
+    pub fn refs_of_kind(
         &self,
         path: TypePath<&str>,
         kind: crate::value::RefKind,
         max_depth: Option<usize>,
     ) -> impl Iterator<Item = TypePath<&str>> + Clone {
         self.root_node
-            .walk(path, move |node| {
-                node.filter(
-                    move |node| {
-                        let r = node.reference(&self.root_node);
-                        match kind {
-                            crate::value::RefKind::Module => r.module.is_some(),
-                            crate::value::RefKind::Asset => r.asset.is_some(),
-                            crate::value::RefKind::Type => r.ty.is_some(),
-                            crate::value::RefKind::Any => true,
-                        }
-                    },
-                    max_depth,
-                )
-            })
+            .node_at(path)
+            .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
+            .filter(move |node| {
+                let r = node.reference(&self.root_node);
+                match kind {
+                    crate::value::RefKind::Module => r.module.is_some(),
+                    crate::value::RefKind::Asset => r.asset.is_some(),
+                    crate::value::RefKind::Type => r.ty.is_some(),
+                    crate::value::RefKind::Any => true,
+                }
+            })
+            .map(|node| node.path.borrow())
     }
 }
 
