@@ -264,6 +264,7 @@ impl ConvertMeta<'_> {
 /// Also known as sub-assets.
 pub(super) struct AdditionalObjects {
     objects: Vec<super::Object>,
+    // TODO: use NameAllocs type here
     name_allocs: std::collections::HashMap<TypePathElem, u64>,
     file_path: TypePath,
 }
@@ -336,15 +337,48 @@ impl AdditionalObjects {
 }
 
 enum NameAllocs<'a> {
-    Owned(std::collections::HashMap<TypePathElem, u64>),
-    Borrowed(&'a mut std::collections::HashMap<TypePathElem, u64>),
+    Owned(HashMap<TypePathElem, u64>),
+    Borrowed(&'a mut HashMap<TypePathElem, u64>),
+    /// A function mapping from the parent object's file path and name to the new object's name.
+    Function(fn(TypePath<&str>, TypePathElem<&str>) -> TypePathElem),
 }
 
 impl NameAllocs<'_> {
-    fn get_mut(&mut self) -> &mut std::collections::HashMap<TypePathElem, u64> {
+    fn get_hashmap(&mut self) -> Option<&mut HashMap<TypePathElem, u64>> {
         match self {
-            NameAllocs::Owned(m) => m,
-            NameAllocs::Borrowed(m) => m,
+            NameAllocs::Owned(m) => Some(m),
+            NameAllocs::Borrowed(m) => Some(m),
+            NameAllocs::Function(_) => None,
+        }
+    }
+
+    fn generate_name(
+        &mut self,
+        file_path: TypePath<&str>,
+        outer_object_name: TypePathElem<&str>,
+    ) -> TypePathElem {
+        if let Some(hashmap) = self.get_hashmap() {
+            let idx = hashmap
+                .entry(outer_object_name.to_owned())
+                .and_modify(|i| *i += 1)
+                .or_insert(0);
+            TypePathElem::new(format!("{outer_object_name}@{idx}")).expect(
+                "a path elem should still be valid after adding an '@' and a number to the end",
+            )
+        } else {
+            let NameAllocs::Function(function) = self else {
+                unreachable!()
+            };
+            function(file_path, outer_object_name)
+        }
+    }
+
+    /// Clones self, but Owned becomes Borrowed
+    fn clone_borrowed(&mut self) -> NameAllocs {
+        match self {
+            NameAllocs::Owned(owned) => NameAllocs::Borrowed(owned),
+            NameAllocs::Borrowed(borrowed) => NameAllocs::Borrowed(borrowed),
+            NameAllocs::Function(func) => NameAllocs::Function(*func),
         }
     }
 }
@@ -358,17 +392,19 @@ pub struct AdditionalUnspannedObjects<'a> {
 }
 
 impl<'a> AdditionalUnspannedObjects<'a> {
-    /// Create a new instance with it's own checking of duplicate names.
+    /// Create a new instance with its own checking of duplicate names. Same as
+    /// [`Self::new_with_name_allocs()`], but creates its own map instead of borrowing one.
     pub fn new(file_path: TypePath<&'a str>, object_name: TypePathElem<&'a str>) -> Self {
         Self {
             file_path,
             object_name,
             objects: Vec::new(),
-            name_allocs: NameAllocs::Owned(std::collections::HashMap::default()),
+            name_allocs: NameAllocs::Owned(HashMap::default()),
         }
     }
 
-    /// Create a new instance borrowing a map to create unique names.
+    /// Creates a new instance using a borrowed map of `outer object name => subobject index` to
+    /// create unique names.
     pub fn new_with_name_allocs(
         file_path: TypePath<&'a str>,
         object_name: TypePathElem<&'a str>,
@@ -382,6 +418,20 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         }
     }
 
+    /// Creates a new instance with a user-provided function to create unique names.
+    pub fn new_with_name_alloc_fn(
+        file_path: TypePath<&'a str>,
+        object_name: TypePathElem<&'a str>,
+        name_alloc_fn: fn(TypePath<&str>, TypePathElem<&str>) -> TypePathElem,
+    ) -> Self {
+        Self {
+            file_path,
+            object_name,
+            objects: Vec::new(),
+            name_allocs: NameAllocs::Function(name_alloc_fn),
+        }
+    }
+
     /// Add the type id to the path this keeps track of, for better unique names for sub-objects.
     pub fn in_type<R>(
         &mut self,
@@ -390,11 +440,12 @@ impl<'a> AdditionalUnspannedObjects<'a> {
     ) -> R {
         let name = TypePathElem::new(format!("{}&{}", self.object_name, ty.inner())).unwrap();
 
-        let mut inner = AdditionalUnspannedObjects::new_with_name_allocs(
-            self.file_path,
-            name.borrow(),
-            self.name_allocs.get_mut(),
-        );
+        let mut inner = AdditionalUnspannedObjects {
+            file_path: self.file_path,
+            object_name: name.borrow(),
+            objects: Vec::new(),
+            name_allocs: self.name_allocs.clone_borrowed(),
+        };
 
         let res = f(&mut inner);
 
@@ -405,15 +456,9 @@ impl<'a> AdditionalUnspannedObjects<'a> {
 
     /// Add an additional object, and get a reference to it.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
-        let idx = *self
+        let name = self
             .name_allocs
-            .get_mut()
-            .entry(self.object_name.to_owned())
-            .and_modify(|i| *i += 1u64)
-            .or_insert(0);
-        let name = TypePathElem::new(format!("{}@{idx}", self.object_name))
-            .expect("idx is just a number, and we know name is a valid path elem.");
-
+            .generate_name(self.file_path, self.object_name);
         let res = Value::Ref(self.file_path.join(&name));
 
         self.objects.push((name, val));
