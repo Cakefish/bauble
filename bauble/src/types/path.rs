@@ -439,6 +439,7 @@ impl<S: AsRef<str>> TypePath<S> {
                     generic_ending = true;
                     let mut delim_c = 1;
                     let s = s.by_ref().rev().skip(1);
+                    let mut inner = String::new();
                     for c in s {
                         if c == '>' {
                             delim_c += 1;
@@ -450,6 +451,8 @@ impl<S: AsRef<str>> TypePath<S> {
                         if delim_c == 0 {
                             break;
                         }
+
+                        inner.push(c);
                     }
 
                     if delim_c != 0 {
@@ -458,6 +461,10 @@ impl<S: AsRef<str>> TypePath<S> {
                     }
 
                     // Assume inner argument to type are valid.
+                    let inner = TypePath::new_unchecked(inner);
+                    if !inner.is_writable() {
+                        return false;
+                    }
                 }
 
                 s.next()
