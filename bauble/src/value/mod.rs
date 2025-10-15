@@ -1144,12 +1144,11 @@ fn compare_objects(
 
     match (&original.value, &loaded.value) {
         (crate::Value::Ref(a), crate::Value::Ref(b)) => {
-            // Not being writable means this is a sub-asset, so compare the sub assets
-            // rather than the paths to them.
+            // Compare the sub assets rather than the paths to them.
             //
             // Note, this means object comparison will pass even when the paths to sub
             // assets change.
-            if !a.is_writable() {
+            if a.is_subobject() {
                 let a = orig_map.get(a).unwrap();
                 let (_, b) = loaded_map.get(b).unwrap();
                 compare_objects(a, b, orig_map, loaded_map)
@@ -1267,7 +1266,7 @@ pub fn compare_object_sets(
 
     for (k, a) in original_object_map.iter() {
         // Don't compare sub-assets, they will be compared by recursion in `compare_objects`
-        if k.is_writable() {
+        if !k.is_subobject() {
             if let Some((span, b)) = loaded_object_map.get(k) {
                 if let Err((original, new)) =
                     compare_objects(a, b, &original_object_map, &loaded_object_map)
@@ -1282,9 +1281,9 @@ pub fn compare_object_sets(
 
     let new = loaded_object_map
         .into_iter()
-        // `k.is_writable()` indicates that this is not a sub-asset, `compare_objects`
-        // handles checking for those so we don't produce an error if their paths change.
-        .filter(|(k, _)| !original_object_map.contains_key(k) && k.is_writable())
+        // `compare_objects` handles checking for sub-asset so we don't produce
+        // an error if their paths change.
+        .filter(|(k, _)| !original_object_map.contains_key(k) && !k.is_subobject())
         .map(|(k, (_span, b))| (k, b))
         .collect::<Vec<_>>();
 

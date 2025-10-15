@@ -184,7 +184,8 @@ impl BaubleContextBuilder {
             root_node.add_node(id.borrow()).reference.redirect = Some(path);
         }
         for id in self.registry.type_ids() {
-            if self.registry.key_type(id).meta.path.is_writable() {
+            // Only build nodes for types which can actually be written out in Bauble.
+            if self.registry.key_type(id).meta.path.is_representable_type() {
                 root_node.build_type(id, &self.registry);
             }
         }
