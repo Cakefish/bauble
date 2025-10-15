@@ -425,10 +425,52 @@ impl<S: AsRef<str>> TypePath<S> {
     /// This means that:
     /// - The path is non-empty.
     /// - All the path segments are valid rust identifiers.
+    /// - May include generic arguments.
     pub fn is_representable_type(&self) -> bool {
+        let mut generic_ending = false;
         !self.is_empty()
             && self.iter().all(|part| {
+                if generic_ending {
+                    // If a generic path, must end with generic argument.
+                    return false;
+                }
+
+                let s = part.as_str();
+
+                let has_generic = s.ends_with('>');
                 let mut s = part.as_str().chars();
+
+                if has_generic {
+                    generic_ending = true;
+                    let mut delim_c = 1;
+                    let s = s.by_ref().rev().skip(1);
+                    let mut inner = String::new();
+                    for c in s {
+                        if c == '>' {
+                            delim_c += 1;
+                        }
+                        if c == '<' {
+                            delim_c -= 1;
+                        }
+
+                        if delim_c == 0 {
+                            break;
+                        }
+
+                        inner.push(c);
+                    }
+
+                    if delim_c != 0 {
+                        // no corresponding delimiter was found.
+                        return false;
+                    }
+
+                    // Assume inner argument to type are valid.
+                    let inner = TypePath::new_unchecked(inner);
+                    if !inner.is_representable_type() {
+                        return false;
+                    }
+                }
 
                 s.next()
                     .expect("Invariant, path parts aren't empty.")

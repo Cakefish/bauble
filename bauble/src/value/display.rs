@@ -715,13 +715,7 @@ impl<CTX> IndentedDisplay<CTX> for PathTreeNode {
                 w.write("}");
             }
             PathTreeEnd::Everything => w.write("*"),
-            PathTreeEnd::PathEnd(path_end) => match path_end {
-                crate::parse::PathEnd::WithIdent(s) => {
-                    w.write("*::");
-                    w.write(s);
-                }
-                crate::parse::PathEnd::Ident(s) => w.write(s),
-            },
+            PathTreeEnd::PathEnd(path_end) => w.write(&path_end.to_string()),
         }
     }
 }

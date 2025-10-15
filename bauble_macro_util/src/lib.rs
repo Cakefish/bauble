@@ -1185,7 +1185,9 @@ pub fn derive_bauble_derive_input(
         quote! {
             ::bauble::path::TypePath::new({
                 let mut s = __generic_path.to_string();
+                s.push_str("<");
                 #types
+                s.push_str(">");
                 s
             }).unwrap()
         }

@@ -14,6 +14,10 @@ pub enum PathEnd {
     WithIdent(Ident),
     /// path::ident
     Ident(Ident),
+    /// path::*::ident<...>
+    WithIdentGeneric(Ident, Spanned<Box<Path>>),
+    /// path::ident<...>
+    IdentGeneric(Ident, Spanned<Box<Path>>),
 }
 
 impl fmt::Display for PathEnd {
@@ -21,6 +25,8 @@ impl fmt::Display for PathEnd {
         match self {
             PathEnd::WithIdent(ident) => write!(f, "*::{ident}"),
             PathEnd::Ident(ident) => write!(f, "{ident}"),
+            PathEnd::WithIdentGeneric(ident, path) => write!(f, "*::{ident}<{path}>",),
+            PathEnd::IdentGeneric(ident, path) => write!(f, "{ident}<{path}>",),
         }
     }
 }
@@ -47,13 +53,36 @@ impl Path {
     }
 
     pub fn last_ident(&self) -> Spanned<&str> {
-        let (PathEnd::WithIdent(ident) | PathEnd::Ident(ident)) = &self.last.value;
+        let (PathEnd::WithIdent(ident)
+        | PathEnd::Ident(ident)
+        | PathEnd::IdentGeneric(ident, _)
+        | PathEnd::WithIdentGeneric(ident, _)) = &self.last.value;
 
         ident.as_ref().map(|s| s.as_str())
     }
 
     pub fn span(&self) -> crate::Span {
         crate::Span::new(self.last.span, self.leading.span.start..self.last.span.end)
+    }
+
+    pub fn split_generic(&self) -> Option<(Path, &Path)> {
+        match &*self.last {
+            PathEnd::WithIdent(_) | PathEnd::Ident(_) => None,
+            PathEnd::WithIdentGeneric(ident, path) => Some((
+                Path {
+                    leading: self.leading.clone(),
+                    last: Spanned::new(self.last.span, PathEnd::WithIdent(ident.clone())),
+                },
+                path.as_ref().to_inner(),
+            )),
+            PathEnd::IdentGeneric(ident, path) => Some((
+                Path {
+                    leading: self.leading.clone(),
+                    last: Spanned::new(self.last.span, PathEnd::Ident(ident.clone())),
+                },
+                path.as_ref().to_inner(),
+            )),
+        }
     }
 }
 

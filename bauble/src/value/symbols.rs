@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use crate::{
-    BaubleContext,
+    BaubleContext, CustomError,
     context::PathReference,
     parse::{Path, PathEnd, PathTreeEnd, PathTreeNode},
     path::{TypePath, TypePathElem},
@@ -160,6 +160,13 @@ impl<'a> Symbols<'a> {
                         .spanned(end.span));
                     }
                 }
+                PathTreeEnd::PathEnd(PathEnd::IdentGeneric(ident, ..))
+                | PathTreeEnd::PathEnd(PathEnd::WithIdentGeneric(ident, ..)) => {
+                    return Err(ConversionError::Custom(CustomError::new(
+                        "Use cannot use generics",
+                    ))
+                    .spanned(ident.span));
+                }
             }
             Ok(())
         }
@@ -247,12 +254,84 @@ impl<'a> Symbols<'a> {
                     .map_err(|p| p.spanned(raw_path.span()))?;
                 PathKind::Direct(leading)
             }
+            PathEnd::WithIdentGeneric(ident, generic) => {
+                let generic = self.resolve_path(&generic.value)?;
+                PathKind::Indirect(
+                    leading,
+                    TypePathElem::new(format!("{ident}<{generic}>"))
+                        .map_err(|p| p.spanned(raw_path.span()))?,
+                )
+            }
+            PathEnd::IdentGeneric(ident, generic) => {
+                let generic = self.resolve_path(&generic.value)?;
+                leading
+                    .push_str(&format!("{ident}<{generic}>"))
+                    .map_err(|p| p.spanned(raw_path.span()))?;
+                PathKind::Direct(leading)
+            }
         };
         Ok(path.spanned(raw_path.span()))
     }
 
     pub fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<PathReference>> {
-        let path = self.resolve_path(raw_path)?;
+        fn resolve_path(
+            symbols: &Symbols,
+            raw_path: &Path,
+            ref_kind: RefKind,
+        ) -> Result<Spanned<PathKind>> {
+            let raw_path_split = raw_path.split_generic();
+            let is_generic = raw_path_split.is_some();
+            let (path, &generic) = raw_path_split
+                .as_ref()
+                .map(|(l, r)| (l, r))
+                .unwrap_or((raw_path, &raw_path));
+
+            let path = symbols.resolve_path(path)?;
+
+            Ok(if matches!(ref_kind, RefKind::Type) {
+                match path.value {
+                    PathKind::Direct(type_path) => {
+                        if let Some(RefCopy::Ref(r)) = symbols.uses.get(type_path.as_str())
+                            && let Some(ty) = r.ty
+                        {
+                            let path = &symbols.ctx.type_registry().key_type(ty).meta.path;
+                            if is_generic {
+                                let generic = resolve_path(symbols, generic, ref_kind)?;
+                                PathKind::Direct(
+                                    TypePath::new(format!("{path}<{generic}>")).unwrap(),
+                                )
+                            } else {
+                                PathKind::Direct(TypePath::new(path.to_string()).unwrap())
+                            }
+                        } else if is_generic {
+                            let generic = resolve_path(symbols, generic, ref_kind)?;
+                            PathKind::Direct(
+                                TypePath::new(format!("{type_path}<{generic}>")).unwrap(),
+                            )
+                        } else {
+                            PathKind::Direct(TypePath::new(format!("{type_path}")).unwrap())
+                        }
+                    }
+                    PathKind::Indirect(type_path, type_path_elem) => {
+                        if is_generic {
+                            let generic = resolve_path(symbols, generic, ref_kind)?;
+                            PathKind::Indirect(
+                                type_path,
+                                TypePathElem::new(format!("{type_path_elem}<{generic}>")).unwrap(),
+                            )
+                        } else {
+                            PathKind::Indirect(type_path, type_path_elem)
+                        }
+                    }
+                }
+                .spanned(path.span)
+            } else {
+                path
+            })
+        }
+
+        let path = resolve_path(self, raw_path, ref_kind)?;
+
         match &path.value {
             PathKind::Direct(path) => {
                 if let Some(RefCopy::Ref(r)) = self.uses.get(path.as_str()) {
