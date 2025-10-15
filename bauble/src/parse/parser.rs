@@ -470,7 +470,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                     '{',
                     '}',
                     [('[', ']'), ('(', ')')],
-                    |_| crate::parse::Fields::new(),
+                    |_| IndexMap::<Ident, ParseVal>::new(),
                 )));
 
             let reference = just('$').ignore_then(path.clone()).map(|path| {

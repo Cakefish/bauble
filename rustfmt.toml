@@ -1,0 +1,2 @@
+# work around https://github.com/rust-lang/rust.vim/issues/528
+edition = "2024"

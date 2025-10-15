@@ -415,13 +415,18 @@ impl<S: AsRef<str>> TypePath<S> {
                     == Some(PATH_SEPERATOR))
     }
 
-    /// Returns true if this type path is something that is allowed to be
-    /// written in the bauble format.
+    /// Returns true if this type path, referencing a type, is something that is
+    /// allowed to be parsed by Bauble.
+    ///
+    /// Certain paths to types may be unparsable to Bauble yet valid internally,
+    /// therefore this method is useful to make that distinction. An example of
+    /// this are array and tuple types.
     ///
     /// This means that:
     /// - The path is non-empty.
     /// - All the path segments are valid rust identifiers.
-    pub fn is_writable(&self) -> bool {
+    /// - May include generic arguments.
+    pub fn is_representable_type(&self) -> bool {
         let mut generic_ending = false;
         !self.is_empty()
             && self.iter().all(|part| {
@@ -462,7 +467,7 @@ impl<S: AsRef<str>> TypePath<S> {
 
                     // Assume inner argument to type are valid.
                     let inner = TypePath::new_unchecked(inner);
-                    if !inner.is_writable() {
+                    if !inner.is_representable_type() {
                         return false;
                     }
                 }
@@ -472,6 +477,15 @@ impl<S: AsRef<str>> TypePath<S> {
                     .is_ident_start()
                     && s.all(|c| c.is_ident_continue())
             })
+    }
+
+    /// Determines if a path referencing an object is a path to a sub-object.
+    /// The path is assumed to be valid.
+    ///
+    /// This means that:
+    /// - The path contains the special '@' sub-object character.
+    pub fn is_subobject(&self) -> bool {
+        self.iter().any(|part| part.as_str().contains('@'))
     }
 }
 

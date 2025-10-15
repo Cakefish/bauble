@@ -7,12 +7,9 @@ use crate::{
 };
 use indexmap::IndexMap;
 
-pub type Fields = IndexMap<Ident, ParseVal>;
-
-pub type Use = Spanned<PathTreeNode>;
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathEnd {
+    // TODO: document how this syntax works?
     /// path::*::ident
     WithIdent(Ident),
     /// path::ident
@@ -106,7 +103,7 @@ impl fmt::Debug for Path {
 
 #[derive(Debug)]
 pub enum PathTreeEnd {
-    Group(Vec<Use>),
+    Group(Vec<Spanned<PathTreeNode>>),
     Everything,
     PathEnd(PathEnd),
 }
@@ -117,14 +114,11 @@ pub struct PathTreeNode {
     pub end: Spanned<PathTreeEnd>,
 }
 
-pub type Attributes = crate::value::Attributes<ParseVal>;
-pub type Value = crate::Value<ParseVal>;
-
 #[derive(Debug, Clone)]
 pub struct ParseVal {
     pub ty: Option<Path>,
-    pub attributes: Spanned<Attributes>,
-    pub value: Spanned<Value>,
+    pub attributes: Spanned<crate::Attributes<ParseVal>>,
+    pub value: Spanned<crate::Value<ParseVal>>,
 }
 
 impl ValueTrait for ParseVal {
@@ -178,7 +172,7 @@ pub struct Binding {
 
 #[derive(Debug)]
 pub struct ParseValues {
-    pub uses: Vec<Use>,
+    pub uses: Vec<Spanned<PathTreeNode>>,
     pub values: IndexMap<Ident, Binding>,
     pub copies: IndexMap<Ident, Binding>,
 }

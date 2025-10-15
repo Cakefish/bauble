@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::HashMap};
 use crate::{
     BaubleContext, CustomError,
     context::PathReference,
-    parse::{Path, PathEnd, PathTreeEnd, Use},
+    parse::{Path, PathEnd, PathTreeEnd, PathTreeNode},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
@@ -11,10 +11,14 @@ use crate::{
 
 use super::{ConversionError, CopyVal, PathKind, RefError, RefKind, Result};
 
+/// This is either a reference to another value or a "copy" value which was copied into here.
 #[derive(Clone, Debug)]
 pub(super) enum RefCopy {
+    /// Unresolved copy value.
     Unresolved,
+    /// Resolved copy value.
     Resolved(CopyVal),
+    /// Reference to a type, asset, or module?
     Ref(PathReference),
 }
 
@@ -42,9 +46,15 @@ impl RefCopy {
     }
 }
 
+/// Representation of item names available in the current module.
+///
+/// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
+/// There are also copy values (TODO: which overlap all namespaces?).
 #[derive(Clone)]
 pub(crate) struct Symbols<'a> {
     pub(super) ctx: &'a BaubleContext,
+    // Map of identifiers to ref-copies (which can be unresolved-copy, resolved-copy, or reference)
+    // A resolved copy is either `CopyVal::Copy` or `CopyVal::Resolved(Val)`
     pub(super) uses: HashMap<TypePathElem, RefCopy>,
 }
 
@@ -72,10 +82,11 @@ impl<'a> Symbols<'a> {
     }
 
     pub fn add(&mut self, symbols: Symbols) {
+        // TODO: what about conflicting entries?
         self.uses.extend(symbols.uses)
     }
 
-    pub fn add_use(&mut self, use_: &Use) -> Result<()> {
+    pub fn add_use(&mut self, use_path: &Spanned<PathTreeNode>) -> Result<()> {
         fn add_use_inner(
             this: &mut Symbols,
             leading: TypePath,
@@ -161,7 +172,7 @@ impl<'a> Symbols<'a> {
         }
 
         let mut leading = TypePath::empty();
-        for l in use_.leading.iter() {
+        for l in use_path.leading.iter() {
             leading.push_str(l).map_err(|e| e.spanned(l.span))?;
             if self.ctx.get_ref(leading.borrow()).is_none() {
                 return Err(ConversionError::RefError(Box::new(RefError {
@@ -173,7 +184,7 @@ impl<'a> Symbols<'a> {
                 .spanned(l.span));
             }
         }
-        add_use_inner(self, leading, &use_.end)
+        add_use_inner(self, leading, &use_path.end)
     }
 
     pub(super) fn try_resolve_copy<'b>(

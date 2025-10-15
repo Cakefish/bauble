@@ -572,7 +572,7 @@ impl BaubleError for Spanned<ConversionError> {
                 match &ref_err.path {
                     PathKind::Direct(path) => {
                         let options = ctx
-                            .ref_kinds(TypePath::empty(), ref_err.kind, None)
+                            .refs_of_kind(TypePath::empty(), ref_err.kind, None)
                             .map(|p| p.into_inner());
                         if path.len() == 1
                             && let Some(uses) = &ref_err.uses
@@ -604,7 +604,7 @@ impl BaubleError for Spanned<ConversionError> {
                     }
                     PathKind::Indirect(module, ident) => {
                         if let Some(suggestions) = get_suggestions(
-                            ctx.ref_kinds(module.borrow(), ref_err.kind, None)
+                            ctx.refs_of_kind(module.borrow(), ref_err.kind, None)
                                 .filter_map(|s| {
                                     s.split_end()
                                         .map(|(_, ident)| format!("{module}::*::{ident}"))
@@ -673,7 +673,7 @@ impl BaubleError for Spanned<ConversionError> {
             && ident.len() == 1
         {
             let suggestions = ctx
-                .ref_kinds(TypePath::empty(), ref_err.kind, None)
+                .refs_of_kind(TypePath::empty(), ref_err.kind, None)
                 .filter(|path| path.ends_with(ident.borrow()))
                 .map(|path| format!("`{path}`"))
                 .collect::<Vec<_>>();

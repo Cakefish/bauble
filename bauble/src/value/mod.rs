@@ -564,7 +564,7 @@ pub enum PrimitiveValue {
 
 /// A parsed but untyped value from Bauble.
 ///
-/// This is the fundemtnal building block of interpreteting Bauble.
+/// This is the fundamental building block of interpreteting Bauble.
 /// For a typed version with attributes, see [`Val`].
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
@@ -660,6 +660,8 @@ impl PathKind {
 }
 
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
+///
+/// What they are referencing needs to be loaded in order to determine their type.
 pub struct DelayedRegister {
     pub asset: Spanned<TypePath>,
     pub reference: Spanned<PathKind>,
@@ -676,6 +678,8 @@ pub(crate) fn resolve_delayed(
         delayed.retain(|d| {
             if let Some(r) = match &d.reference.value {
                 PathKind::Direct(path) => ctx.get_ref(path.borrow()),
+                // TODO: what if indirect path becomes ambiguous due to later registered items that
+                // were delayed?
                 PathKind::Indirect(path, ident) => {
                     ctx.ref_with_ident(path.borrow(), ident.borrow())
                 }
@@ -711,6 +715,7 @@ pub(crate) fn resolve_delayed(
             for scc in petgraph::algo::tarjan_scc(&graph) {
                 if scc.len() == 1 {
                     if map[&scc[0]].could_be(scc[0].borrow()) {
+                        // Ref refers to itself
                         errors.push(
                             ConversionError::Cycle(vec![(
                                 scc[0].to_string().spanned(scc[0].span),
@@ -719,6 +724,8 @@ pub(crate) fn resolve_delayed(
                             .spanned(scc[0].span),
                         )
                     } else {
+                        // TODO: Is this path possible? Wouldn't Ref have to refer to itself for
+                        // scc.len() == 1?
                         errors.push(
                             ConversionError::RefError(Box::new(RefError {
                                 // TODO: Could pass uses here for better suggestions.
@@ -755,24 +762,22 @@ pub(crate) fn resolve_delayed(
 pub(crate) fn register_assets(
     path: TypePath<&str>,
     ctx: &mut crate::context::BaubleContext,
-    default_uses: impl IntoIterator<Item = (TypePathElem, PathReference)>,
     values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
-    let mut uses = default_uses
-        .into_iter()
-        .map(|(key, val)| (key, RefCopy::Ref(val)))
-        .collect();
     let mut errors = Vec::new();
     let mut delayed = Vec::new();
 
-    let mut symbols = Symbols { ctx: &*ctx, uses };
-    for use_ in &values.uses {
-        if let Err(e) = symbols.add_use(use_) {
+    let mut symbols = Symbols::new(ctx);
+    // Add `uses` to local `Symbols` instance
+    for use_path in &values.uses {
+        if let Err(e) = symbols.add_use(use_path) {
             errors.push(e);
         }
     }
 
-    Symbols { uses, .. } = symbols;
+    // Move `uses` in/out of `Symbols` every loop so we have mutable access to `ctx` at certain
+    // points.
+    let Symbols { mut uses, .. } = symbols;
 
     // TODO: Register these in a correct order to allow for assets referencing assets.
     for (ident, binding) in &values.values {
@@ -781,6 +786,7 @@ pub(crate) fn register_assets(
         let path = path.join(ident);
         let mut symbols = Symbols { ctx: &*ctx, uses };
 
+        // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path {
             symbols.resolve_type(ty)
         } else {
@@ -805,7 +811,7 @@ pub(crate) fn register_assets(
                 });
 
             if res.is_err()
-                && let Value::Ref(reference) = &binding.value.value.value
+                && let Value::Ref(reference) = &*binding.value.value
                 && let Ok(reference) = symbols.resolve_path(reference)
             {
                 delayed.push(DelayedRegister {
@@ -855,8 +861,8 @@ pub(crate) fn convert_values(
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
     let mut use_symbols = Symbols::new(default_symbols.ctx);
     let mut use_errors = Vec::new();
-    for use_ in values.uses {
-        if let Err(e) = use_symbols.add_use(&use_) {
+    for use_path in values.uses {
+        if let Err(e) = use_symbols.add_use(&use_path) {
             use_errors.push(e);
         }
     }
@@ -865,6 +871,7 @@ pub(crate) fn convert_values(
 
     let path = symbols.ctx.get_file_path(file);
 
+    // Add asset
     for (symbol, _) in &values.values {
         let ident = TypePathElem::new(symbol.as_str()).expect("Invariant");
         let path = path.join(&ident);
@@ -1080,7 +1087,8 @@ fn find_copy_refs<'a>(
     }
 }
 
-/// Converts a parsed value to a object value. With a conversion context and existing symbols. Also does some rudementory checking if the symbols are okay.
+/// Converts a parsed value to a object value using a conversion context and existing symbols. Also
+/// does some rudimentary checking if the symbols are okay.
 fn convert_object(
     path: TypePath<&str>,
     value: &ParseVal,
@@ -1136,12 +1144,11 @@ fn compare_objects(
 
     match (&original.value, &loaded.value) {
         (crate::Value::Ref(a), crate::Value::Ref(b)) => {
-            // Not being writable means this is a sub-asset, so compare the sub assets
-            // rather than the paths to them.
+            // Compare the sub assets rather than the paths to them.
             //
             // Note, this means object comparison will pass even when the paths to sub
             // assets change.
-            if !a.is_writable() {
+            if a.is_subobject() {
                 let a = orig_map.get(a).unwrap();
                 let (_, b) = loaded_map.get(b).unwrap();
                 compare_objects(a, b, orig_map, loaded_map)
@@ -1259,7 +1266,7 @@ pub fn compare_object_sets(
 
     for (k, a) in original_object_map.iter() {
         // Don't compare sub-assets, they will be compared by recursion in `compare_objects`
-        if k.is_writable() {
+        if !k.is_subobject() {
             if let Some((span, b)) = loaded_object_map.get(k) {
                 if let Err((original, new)) =
                     compare_objects(a, b, &original_object_map, &loaded_object_map)
@@ -1274,9 +1281,9 @@ pub fn compare_object_sets(
 
     let new = loaded_object_map
         .into_iter()
-        // `k.is_writable()` indicates that this is not a sub-asset, `compare_objects`
-        // handles checking for those so we don't produce an error if their paths change.
-        .filter(|(k, _)| !original_object_map.contains_key(k) && k.is_writable())
+        // `compare_objects` handles checking for sub-asset so we don't produce
+        // an error if their paths change.
+        .filter(|(k, _)| !original_object_map.contains_key(k) && !k.is_subobject())
         .map(|(k, (_span, b))| (k, b))
         .collect::<Vec<_>>();
 

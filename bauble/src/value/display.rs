@@ -456,7 +456,7 @@ impl IndentedDisplay<ValueDisplayCtx<'_, UnspannedVal>> for UnspannedVal {
         let path = w
             .ctx()
             .types
-            .get_writable_path(self.ty)
+            .get_representable_path(self.ty)
             .unwrap_or_default()
             .to_owned();
 
@@ -510,7 +510,7 @@ impl IndentedDisplay<ValueDisplayCtx<'_, Val>> for Val {
         let path = w
             .ctx()
             .types
-            .get_writable_path(*self.ty)
+            .get_representable_path(*self.ty)
             .unwrap_or_default()
             .to_owned();
 
@@ -591,7 +591,7 @@ impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX
                     _ => false,
                 };
 
-            if !can_skip_type && let Some(path) = registry.get_writable_path(ty) {
+            if !can_skip_type && let Some(path) = registry.get_representable_path(ty) {
                 let path = path.to_owned();
                 w.write(": ");
                 w.write(path.as_str());
@@ -655,8 +655,7 @@ where
         let mut inlined_refs = HashMap::new();
         let objects = w.ctx().1;
         for object in objects.iter() {
-            // !is_writable indicates this is a sub-object
-            if !object.object_path.is_writable() {
+            if object.object_path.is_subobject() {
                 inlined_refs.insert(object.object_path.borrow(), &object.value);
             }
         }
@@ -678,7 +677,7 @@ where
         let mut inlined_refs = HashMap::new();
         let mut written = Vec::new();
         for object in self.iter() {
-            if object.object_path.is_writable() {
+            if !object.object_path.is_subobject() {
                 written.push(object);
             } else {
                 inlined_refs.insert(object.object_path.borrow(), &object.value);
