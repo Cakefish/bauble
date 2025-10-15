@@ -559,7 +559,9 @@ impl TypeRegistry {
             {
                 let ty = self.key_type(ty_id);
                 if !ty.kind.instanciable()
-                    || !ty.meta.path.is_writable()
+                    // If the path is not writable then it cannot be validated
+                    // as it cannot be written out as Bauble source.
+                    || !ty.meta.path.is_representable_type()
                     || !ty.meta.traits.contains(&self.top_level_trait_dependency)
                 {
                     continue;
@@ -828,15 +830,19 @@ impl TypeRegistry {
 
     /// Gets the writeable path of a certain path.
     ///
-    /// If this type is generic and its path isn't writable this will return the generic types path.
-    pub fn get_writable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
+    /// If this type is generic and its path isn't writable this will return the generic type path
+    /// if the generic type is writable.
+    pub fn get_representable_path(&self, ty: TypeId) -> Option<TypePath<&str>> {
         let p = self.key_type(ty).meta.path.borrow();
 
-        if p.is_writable() {
+        // TODO: is this still necessary when top-level generic objects are merged?
+        // It could still be necessary since not all possible generics can be
+        // represented in Bauble still.
+        if p.is_representable_type() {
             Some(p)
         } else if let Some(t) = self.key_type(ty).meta.generic_base_type {
             let p = self.key_type(t).meta.path.borrow();
-            p.is_writable().then_some(p)
+            p.is_representable_type().then_some(p)
         } else {
             None
         }
