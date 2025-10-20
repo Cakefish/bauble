@@ -426,7 +426,7 @@ impl TypeRegistry {
         } else {
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
-                let mut ty = Type {
+                let ty = Type {
                     meta: TypeMeta {
                         path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
                             .expect("Invariant"),
@@ -436,14 +436,14 @@ impl TypeRegistry {
                     kind: TypeKind::Ref(inner),
                 };
 
-                this.on_register_type(id, &mut ty);
+                this.on_register_type(id, &ty);
 
                 ty
             })
         }
     }
 
-    fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
+    fn on_register_type(&mut self, id: TypeId, ty: &Type) {
         for tr in ty.meta.traits.iter() {
             let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
                 panic!("Invariant")
@@ -527,9 +527,9 @@ impl TypeRegistry {
 
     /// Makes it possible to register a type which is not represented in Rust.
     #[must_use]
-    pub fn register_dummy_type(&mut self, mut ty: Type) -> TypeId {
+    pub fn register_dummy_type(&mut self, ty: Type) -> TypeId {
         self.register_type(|this, id| {
-            this.on_register_type(id, &mut ty);
+            this.on_register_type(id, &ty);
 
             ty
         })
@@ -670,8 +670,8 @@ impl TypeRegistry {
 
         match id {
             Some(id) if self.to_be_assigned.remove(&id) => {
-                let mut ty = T::construct_type(self);
-                self.on_register_type(id, &mut ty);
+                let ty = T::construct_type(self);
+                self.on_register_type(id, &ty);
                 self.types[id.0] = ty;
 
                 id
@@ -679,8 +679,8 @@ impl TypeRegistry {
             Some(id) => id,
             None => self.register_type(|this, id| {
                 this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
-                let mut ty = T::construct_type(this);
-                this.on_register_type(id, &mut ty);
+                let ty = T::construct_type(this);
+                this.on_register_type(id, &ty);
 
                 ty
             }),
