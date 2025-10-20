@@ -58,7 +58,7 @@ fn resolve_type(
     expected_type: TypeId,
     val_type: &mut Option<Spanned<TypeId>>,
     primitive_type: Option<types::Primitive>,
-    span: crate::Span,
+    span: Span,
 ) -> Result<Spanned<TypeId>> {
     let types = symbols.ctx.type_registry();
     let ty = if types.key_type(expected_type).kind.instanciable() {
@@ -264,7 +264,7 @@ impl ConvertMeta<'_> {
 /// Also known as sub-assets.
 pub(super) struct AdditionalObjects {
     objects: Vec<super::Object>,
-    name_allocs: std::collections::HashMap<TypePathElem, u64>,
+    name_allocs: HashMap<TypePathElem, u64>,
     file_path: TypePath,
 }
 
@@ -336,12 +336,12 @@ impl AdditionalObjects {
 }
 
 enum NameAllocs<'a> {
-    Owned(std::collections::HashMap<TypePathElem, u64>),
-    Borrowed(&'a mut std::collections::HashMap<TypePathElem, u64>),
+    Owned(HashMap<TypePathElem, u64>),
+    Borrowed(&'a mut HashMap<TypePathElem, u64>),
 }
 
 impl NameAllocs<'_> {
-    fn get_mut(&mut self) -> &mut std::collections::HashMap<TypePathElem, u64> {
+    fn get_mut(&mut self) -> &mut HashMap<TypePathElem, u64> {
         match self {
             NameAllocs::Owned(m) => m,
             NameAllocs::Borrowed(m) => m,
@@ -364,7 +364,7 @@ impl<'a> AdditionalUnspannedObjects<'a> {
             file_path,
             object_name,
             objects: Vec::new(),
-            name_allocs: NameAllocs::Owned(std::collections::HashMap::default()),
+            name_allocs: NameAllocs::Owned(HashMap::default()),
         }
     }
 
@@ -403,7 +403,11 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         res
     }
 
-    /// Add an additional object, and get a reference to it.
+    /// Adds an additional object, generating a name for it. Generated names follow the form
+    /// `"{object_name}@{idx}"`, or `"{object_name}&{ty}@{idx}"` if [`in_type()`](Self::in_type)
+    /// was used.
+    ///
+    /// Returns a [`Value::Ref`] referencing the added object.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
         let idx = *self
             .name_allocs
@@ -414,18 +418,38 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         let name = TypePathElem::new(format!("{}@{idx}", self.object_name))
             .expect("idx is just a number, and we know name is a valid path elem.");
 
+        self.add_object_with_name(name, val)
+    }
+
+    /// Adds an additional object, with the given name.
+    ///
+    /// Returns a [`Value::Ref`] referencing the added object.
+    pub fn add_object_with_name(
+        &mut self,
+        name: TypePathElem,
+        val: UnspannedVal,
+    ) -> Value<UnspannedVal> {
         let res = Value::Ref(self.file_path.join(&name));
-
         self.objects.push((name, val));
-
         res
     }
 
-    /// Get the additional objects.
+    /// Gets the additional objects. Returns an iterator of (name, value), in the order in which
+    /// the objects were added.
     pub fn into_objects(
         self,
     ) -> impl ExactSizeIterator<Item = (TypePathElem, UnspannedVal)> + use<> {
         self.objects.into_iter()
+    }
+
+    /// Gets the path to the file this was created for.
+    pub fn file_path(&self) -> &TypePath<&str> {
+        &self.file_path
+    }
+
+    /// Gets the name of the object this was created for.
+    pub fn object_name(&self) -> &TypePathElem<&str> {
+        &self.object_name
     }
 }
 
