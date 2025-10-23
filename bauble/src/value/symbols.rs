@@ -388,14 +388,14 @@ impl<'a> Symbols<'a> {
     pub fn resolve_type(&self, path: &Path) -> Result<TypeId> {
         let item = self.resolve_item(path, RefKind::Type)?;
 
-        item.ty.ok_or({
+        item.ty.ok_or(
             ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
                 path: self.resolve_path(path)?.value,
                 path_ref: item.into_owned(),
                 kind: RefKind::Type,
             }))
-            .spanned(path.span())
-        })
+            .spanned(path.span()),
+        )
     }
 }

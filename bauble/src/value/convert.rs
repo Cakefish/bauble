@@ -233,8 +233,6 @@ pub enum AnyVal<'a> {
 }
 
 pub struct ConvertMeta<'a> {
-    /// Allows looking up assets to find their associated object.
-    pub asset_to_value: &'a mut HashMap<(TypePath<String>, TypeId), Value>,
     pub symbols: &'a Symbols<'a>,
     pub additional_objects: &'a mut AdditionalObjects,
     pub object_name: TypePathElem<&'a str>,
@@ -244,7 +242,6 @@ pub struct ConvertMeta<'a> {
 impl ConvertMeta<'_> {
     pub fn reborrow(&mut self) -> ConvertMeta {
         ConvertMeta {
-            asset_to_value: self.asset_to_value,
             symbols: self.symbols,
             additional_objects: self.additional_objects,
             object_name: self.object_name,
@@ -254,7 +251,6 @@ impl ConvertMeta<'_> {
 
     fn with_object_name<'b>(&'b mut self, name: TypePathElem<&'b str>) -> ConvertMeta<'b> {
         ConvertMeta {
-            asset_to_value: self.asset_to_value,
             symbols: self.symbols,
             additional_objects: self.additional_objects,
             object_name: name,
@@ -1079,14 +1075,6 @@ where
                 // A ref can convert from a ref value.
                 (types::TypeKind::Ref(_), Value::Ref(r)) => {
                     Value::Ref(Self::get_asset(r, meta.symbols)?)
-                }
-                (_, Value::Ref(r)) => {
-                    let asset = Self::get_asset(r, meta.symbols)?;
-                    let value = meta
-                        .asset_to_value
-                        .get(&(asset, ty_id.value))
-                        .ok_or(ConversionError::UnregisteredAsset.spanned(span))?;
-                    value.clone()
                 }
                 // Or from another value, and we instantiate a new object that we can refer to.
                 (types::TypeKind::Ref(ty), _) => {

@@ -1,10 +1,9 @@
-use indexmap::IndexMap;
-
 use crate::{
     Bauble, BaubleAllocator, BaubleErrors,
     path::{TypePath, TypePathElem},
     types::{BaubleTrait, TypeId, TypeRegistry},
 };
+use indexmap::IndexMap;
 
 #[allow(missing_docs)]
 pub type Source = ariadne::Source<String>;

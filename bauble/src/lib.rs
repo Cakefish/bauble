@@ -2,6 +2,7 @@
 #![feature(iterator_try_collect, let_chains, ptr_metadata)]
 #![warn(missing_docs)]
 
+mod builtin;
 mod context;
 mod error;
 mod parse;
@@ -13,6 +14,7 @@ pub mod types;
 
 pub use bauble_macros::Bauble;
 
+pub use builtin::Ref;
 pub use context::{BaubleContext, BaubleContextBuilder, FileId, PathReference, Source};
 pub use error::{BaubleError, BaubleErrors, CustomError, Level, print_errors};
 pub use spanned::{Span, SpanExt, Spanned};

@@ -788,7 +788,11 @@ pub(crate) fn register_assets(
         let symbols = Symbols { ctx: &*ctx, uses };
 
         // To register an asset we need to determine its type.
-        let ty = if let Some(ty) = &binding.type_path {
+        let ty = if let Some(ty) = &binding.type_path
+            // If the value is a reference, then an explicit type should
+            // still be delayed.
+            && !matches!(binding.value.value.value, Value::Ref(_))
+        {
             symbols.resolve_type(ty)
         } else {
             let res = value_type(&binding.value, &symbols)
@@ -978,12 +982,10 @@ pub(crate) fn convert_values(
     }
 
     let default_span = crate::Span::new(file, 0..0);
-    let mut asset_to_value = HashMap::default();
 
     macro_rules! meta {
         ($name:expr) => {
             ConvertMeta {
-                asset_to_value: &mut asset_to_value,
                 symbols: &symbols,
                 additional_objects: &mut additional_objects,
                 object_name: $name,
@@ -1103,13 +1105,7 @@ fn convert_object(
     mut meta: ConvertMeta,
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
-
-    let object = create_object(path, meta.object_name, value.clone(), meta.symbols)?;
-    meta.asset_to_value.insert(
-        (path.join(&meta.object_name), value.ty.value),
-        object.value.value.value.clone(),
-    );
-    Ok(object)
+    create_object(path, meta.object_name, value, meta.symbols)
 }
 
 fn create_object(
