@@ -499,9 +499,12 @@ impl BaubleContext {
     /// Registers an asset. This is done automatically for any objects in a file that gets registered.
     ///
     /// With this method you can expose assets that aren't in bauble.
-    pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
+    ///
+    /// Returns ID of internal Ref type for `ty`.
+    pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) -> TypeId {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
         self.root_node.build_asset(path, ref_ty);
+        ref_ty
     }
 
     fn file(&self, file: FileId) -> (TypePath<&str>, &Source) {
