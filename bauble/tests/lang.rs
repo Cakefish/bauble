@@ -113,3 +113,23 @@ pub fn ref_implicit_type_multiple_files() {
         ]
     );
 }
+
+#[test]
+#[should_panic]
+pub fn ref_explicit_type_incorrect() {
+    #[derive(Bauble, PartialEq, Eq, Debug)]
+    struct Incorrect(u32);
+
+    bauble::bauble_test!(
+        TEST2
+        [Test, Incorrect]
+        ["i: Incorrect = Incorrect(0)\n\
+        r: Ref<Incorrect> = $test::test\n\
+        test = lang::Test{ x: -2, y: 2 }"]
+        [
+            Incorrect(0),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
+            Test { x: -2, y: 2 },
+        ]
+    );
+}
