@@ -654,7 +654,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             .repeated()
             .collect::<Vec<_>>(),
     )
-    .map(|(uses, values)| {
+    .validate(|(uses, values), _, emitter| {
         values.into_iter().fold(
             ParseValues {
                 uses,
@@ -665,6 +665,12 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 let binding = Binding { type_path, value };
                 match ty {
                     ItemType::Value => {
+                        if values.values.contains_key(&ident) {
+                            emitter.emit(Rich::custom(
+                                ident.span,
+                                "This identifier was already used".to_string(),
+                            ));
+                        }
                         values.values.insert(ident, binding);
                     }
                     ItemType::Copy => {
