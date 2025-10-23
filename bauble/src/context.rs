@@ -501,6 +501,7 @@ impl BaubleContext {
     /// With this method you can expose assets that aren't in bauble.
     pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
+        self.root_node.build_type(ref_ty, &self.registry);
         self.root_node.build_asset(path, ref_ty);
     }
 

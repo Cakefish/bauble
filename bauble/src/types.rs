@@ -420,10 +420,19 @@ impl TypeRegistry {
         )
     }
 
+    /// If `inner` is a reference, then this function should return the ID of `inner`.
     pub(crate) fn get_or_register_asset_ref(&mut self, inner: TypeId) -> TypeId {
         if let Some(id) = self.asset_refs.get(&inner) {
             *id
         } else {
+            // If the inner type is a reference then do not create a reference
+            // again. Look for an already existing reference type.
+            if let TypeKind::Ref(r) = self.key_type(inner).kind {
+                let ty = self.get_or_register_asset_ref(r);
+                assert_eq!(ty, inner, "Multiple reference types to the same reference");
+                return ty;
+            }
+
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
                 let ty = Type {
@@ -873,7 +882,7 @@ impl TypeRegistry {
             (TypeKind::Trait(types), _) => types.contains(input_id),
             (TypeKind::Ref(a), TypeKind::Ref(b)) => self.can_infer_from(*a, *b),
             (TypeKind::Ref(t), _) => self.can_infer_from(*t, input_id),
-
+            (_, TypeKind::Ref(r)) => self.can_infer_from(output_id, *r),
             (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
 
             (_, TypeKind::Generic(types)) => types.contains(output_id),

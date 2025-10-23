@@ -973,10 +973,12 @@ pub(crate) fn convert_values(
     }
 
     let default_span = crate::Span::new(file, 0..0);
+    let mut asset_to_value = HashMap::default();
 
     macro_rules! meta {
         ($name:expr) => {
             ConvertMeta {
+                asset_to_value: &mut asset_to_value,
                 symbols: &symbols,
                 additional_objects: &mut additional_objects,
                 object_name: $name,
@@ -1097,7 +1099,12 @@ fn convert_object(
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
 
-    create_object(path, meta.object_name, value, meta.symbols)
+    let object = create_object(path, meta.object_name, value, meta.symbols)?;
+    meta.asset_to_value.insert(
+        path.join(&meta.object_name),
+        object.value.value.value.clone(),
+    );
+    Ok(object)
 }
 
 fn create_object(
