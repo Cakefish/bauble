@@ -368,13 +368,13 @@ fn test_trait() {
     bauble_test!(
         TEST_CTX
         [Trans, Foo, Bar]
-        r#"
+        [r#"
             use derive::{Trans, Foo, Bar};
 
             a: Trans = Foo(32)
 
             b: Trans = <Bar> "meow"
-        "#
+        "#]
         [Trans(Box::new(Foo(32))), Trans(Box::new(Bar("meow".to_string())))]
     );
 }

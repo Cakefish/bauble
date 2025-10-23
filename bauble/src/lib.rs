@@ -39,9 +39,12 @@ pub mod private {
 #[macro_export]
 macro_rules! bauble_test {
     ( [$($ty:ty),* $(,)?] $source:literal [$($test_value:expr),* $(,)?]) => {
-        $crate::bauble_test!(__TEST_CTX [$($ty),*] $source [$($test_value),*])
+        $crate::bauble_test!(__TEST_CTX [$($ty),*] [$source] [$($test_value),*])
     };
-    ($ctx_static:ident [$($ty:ty),* $(,)?] $source:literal [$($test_value:expr),* $(,)?]) => {
+    ( [$($ty:ty),* $(,)?] [$($source:literal),* $(,)?] [$($test_value:expr),* $(,)?]) => {
+        $crate::bauble_test!(__TEST_CTX [$($ty),*] [$($source),*] [$($test_value),*])
+    };
+    ($ctx_static:ident [$($ty:ty),* $(,)?] [$($source:literal),* $(,)?] [$($test_value:expr),* $(,)?]) => {
         static $ctx_static: std::sync::OnceLock<std::sync::RwLock<$crate::BaubleContext>> = std::sync::OnceLock::new();
         {
             let file_path = $crate::path::TypePath::new("test").unwrap();
@@ -52,7 +55,9 @@ macro_rules! bauble_test {
                 let mut ctx = ctx.build();
                 ctx.type_registry().validate(true).expect("Invalid type registry");
 
-                ctx.register_file(file_path, format!("\n{}\n", $source));
+                $(
+                    ctx.register_file(file_path, format!("\n{}\n", $source));
+                )*
 
                 std::sync::RwLock::new(ctx)
             });

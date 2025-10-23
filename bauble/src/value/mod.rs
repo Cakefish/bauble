@@ -1099,9 +1099,9 @@ fn convert_object(
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
 
-    let object = create_object(path, meta.object_name, value, meta.symbols)?;
+    let object = create_object(path, meta.object_name, value.clone(), meta.symbols)?;
     meta.asset_to_value.insert(
-        path.join(&meta.object_name),
+        (path.join(&meta.object_name), value.ty.value),
         object.value.value.value.clone(),
     );
     Ok(object)

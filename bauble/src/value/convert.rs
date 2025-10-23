@@ -234,7 +234,7 @@ pub enum AnyVal<'a> {
 
 pub struct ConvertMeta<'a> {
     /// Allows looking up assets to find their associated object.
-    pub asset_to_value: &'a mut HashMap<TypePath<String>, Value>,
+    pub asset_to_value: &'a mut HashMap<(TypePath<String>, TypeId), Value>,
     pub symbols: &'a Symbols<'a>,
     pub additional_objects: &'a mut AdditionalObjects,
     pub object_name: TypePathElem<&'a str>,
@@ -1082,11 +1082,9 @@ where
                 }
                 (_, Value::Ref(r)) => {
                     let asset = Self::get_asset(r, meta.symbols)?;
-                    println!("{asset}");
-                    println!("{:?}", meta.asset_to_value);
                     let value = meta
                         .asset_to_value
-                        .get(&asset)
+                        .get(&(asset, ty_id.value))
                         .ok_or(ConversionError::UnregisteredAsset.spanned(span))?;
                     value.clone()
                 }
