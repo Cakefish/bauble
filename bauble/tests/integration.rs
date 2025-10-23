@@ -169,13 +169,40 @@ fn new_nested_reload_paths() {
 }
 
 #[test]
+#[should_panic]
 fn duplicate_objects() {
-    // TODO: make this fail!
-    bauble::bauble_test!(
-        [Test]
+    let a = &test_file!(
+        "a",
         "test = integration::Test{ x: -5, y: 5 }\n\
-        test = integration::Test{ x: -5, y: 4 }"
-        [Test { x: -5, y: 4 }]
+        test = integration::Test{ x: -5, y: 4 }",
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a],
+    );
+}
+
+// NOTE: This currently fails because `b::test` isn't allowed by itself but if we add support for
+// that we still want this case to fail.
+#[test]
+#[should_panic]
+fn duplicate_objects_across_files() {
+    let a = &test_file!(
+        "a",
+        "b::test = integration::Test{ x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let ab = &test_file!("a::b", "test = integration::Test{ x: -5, y: 5 }",);
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, ab],
     );
 }
 
@@ -201,7 +228,7 @@ fn empty_module() {
 #[test]
 fn default_uses() {
     let a = &test_file!("a", "test = Test { x: -5, y: 5 }", Test { x: -5, y: 5 },);
-    let a_b = &test_file!("a::b", "test = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
+    let ab = &test_file!("a::b", "test = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
 
     test_load(
         &|ctx| {
@@ -211,7 +238,7 @@ fn default_uses() {
                 TypePath::new("integration::Test").unwrap().to_owned(),
             );
         },
-        &[a, a_b],
+        &[a, ab],
     );
 }
 
@@ -235,5 +262,118 @@ fn some_files_fail() {
             ctx.register_type::<Test, _>();
         },
         &[a, b, c],
+    );
+}
+
+#[derive(PartialEq, Debug)]
+struct TestRef(String);
+
+impl bauble::Bauble<'_> for TestRef {
+    fn construct_type(registry: &mut bauble::types::TypeRegistry) -> bauble::types::Type {
+        bauble::types::Type {
+            meta: bauble::types::TypeMeta {
+                path: bauble::path::TypePath::new("integration::TestRef")
+                    .unwrap()
+                    .to_owned(),
+                ..Default::default()
+            },
+            kind: bauble::types::TypeKind::Ref(
+                registry.get_or_register_type::<Test, bauble::DefaultAllocator>(),
+            ),
+        }
+    }
+
+    fn from_bauble(
+        val: bauble::Val,
+        _allocator: &bauble::DefaultAllocator,
+    ) -> std::result::Result<Self, bauble::ToRustError> {
+        match val.value.value {
+            bauble::Value::Ref(r) => Ok(Self(String::from(r.as_str()))),
+            _ => Err(Self::error(
+                val.value.span,
+                bauble::ToRustErrorKind::WrongType { found: val.ty },
+            )),
+        }
+    }
+}
+
+#[test]
+fn same_file_references() {
+    let a = &test_file!(
+        "a",
+        "test = integration::Test { x: -5, y: 5 }\n\
+         test_ref = $test",
+        Test { x: -5, y: 5 },
+        TestRef("a::test".into()),
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+            // TODO: TestRef doesn't need to be registered?!
+        },
+        &[a],
+    );
+}
+
+#[test]
+#[should_panic] // TODO: see todo in `register_assets` about registering assets in the correct
+// order.
+fn same_file_references_reverse() {
+    let a = &test_file!(
+        "a",
+        "test_ref = $test\n\
+        test = integration::Test { x: -5, y: 5 }",
+        TestRef("a::test".into()),
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+            // TODO: TestRef doesn't need to be registered?!
+        },
+        &[a],
+    );
+}
+
+#[test]
+fn same_file_references_reverse_full() {
+    let a = &test_file!(
+        "a",
+        "test_ref = $a::test\n\
+        test = integration::Test { x: -5, y: 5 }",
+        TestRef("a::test".into()),
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a],
+    );
+}
+
+#[test]
+#[should_panic] // TODO: see todo in `register_assets` where `add_use` is called.
+fn reference_with_use() {
+    let a = &test_file!(
+        "a",
+        "use b::test;\n\
+        test_ref = $test",
+        TestRef("b::test".into()),
+    );
+    let b = &test_file!(
+        "b",
+        "test = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, b],
     );
 }
