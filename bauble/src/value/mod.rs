@@ -665,6 +665,7 @@ impl PathKind {
 pub struct DelayedRegister {
     pub asset: Spanned<TypePath>,
     pub reference: Spanned<PathKind>,
+    /// The type we want a potential reference to resolve into.
     pub expected_ty_path: Option<Spanned<PathKind>>,
 }
 
