@@ -665,6 +665,8 @@ impl PathKind {
 pub struct DelayedRegister {
     pub asset: Spanned<TypePath>,
     pub reference: Spanned<PathKind>,
+    /// The type we want a potential reference to resolve into.
+    pub expected_ty_path: Option<Spanned<PathKind>>,
 }
 
 pub(crate) fn resolve_delayed(
@@ -672,6 +674,7 @@ pub(crate) fn resolve_delayed(
     ctx: &mut crate::context::BaubleContext,
 ) -> std::result::Result<(), Vec<Spanned<ConversionError>>> {
     loop {
+        let mut errors = Vec::new();
         let old_len = delayed.len();
 
         // Try to register delayed registers, and remove them as they succeed.
@@ -685,12 +688,38 @@ pub(crate) fn resolve_delayed(
                 }
             } && let Some((ty, _)) = &r.asset
             {
+                if let Some(desired_ty) = &d.expected_ty_path {
+                    let span = desired_ty.span;
+                    if let Some(desired_ty) = match &desired_ty.value {
+                        PathKind::Direct(path) => ctx.get_ref(path.borrow()),
+                        PathKind::Indirect(path, ident) => {
+                            ctx.ref_with_ident(path.borrow(), ident.borrow())
+                        }
+                    } && let Some(desired_ty) = desired_ty.ty
+                    {
+                        if desired_ty != *ty {
+                            errors.push(
+                                ConversionError::ExpectedExactType {
+                                    expected: desired_ty,
+                                    got: Some(*ty),
+                                }
+                                .spanned(span),
+                            );
+                        }
+                    } else {
+                        return true;
+                    };
+                }
                 ctx.register_asset(d.asset.value.borrow(), *ty);
                 false
             } else {
                 true
             }
         });
+
+        if !errors.is_empty() {
+            return Err(errors);
+        }
 
         if delayed.is_empty() {
             return Ok(());
@@ -711,7 +740,6 @@ pub(crate) fn resolve_delayed(
                 }
             }
 
-            let mut errors = Vec::new();
             for scc in petgraph::algo::tarjan_scc(&graph) {
                 if scc.len() == 1 {
                     if map[&scc[0]].could_be(scc[0].borrow()) {
@@ -788,7 +816,11 @@ pub(crate) fn register_assets(
         let symbols = Symbols { ctx: &*ctx, uses };
 
         // To register an asset we need to determine its type.
-        let ty = if let Some(ty) = &binding.type_path {
+        let ty = if let Some(ty) = &binding.type_path
+            // If the value is a reference, then an explicit type should
+            // still be delayed.
+            && !matches!(binding.value.value.value, Value::Ref(_))
+        {
             symbols.resolve_type(ty)
         } else {
             let res = value_type(&binding.value, &symbols)
@@ -815,7 +847,20 @@ pub(crate) fn register_assets(
                 && let Value::Ref(reference) = &*binding.value.value
                 && let Ok(reference) = symbols.resolve_path(reference)
             {
+                let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
+                    match symbols.resolve_path(expected_ty_path) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            errors.push(e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 delayed.push(DelayedRegister {
+                    expected_ty_path,
                     asset: path.spanned(span),
                     reference,
                 });
@@ -1101,7 +1146,6 @@ fn convert_object(
     mut meta: ConvertMeta,
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
-
     create_object(path, meta.object_name, value, meta.symbols)
 }
 

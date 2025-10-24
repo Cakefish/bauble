@@ -415,6 +415,10 @@ impl<S: AsRef<str>> TypePath<S> {
                     == Some(PATH_SEPERATOR))
     }
 
+    pub fn is_generic(&self) -> bool {
+        self.0.as_ref().ends_with('>')
+    }
+
     /// Returns true if this type path, referencing a type, is something that is
     /// allowed to be parsed by Bauble.
     ///
@@ -486,6 +490,42 @@ impl<S: AsRef<str>> TypePath<S> {
     /// - The path contains the special '@' sub-object character.
     pub fn is_subobject(&self) -> bool {
         self.iter().any(|part| part.as_str().contains('@'))
+    }
+
+    /// Appends `end` onto `self`.
+    ///
+    /// Appending is different from `join` in that it will not insert a separator,
+    /// and when dealing with generic, `append` will insert `end` before the
+    /// generic argument but onto the last identifier before `<`.
+    ///
+    /// Performs path validation on the returned value.
+    pub fn append(&self, end: &str) -> Result<TypePath<String>> {
+        if self.is_generic() {
+            let index = self
+                .as_str()
+                .find('<')
+                .expect("generic should always have '<'");
+            let mut string = self.to_string();
+            string.insert_str(index, end);
+            TypePath::new(string)
+        } else {
+            TypePath::new(format!("{self}{end}"))
+        }
+    }
+
+    /// Returns a variant of `self` with no generics at the end.
+    pub fn strip_generic(self) -> TypePath<String> {
+        if self.is_generic() {
+            let index = self
+                .0
+                .as_ref()
+                .find('<')
+                .expect("generic should always have '<'");
+            // No need to check since nothing is added onto the path.
+            TypePath::new_unchecked(self.0.as_ref().split_at(index).0.to_string())
+        } else {
+            TypePath::new_unchecked(self.as_str().to_string())
+        }
     }
 }
 

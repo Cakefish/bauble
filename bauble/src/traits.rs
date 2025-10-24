@@ -243,12 +243,18 @@ pub trait BaubleAllocator<'a> {
     where
         Self: 'a;
 
+    /// The inner representation of a type path created by this allocator.
+    type TypePathInner: 'static;
+
     /// # Safety
     /// Allocations in `value` have to be allocated with this allocator
     unsafe fn wrap<T>(&self, value: T) -> Self::Out<T>;
     /// # Safety
     /// If validated an item must be placed within the same allocator.
     unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, ToRustError>;
+
+    /// Create a type path from this allocator.
+    fn wrap_type_path(&self, path: TypePath) -> Self::Out<TypePath<Self::TypePathInner>>;
 }
 
 /// The standard Rust allocator when used by Bauble.
@@ -256,6 +262,7 @@ pub struct DefaultAllocator;
 
 impl BaubleAllocator<'_> for DefaultAllocator {
     type Out<T> = T;
+    type TypePathInner = String;
 
     unsafe fn wrap<T>(&self, value: T) -> Self::Out<T> {
         value
@@ -264,10 +271,22 @@ impl BaubleAllocator<'_> for DefaultAllocator {
     unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, ToRustError> {
         Ok(value)
     }
+
+    fn wrap_type_path(&self, path: TypePath) -> TypePath<Self::TypePathInner> {
+        path
+    }
 }
 
 /// The trait used by types usable by Bauble. Any type that can be parsed by bauble should implement this trait.
 pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static {
+    /// # DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
+    ///
+    /// Constructs a builtin type. A builtin type is a type which is not constructed by Bauble during parsing and
+    /// might warrant additional rules.
+    fn builtin(#[expect(unused)] registry: &mut types::TypeRegistry) -> Option<TypeId> {
+        None
+    }
+
     /// # DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
     ///
     /// Constructs a reflection type that bauble uses to parse and resolve types.

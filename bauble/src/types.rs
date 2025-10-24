@@ -420,13 +420,14 @@ impl TypeRegistry {
         )
     }
 
+    /// If `inner` is a reference, then this function should return the ID of `inner`.
     pub(crate) fn get_or_register_asset_ref(&mut self, inner: TypeId) -> TypeId {
         if let Some(id) = self.asset_refs.get(&inner) {
             *id
         } else {
             self.register_type(|this, id| {
                 this.asset_refs.insert(inner, id);
-                let mut ty = Type {
+                let ty = Type {
                     meta: TypeMeta {
                         path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
                             .expect("Invariant"),
@@ -436,14 +437,14 @@ impl TypeRegistry {
                     kind: TypeKind::Ref(inner),
                 };
 
-                this.on_register_type(id, &mut ty);
+                this.on_register_type(id, &ty);
 
                 ty
             })
         }
     }
 
-    fn on_register_type(&mut self, id: TypeId, ty: &mut Type) {
+    fn on_register_type(&mut self, id: TypeId, ty: &Type) {
         for tr in ty.meta.traits.iter() {
             let TypeKind::Trait(types) = &mut self.types[tr.0.0].kind else {
                 panic!("Invariant")
@@ -527,9 +528,9 @@ impl TypeRegistry {
 
     /// Makes it possible to register a type which is not represented in Rust.
     #[must_use]
-    pub fn register_dummy_type(&mut self, mut ty: Type) -> TypeId {
+    pub fn register_dummy_type(&mut self, ty: Type) -> TypeId {
         self.register_type(|this, id| {
-            this.on_register_type(id, &mut ty);
+            this.on_register_type(id, &ty);
 
             ty
         })
@@ -567,9 +568,9 @@ impl TypeRegistry {
                     continue;
                 }
 
-                let object_name =
-                    TypePathElem::new(format!("{}_{i}", ty.meta.path.get_end().unwrap().1))
-                        .unwrap();
+                let path_end = ty.meta.path.get_end().unwrap().1;
+                let object_path = path_end.strip_generic().append(&format!("_{i}")).unwrap();
+                let object_name = object_path.get_end().unwrap().1;
 
                 let object_path = file.join(&object_name);
 
@@ -666,12 +667,16 @@ impl TypeRegistry {
 
     /// Register `T` if it is not registerted already, then get the type ID for `T`.
     pub fn get_or_register_type<'a, T: Bauble<'a, A>, A: BaubleAllocator<'a>>(&mut self) -> TypeId {
+        if let Some(id) = T::builtin(self) {
+            return id;
+        }
+
         let id = self.type_id::<T, A>();
 
         match id {
             Some(id) if self.to_be_assigned.remove(&id) => {
-                let mut ty = T::construct_type(self);
-                self.on_register_type(id, &mut ty);
+                let ty = T::construct_type(self);
+                self.on_register_type(id, &ty);
                 self.types[id.0] = ty;
 
                 id
@@ -679,8 +684,8 @@ impl TypeRegistry {
             Some(id) => id,
             None => self.register_type(|this, id| {
                 this.type_from_rust.insert(std::any::TypeId::of::<T>(), id);
-                let mut ty = T::construct_type(this);
-                this.on_register_type(id, &mut ty);
+                let ty = T::construct_type(this);
+                this.on_register_type(id, &ty);
 
                 ty
             }),
@@ -873,7 +878,6 @@ impl TypeRegistry {
             (TypeKind::Trait(types), _) => types.contains(input_id),
             (TypeKind::Ref(a), TypeKind::Ref(b)) => self.can_infer_from(*a, *b),
             (TypeKind::Ref(t), _) => self.can_infer_from(*t, input_id),
-
             (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
 
             (_, TypeKind::Generic(types)) => types.contains(output_id),
