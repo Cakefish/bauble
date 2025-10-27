@@ -688,27 +688,53 @@ pub(crate) fn resolve_delayed(
                 }
             } && let Some((ty, _)) = &r.asset
             {
+                // TODO: for now, it is assumed all references which explicitly
+                // specify their inner type should have that inner type resolved
+                // by this point. If that is not the case, this should be a
+                // nested reference, and in the case it is a nested reference
+                // this code can optionally work or not work, depending on the
+                // order the references appear in Bauble. This is unpredictable
+                // and weird, it is likely best to simply error in general if it
+                // is noticed that nested references are explictly being written
+                // in bauble at all, and they should instead prefer having their
+                // types implicitly solved.
                 if let Some(desired_ty) = &d.expected_ty_path {
                     let span = desired_ty.span;
-                    if let Some(desired_ty) = match &desired_ty.value {
+                    let path = &desired_ty.value;
+                    let Some(desired_ty) = (match path {
                         PathKind::Direct(path) => ctx.get_ref(path.borrow()),
                         PathKind::Indirect(path, ident) => {
                             ctx.ref_with_ident(path.borrow(), ident.borrow())
                         }
-                    } && let Some(desired_ty) = desired_ty.ty
-                    {
-                        if desired_ty != *ty {
-                            errors.push(
-                                ConversionError::ExpectedExactType {
-                                    expected: desired_ty,
-                                    got: Some(*ty),
-                                }
-                                .spanned(span),
-                            );
-                        }
-                    } else {
-                        return true;
+                    }) else {
+                        errors.push(
+                            ConversionError::Custom(crate::CustomError::new(format!(
+                                "Invalid explicit reference path '{path}'"
+                            )))
+                            .spanned(span),
+                        );
+                        return false;
                     };
+
+                    let Some(desired_ty) = desired_ty.ty else {
+                        errors.push(
+                            ConversionError::Custom(crate::CustomError::new(format!(
+                                "Expected path to refer to type '{path}'",
+                            )))
+                            .spanned(span),
+                        );
+                        return false;
+                    };
+
+                    if desired_ty != *ty {
+                        errors.push(
+                            ConversionError::ExpectedExactType {
+                                expected: desired_ty,
+                                got: Some(*ty),
+                            }
+                            .spanned(span),
+                        );
+                    }
                 }
                 ctx.register_asset(d.asset.value.borrow(), *ty);
                 false

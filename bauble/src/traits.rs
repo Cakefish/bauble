@@ -281,8 +281,8 @@ impl BaubleAllocator<'_> for DefaultAllocator {
 pub trait Bauble<'a, A: BaubleAllocator<'a> = DefaultAllocator>: Sized + 'static {
     /// # DON'T CALL THIS, call `TypeRegistry::get_or_register_type` instead.
     ///
-    /// Constructs a builtin type. A builtin type is a type which is not constructed by Bauble during loading
-    /// of objects and might warrant additional rules.
+    /// Constructs a builtin type. A builtin type is a type which is not constructed by Bauble during context
+    /// construction and might warrant additional rules.
     fn builtin(#[expect(unused)] registry: &mut types::TypeRegistry) -> Option<TypeId> {
         None
     }
