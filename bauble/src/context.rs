@@ -1,10 +1,9 @@
-use indexmap::IndexMap;
-
 use crate::{
     Bauble, BaubleAllocator, BaubleErrors,
     path::{TypePath, TypePathElem},
     types::{BaubleTrait, TypeId, TypeRegistry},
 };
+use indexmap::IndexMap;
 
 #[allow(missing_docs)]
 pub type Source = ariadne::Source<String>;
@@ -503,6 +502,7 @@ impl BaubleContext {
     /// Returns ID of internal Ref type for `ty`.
     pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) -> TypeId {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
+        self.root_node.build_type(ref_ty, &self.registry);
         self.root_node.build_asset(path, ref_ty);
         ref_ty
     }

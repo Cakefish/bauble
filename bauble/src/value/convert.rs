@@ -1072,7 +1072,7 @@ where
 
                     Value::Or(variants)
                 }
-                // A ref can be from a ref value.
+                // A ref can convert from a ref value.
                 (types::TypeKind::Ref(_), Value::Ref(r)) => {
                     Value::Ref(Self::get_asset(r, meta.symbols)?)
                 }

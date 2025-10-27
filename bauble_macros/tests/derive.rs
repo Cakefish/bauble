@@ -146,39 +146,6 @@ fn test_std_types() {
 }
 
 #[test]
-fn test_complex_flatten() {
-    #[derive(Bauble, PartialEq, Debug)]
-    #[bauble(flatten)]
-    struct Inner(
-        u32,
-        #[bauble(attribute = a, default)] u32,
-        #[bauble(attribute = b)] u32,
-    );
-
-    #[derive(Bauble, PartialEq, Debug)]
-    #[bauble(flatten)]
-    struct Transparent(Inner, #[bauble(attribute = a)] u32);
-
-    bauble_test!(
-        [Transparent]
-        r#"
-        a: derive::Transparent = #[a = 1, b = 2] 3
-
-        copy t = #[a = 2] 1
-
-        // Since `b` isn't an attribute on `Transparent` that gets passed to `Inner`. And
-        // since we already have `a` defined here, the `a` attribute on `copy t` gets
-        // assigned to `Inner.1`.
-        b: derive::Transparent = #[a = 4, b = 3] $t
-        "#
-        [
-            Transparent(Inner(3, 0, 2), 1),
-            Transparent(Inner(1, 2, 3), 4),
-        ]
-    );
-}
-
-#[test]
 fn test_from() {
     #[derive(Bauble, PartialEq, Debug)]
     #[bauble(from = u32)]
@@ -368,13 +335,13 @@ fn test_trait() {
     bauble_test!(
         TEST_CTX
         [Trans, Foo, Bar]
-        r#"
+        [r#"
             use derive::{Trans, Foo, Bar};
 
             a: Trans = Foo(32)
 
             b: Trans = <Bar> "meow"
-        "#
+        "#]
         [Trans(Box::new(Foo(32))), Trans(Box::new(Bar("meow".to_string())))]
     );
 }

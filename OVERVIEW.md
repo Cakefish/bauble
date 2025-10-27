@@ -106,6 +106,9 @@ A reference is a Bauble object which may not be present in the current module.
 A Bauble object's value may use a reference to avoid code duplication in the local file (referencing a previous object to use its values), or to reference the value of a Bauble object from a different file (module).
 References are specified using a bauble `Path`.
 
+Bauble does expose the builtin type for references, [`Ref`], which can be used for convenience to represent references from Bauble in Rust.
+It is not required to use this type to represent references, custom types which are capable of parsing reference values are equal to the builtin [`Ref`] type, it is just a convenience.
+
 # Sub-objects
 
 A single Bauble object may contain sub-objects.
