@@ -7,7 +7,20 @@ use std::{cell::UnsafeCell, fmt::Debug, marker::PhantomData};
 
 /// The builtin reference type.
 ///
-/// Corresponds to a reference to `T` in Bauble.
+/// This corresponds to the type used internally by Bauble for objects which are
+/// references. That is to say, if you were to write
+/// ```
+/// own: MyType = MyType { ... }
+/// ref = $own
+/// ```
+/// then `ref` has the type `Ref<MyType>` and the value `own`.
+///
+/// This type is not required for parsing or using references. Custom types like
+/// `MyRefType` can still be made to be used to parse various references and be
+/// used in Bauble. This is a convenience type and is capable of handling various
+/// references without needing to be registered to Bauble manually. Besides
+/// convenience this type offers no advantage, and if special behaviour is requred
+/// for parsing and handling references, prefer to use a custom type from Rust.
 ///
 /// `S` is the inner representation used for `TypePath`.
 pub struct Ref<T, S = String> {
