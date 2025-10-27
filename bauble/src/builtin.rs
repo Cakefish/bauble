@@ -9,7 +9,7 @@ use std::{cell::UnsafeCell, fmt::Debug, marker::PhantomData};
 ///
 /// This corresponds to the type used internally by Bauble for objects which are
 /// references. That is to say, if you were to write
-/// ```
+/// ```ignore
 /// own: MyType = MyType { ... }
 /// ref = $own
 /// ```
