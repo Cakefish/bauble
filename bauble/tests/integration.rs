@@ -379,17 +379,11 @@ fn reference_with_use() {
     );
 }
 
-#[derive(Bauble, PartialEq, Debug)]
-struct RefTest {
-    x: i32,
-    y: u32,
-}
-
 #[test]
 pub fn ref_implicit_type() {
     bauble::bauble_test!(
-        [RefTest]
-        "test = lang::Test{ x: -5, y: 5 }\n\
+        [Test]
+        "test = integration::Test{ x: -5, y: 5 }\n\
         r = $test"
         [
             Test { x: -5, y: 5 },
@@ -398,9 +392,9 @@ pub fn ref_implicit_type() {
     );
 
     bauble::bauble_test!(
-        [RefTest]
+        [Test]
         "r = $test::test\n\
-        test = lang::Test{ x: -5, y: 5 }"
+        test = integration::Test{ x: -5, y: 5 }"
         [
             Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
             Test { x: -5, y: 5 },
@@ -411,9 +405,9 @@ pub fn ref_implicit_type() {
 #[test]
 pub fn ref_explicit_type() {
     bauble::bauble_test!(
-        [RefTest]
-        "test = lang::Test{ x: -2, y: 2 }\n\
-        r: Ref<lang::Test> = $test"
+        [Test]
+        "test = integration::Test{ x: -2, y: 2 }\n\
+        r: Ref<integration::Test> = $test"
         [
             Test { x: -2, y: 2 },
             Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
@@ -421,9 +415,9 @@ pub fn ref_explicit_type() {
     );
 
     bauble::bauble_test!(
-        [RefTest]
-        "r: Ref<lang::Test> = $test::test\n\
-        test = lang::Test{ x: -2, y: 2 }"
+        [Test]
+        "r: Ref<integration::Test> = $test::test\n\
+        test = integration::Test{ x: -2, y: 2 }"
         [
             Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
             Test { x: -2, y: 2 },
@@ -434,10 +428,10 @@ pub fn ref_explicit_type() {
 #[test]
 pub fn ref_explicit_type_multiple_files() {
     bauble::bauble_test!(
-        [RefTest]
+        [Test]
         [
-            "test = lang::Test{ x: -5, y: 5 }",
-            "r: Ref<lang::Test> = $test::test"
+            "test = integration::Test{ x: -5, y: 5 }",
+            "r: Ref<integration::Test> = $test::test"
         ]
         [
             Test { x: -5, y: 5 },
@@ -446,10 +440,10 @@ pub fn ref_explicit_type_multiple_files() {
     );
 
     bauble::bauble_test!(
-        [RefTest]
+        [Test]
         [
-            "r: Ref<lang::Test> = $test::test",
-            "test = lang::Test{ x: -5, y: 5 }"
+            "r: Ref<integration::Test> = $test::test",
+            "test = integration::Test{ x: -5, y: 5 }"
         ]
         [
             Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
@@ -461,9 +455,9 @@ pub fn ref_explicit_type_multiple_files() {
 #[test]
 pub fn ref_implicit_type_multiple_files() {
     bauble::bauble_test!(
-        [RefTest]
+        [Test]
         [
-            "test = lang::Test{ x: -5, y: 5 }",
+            "test = integration::Test{ x: -5, y: 5 }",
             "r = $test::test"
         ]
         [
@@ -473,10 +467,10 @@ pub fn ref_implicit_type_multiple_files() {
     );
 
     bauble::bauble_test!(
-        [RefTest]
+        [Test]
         [
             "r = $test::test",
-            "test = lang::Test{ x: -5, y: 5 }"
+            "test = integration::Test{ x: -5, y: 5 }"
         ]
         [
             Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
@@ -492,10 +486,10 @@ pub fn ref_explicit_type_incorrect() {
     struct Incorrect(u32);
 
     bauble::bauble_test!(
-        [RefTest, Incorrect]
+        [Test, Incorrect]
         "i: Incorrect = Incorrect(0)\n\
         r: Ref<Incorrect> = $test::test\n\
-        test = lang::Test{ x: -2, y: 2 }"
+        test = integration::Test{ x: -2, y: 2 }"
         [
             Incorrect(0),
             Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
