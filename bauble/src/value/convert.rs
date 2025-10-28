@@ -10,8 +10,8 @@ use crate::{
 };
 
 use super::{
-    Attributes, CopyVal, CopyValInner, Ident, Result, SpannedValue, Symbols, UnspannedVal, Val,
-    Value, ValueContainer, ValueTrait,
+    Attributes, Ident, Result, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
+    ValueTrait,
 };
 
 pub fn no_attr() -> Option<&'static Attributes<Val>> {
@@ -102,16 +102,7 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
     };
 
     let ty = match &*value.value {
-        Value::Ref(path) => {
-            // Don't resolve types of copy types.
-            if let Some(ident) = path.as_ident()
-                && symbols.try_resolve_copy(&ident).is_some()
-            {
-                None
-            } else {
-                Some(symbols.resolve_asset(path)?.0.spanned(path.span()))
-            }
-        }
+        Value::Ref(path) => Some(symbols.resolve_asset(path)?.0.spanned(path.span())),
         Value::Or(paths) => {
             let mut ty = None;
             for path in paths {
@@ -227,7 +218,6 @@ pub(super) fn default_value_type(
 #[derive(Clone, Copy, Debug)]
 pub enum AnyVal<'a> {
     Parse(&'a ParseVal),
-    Copy(&'a CopyValInner),
     Complete(&'a Val),
     Unspanned(&'a UnspannedVal),
 }
@@ -441,8 +431,6 @@ where
 
     fn get_asset(ident: &Self::Ref, symbols: &Symbols) -> Result<TypePath>;
 
-    fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>>;
-
     fn convert_inner<'a, C: ConvertValue>(
         value: Spanned<&Value<Self>>,
         attributes: Spanned<&Attributes<Self::Inner>>,
@@ -451,49 +439,6 @@ where
         expected_type: TypeId,
         extra_attributes: Option<&'a Attributes<C>>,
     ) -> Result<Val> {
-        // Resolve copy refs.
-        if let Value::Ref(r) = &value.value
-            && let Some(ident) = Self::ref_ident(r)
-            && let Some((copy, Some(val))) = meta.symbols.try_resolve_copy(ident.as_str())
-        {
-            return match extra_attributes {
-                Some(s) if !s.0.is_empty() => {
-                    let mut extra = ConvertValue::to_any_attributes(s, &meta);
-
-                    for (i, v) in attributes.iter() {
-                        let i = Self::get_spanned_field(i, &meta);
-                        if let Some((ident, _)) = extra.0.get_key_value(i.as_str()) {
-                            Err(ConversionError::DuplicateAttribute {
-                                first: ident.clone(),
-                                second: i.clone(),
-                            }
-                            .spanned(i.span))?
-                        }
-
-                        extra.0.insert(i, v.container_to_any());
-                    }
-
-                    val.convert(meta.reborrow(), expected_type, Some(&extra))
-                }
-                _ => val.convert(
-                    meta.reborrow(),
-                    expected_type,
-                    if attributes.is_empty() {
-                        None
-                    } else {
-                        Some(attributes.value)
-                    },
-                ),
-            }
-            .map_err(|err| {
-                ConversionError::ErrorInCopy {
-                    copy: copy.to_owned().spanned(val.span()),
-                    error: Box::new(err),
-                }
-                .spanned(value.span)
-            });
-        }
-
         let raw_val_type = val_ty;
         let mut val_ty = val_ty.or(matches!(
             value.value,
@@ -1204,10 +1149,9 @@ where
 ///
 /// We do type resolution, validating etc here.
 ///
-/// There are three stages of bauble values:
+/// There are two stages of bauble values:
 /// 1. `ParseVal`, which we get when we parse bauble from types.
-/// 2. `CopyVal`, an intermediate value that we convert all copy values to.
-/// 3. `Val`, the fully resolved type, which is always correct to convert to rust.
+/// 2. `Val`, the fully resolved type, which is always correct to convert to rust.
 pub(super) trait ConvertValue: ValueContainer {
     fn get_spanned_field(field: &Self::ContainerField, meta: &ConvertMeta) -> Ident;
 
@@ -1245,10 +1189,6 @@ impl ConvertValueInner for UnspannedVal {
         Ok(asset.clone())
     }
 
-    fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
-        TypePathElem::try_from(path.borrow()).ok()
-    }
-
     fn variant_span(_variant: &Self::Variant, meta: &ConvertMeta) -> Span {
         meta.default_span
     }
@@ -1284,10 +1224,6 @@ impl ConvertValueInner for Val {
 
     fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
         Ok(asset.clone())
-    }
-
-    fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
-        TypePathElem::try_from(path.borrow()).ok()
     }
 
     fn variant_span(variant: &Self::Variant, _meta: &ConvertMeta) -> Span {
@@ -1372,71 +1308,6 @@ impl ConvertValue for Val {
     }
 }
 
-impl ConvertValueInner for CopyValInner {
-    fn get_variant(ident: &Self::Variant, _symbols: &Symbols) -> Result<TypePathElem> {
-        Ok(ident.value.clone())
-    }
-
-    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
-        Ok(asset.clone())
-    }
-
-    fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
-        TypePathElem::try_from(path.borrow()).ok()
-    }
-
-    fn variant_span(variant: &Self::Variant, _meta: &ConvertMeta) -> Span {
-        variant.span
-    }
-}
-
-impl ConvertValue for CopyValInner {
-    fn get_spanned_field(field: &Self::ContainerField, _meta: &ConvertMeta) -> Ident {
-        field.clone()
-    }
-
-    fn convert<'a, C: ConvertValue>(
-        &self,
-        meta: ConvertMeta<'a>,
-        expected_type: TypeId,
-        extra_attributes: Option<&'a Attributes<C>>,
-    ) -> Result<Val> {
-        Self::convert_inner(
-            self.value.as_ref(),
-            self.attributes.as_ref(),
-            self.ty,
-            meta,
-            expected_type,
-            extra_attributes,
-        )
-    }
-}
-
-impl ConvertValue for CopyVal {
-    fn get_spanned_field(field: &Self::ContainerField, _meta: &ConvertMeta) -> Ident {
-        field.clone()
-    }
-
-    fn get_span(&self, meta: &ConvertMeta) -> Span {
-        match self {
-            CopyVal::Copy(v) => v.get_span(meta),
-            CopyVal::Resolved(v) => v.get_span(meta),
-        }
-    }
-
-    fn convert<'a, C: ConvertValue>(
-        &self,
-        meta: ConvertMeta,
-        expected_type: TypeId,
-        extra_attributes: Option<&Attributes<C>>,
-    ) -> Result<Val> {
-        match self {
-            CopyVal::Copy(val) => val.convert(meta, expected_type, extra_attributes),
-            CopyVal::Resolved(val) => val.convert(meta, expected_type, extra_attributes),
-        }
-    }
-}
-
 impl ConvertValueInner for ParseVal {
     fn get_variant(ident: &Self::Variant, symbols: &Symbols) -> Result<TypePathElem> {
         Ok(symbols
@@ -1453,11 +1324,6 @@ impl ConvertValueInner for ParseVal {
 
     fn get_asset(asset: &Self::Ref, symbols: &Symbols) -> Result<TypePath> {
         symbols.resolve_asset(asset).map(|(_, p)| p)
-    }
-
-    fn ref_ident(path: &Self::Ref) -> Option<TypePathElem<&str>> {
-        path.as_ident()
-            .and_then(|p| TypePathElem::new(p.value).ok())
     }
 
     fn variant_span(variant: &Self::Variant, _meta: &ConvertMeta) -> Span {
@@ -1501,7 +1367,6 @@ impl ConvertValue for AnyVal<'_> {
     fn get_span(&self, meta: &ConvertMeta) -> Span {
         match self {
             AnyVal::Parse(v) => v.get_span(meta),
-            AnyVal::Copy(v) => v.get_span(meta),
             AnyVal::Complete(v) => v.get_span(meta),
             AnyVal::Unspanned(v) => v.get_span(meta),
         }
@@ -1515,103 +1380,8 @@ impl ConvertValue for AnyVal<'_> {
     ) -> Result<Val> {
         match self {
             AnyVal::Parse(v) => v.convert(meta, expected_type, extra_attributes),
-            AnyVal::Copy(v) => v.convert(meta, expected_type, extra_attributes),
             AnyVal::Complete(v) => v.convert(meta, expected_type, extra_attributes),
             AnyVal::Unspanned(v) => v.convert(meta, expected_type, extra_attributes),
         }
-    }
-}
-
-pub(super) fn convert_copy_value(value: &ParseVal, mut meta: ConvertMeta) -> Result<CopyVal> {
-    let types = meta.symbols.ctx.type_registry();
-    let val_type = value_type(value, meta.symbols)?;
-
-    if let Some(val_type) = val_type.as_ref()
-        && types.key_type(val_type.value).kind.instanciable()
-    {
-        let val_type =
-            default_value_type(meta.symbols, value.value.primitive_type(), Some(*val_type))
-                .unwrap_or(val_type.value);
-        value
-            .convert(meta, val_type, no_attr())
-            .map(CopyVal::Resolved)
-    } else {
-        let mut parse_attributes = || {
-            value
-                .attributes
-                .0
-                .iter()
-                .map(|(ident, value)| {
-                    Ok::<_, Spanned<ConversionError>>((
-                        ident.clone(),
-                        convert_copy_value(value, meta.reborrow())?,
-                    ))
-                })
-                .try_collect::<indexmap::IndexMap<_, _>>()
-        };
-
-        let attributes = parse_attributes()?;
-        let inner: Value<CopyValInner> = match &value.value.value {
-            Value::Primitive(p) => Value::Primitive(p.clone()),
-            Value::Ref(_) => todo!(),
-            Value::Tuple(seq) => Value::Tuple(
-                seq.iter()
-                    .map(|v| convert_copy_value(v, meta.reborrow()))
-                    .collect::<Result<_>>()?,
-            ),
-            Value::Array(seq) => Value::Array(
-                seq.iter()
-                    .map(|v| convert_copy_value(v, meta.reborrow()))
-                    .collect::<Result<_>>()?,
-            ),
-            Value::Map(map) => Value::Map(
-                map.iter()
-                    .map(|(key, value)| {
-                        Ok((
-                            convert_copy_value(key, meta.reborrow())?,
-                            convert_copy_value(value, meta.reborrow())?,
-                        ))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            Value::Struct(fields_kind) => Value::Struct(match fields_kind {
-                FieldsKind::Unit => FieldsKind::Unit,
-                FieldsKind::Unnamed(seq) => FieldsKind::Unnamed(
-                    seq.iter()
-                        .map(|v| convert_copy_value(v, meta.reborrow()))
-                        .collect::<Result<_>>()?,
-                ),
-                FieldsKind::Named(fields) => FieldsKind::Named(
-                    fields
-                        .iter()
-                        .map(|(field, v)| {
-                            Ok((field.clone(), convert_copy_value(v, meta.reborrow())?))
-                        })
-                        .collect::<Result<_>>()?,
-                ),
-            }),
-            Value::Or(paths) => Value::Or(
-                paths
-                    .iter()
-                    .map(|path| {
-                        let ident = path.last_ident();
-                        Ok(TypePathElem::new(ident.value)
-                            .map_err(|e| e.spanned(ident.span))?
-                            .to_owned()
-                            .spanned(ident.span))
-                    })
-                    .collect::<Result<_>>()?,
-            ),
-            Value::Transparent(inner) => {
-                Value::Transparent(Box::new(convert_copy_value(inner, meta)?))
-            }
-            Value::Enum(_, _) => unimplemented!("We don't get enums from parsing"),
-        };
-
-        Ok(CopyVal::Copy(CopyValInner {
-            ty: val_type,
-            value: inner.spanned(value.value.span),
-            attributes: Attributes(attributes).spanned(value.attributes.span),
-        }))
     }
 }

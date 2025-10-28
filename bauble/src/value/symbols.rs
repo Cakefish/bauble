@@ -9,53 +9,17 @@ use crate::{
     types::{self, TypeId},
 };
 
-use super::{ConversionError, CopyVal, PathKind, RefError, RefKind, Result};
-
-/// This is either a reference to another value or a "copy" value which was copied into here.
-#[derive(Clone, Debug)]
-pub(super) enum RefCopy {
-    /// Unresolved copy value.
-    Unresolved,
-    /// Resolved copy value.
-    Resolved(CopyVal),
-    /// Reference to a type, asset, or module?
-    Ref(PathReference),
-}
-
-impl Default for RefCopy {
-    fn default() -> Self {
-        Self::Ref(Default::default())
-    }
-}
-
-impl RefCopy {
-    /// # Panics
-    /// Panics if self isn't a reference.
-    fn unwrap_ref(&self) -> &PathReference {
-        match self {
-            RefCopy::Ref(r) => r,
-            RefCopy::Unresolved | RefCopy::Resolved(_) => panic!("Not a reference"),
-        }
-    }
-
-    fn add(self, other: PathReference) -> Option<Self> {
-        match self {
-            RefCopy::Unresolved | RefCopy::Resolved(_) => None,
-            RefCopy::Ref(reference) => Some(RefCopy::Ref(reference.combined(other)?)),
-        }
-    }
-}
+use super::{ConversionError, PathKind, RefError, RefKind, Result};
 
 /// Representation of item names available in the current module.
 ///
 /// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
-/// There are also copy values (TODO: which overlap all namespaces?).
 #[derive(Clone)]
 pub(crate) struct Symbols<'a> {
+    /// Context for looking up things referenced by full path.
     pub(super) ctx: &'a BaubleContext,
-    // Map of identifiers to ref-copies (which can be unresolved-copy, resolved-copy, or reference)
-    // A resolved copy is either `CopyVal::Copy` or `CopyVal::Resolved(Val)`
-    pub(super) uses: HashMap<TypePathElem, RefCopy>,
+    /// Map of identifiers to path references.
+    pub(super) uses: HashMap<TypePathElem, PathReference>,
 }
 
 impl<'a> Symbols<'a> {
@@ -75,7 +39,7 @@ impl<'a> Symbols<'a> {
 
         *r = r
             .clone()
-            .add(reference)
+            .combined(reference)
             .ok_or(ConversionError::AmbiguousUse { ident })?;
 
         Ok(())
@@ -187,22 +151,10 @@ impl<'a> Symbols<'a> {
         add_use_inner(self, leading, &use_path.end)
     }
 
-    pub(super) fn try_resolve_copy<'b>(
-        &'b self,
-        ident: &str,
-    ) -> Option<(TypePathElem<&'b str>, Option<&'b CopyVal>)> {
-        let (key, value) = self.uses.get_key_value(ident)?;
-        match value {
-            RefCopy::Unresolved => Some((key.borrow(), None)),
-            RefCopy::Resolved(val) => Some((key.borrow(), Some(val))),
-            RefCopy::Ref(_) => None,
-        }
-    }
-
     pub fn get_module(&self, ident: &str) -> Option<TypePath> {
         self.uses
             .get(ident)
-            .and_then(|reference| reference.unwrap_ref().module.clone())
+            .and_then(|reference| reference.module.clone())
     }
 
     pub fn resolve_path(&self, raw_path: &Path) -> Result<Spanned<PathKind>> {
@@ -273,7 +225,11 @@ impl<'a> Symbols<'a> {
         Ok(path.spanned(raw_path.span()))
     }
 
-    pub fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<PathReference>> {
+    pub fn resolve_item(
+        &self,
+        raw_path: &Path,
+        ref_kind: RefKind,
+    ) -> Result<Cow<'_, PathReference>> {
         fn resolve_path(
             symbols: &Symbols,
             raw_path: &Path,
@@ -291,7 +247,7 @@ impl<'a> Symbols<'a> {
             Ok(if matches!(ref_kind, RefKind::Type) {
                 match path.value {
                     PathKind::Direct(type_path) => {
-                        if let Some(RefCopy::Ref(r)) = symbols.uses.get(type_path.as_str())
+                        if let Some(r) = symbols.uses.get(type_path.as_str())
                             && let Some(ty) = r.ty
                         {
                             let path = &symbols.ctx.type_registry().key_type(ty).meta.path;
@@ -332,19 +288,21 @@ impl<'a> Symbols<'a> {
 
         let path = resolve_path(self, raw_path, ref_kind)?;
 
-        match &path.value {
+        let reference = match &path.value {
             PathKind::Direct(path) => {
-                if let Some(RefCopy::Ref(r)) = self.uses.get(path.as_str()) {
-                    return Ok(Cow::Borrowed(r));
+                if let Some(r) = self.uses.get(path.as_str()) {
+                    Some(Cow::Borrowed(r))
                 } else {
-                    self.ctx.get_ref(path.borrow())
+                    self.ctx.get_ref(path.borrow()).map(Cow::Owned)
                 }
             }
-            PathKind::Indirect(path, ident) => {
-                self.ctx.ref_with_ident(path.borrow(), ident.borrow())
-            }
-        }
-        .ok_or_else(|| {
+            PathKind::Indirect(path, ident) => self
+                .ctx
+                .ref_with_ident(path.borrow(), ident.borrow())
+                .map(Cow::Owned),
+        };
+
+        reference.ok_or_else(|| {
             if let PathKind::Direct(path) = &*path
                 && let Some((leading, ident)) = path.get_end()
                 && let Some(r) = self.ctx.get_ref(leading)
@@ -368,7 +326,6 @@ impl<'a> Symbols<'a> {
             }
             .spanned(raw_path.span())
         })
-        .map(Cow::Owned)
     }
 
     pub fn resolve_asset(&self, path: &Path) -> Result<(TypeId, TypePath)> {

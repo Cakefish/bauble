@@ -174,5 +174,4 @@ pub struct Binding {
 pub struct ParseValues {
     pub uses: Vec<Spanned<PathTreeNode>>,
     pub values: IndexMap<Ident, Binding>,
-    pub copies: IndexMap<Ident, Binding>,
 }
