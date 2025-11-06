@@ -465,22 +465,11 @@ impl From<TypeRegistry> for BaubleContext {
     }
 }
 
-fn preprocess_path(path: TypePath<&str>) -> TypePath<&str> {
-    if let Some((path, end)) = path.split_end()
-        && end.as_str() == "mod"
-    {
-        path
-    } else {
-        path
-    }
-}
-
 impl BaubleContext {
     /// * `path` describes the bauble "module" that the file corresponds to. That is it say, what
     ///   prefix path is necessary inside of bauble to reference the context of this file.
     /// * `source` is the string of Bauble text to be parsed.
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) -> FileId {
-        let path = preprocess_path(path);
         let node = self.root_node.build_nodes(path);
         let id = FileId(self.files.len());
         node.source = Some(id);
@@ -532,10 +521,9 @@ impl BaubleContext {
         let ids = paths
             .into_iter()
             .map(|(path, source)| {
-                let processed_path = preprocess_path(path.borrow());
                 let file_id = self
                     .root_node
-                    .node_at(processed_path)
+                    .node_at(path.borrow())
                     .and_then(|node| node.source);
                 match file_id {
                     Some(id) => {
