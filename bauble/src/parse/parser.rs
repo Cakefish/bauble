@@ -216,13 +216,40 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
         .to_slice()
         .map_with(|ident: &str, e| ident.to_owned().spanned(e.span()));
 
+    let digits_ident = any()
+        .try_map(move |c: char, span| {
+            if c.is_ascii_digit() {
+                Ok(c)
+            } else {
+                Err(
+                    chumsky::label::LabelError::<ParserSource<'a>, _>::expected_found(
+                        [TextExpected::IdentifierPart],
+                        Some(chumsky::util::MaybeRef::Val(c)),
+                        span,
+                    ),
+                )
+            }
+        })
+        .repeated()
+        .at_least(1)
+        .to_slice()
+        .map_with(|ident: &str, e| ident.to_owned().spanned(e.span()));
+
+    // Identifier that can follow rust identifier rules or be a decimal number (rust identifiers
+    // can't start with decimal numbers).
+    let rust_or_digits_ident = ident.or(digits_ident);
+
     let mut path = chumsky::recursive::Recursive::declare();
     let path_start;
     let path_end;
     path.define({
-        let ident_with_generics = ident.then(path.clone().delimited_by(just('<'), just('>')));
+        let ident_with_generics =
+            rust_or_digits_ident.then(path.clone().delimited_by(just('<'), just('>')));
 
-        path_start = ident.then_ignore(just("::")).repeated().collect::<Vec<_>>();
+        path_start = rust_or_digits_ident
+            .then_ignore(just("::"))
+            .repeated()
+            .collect::<Vec<_>>();
         path_end = ident_with_generics
             .clone()
             .map_with(|(ident, path), e| {
@@ -233,8 +260,10 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 .map_with(|(ident, path), e| {
                     PathEnd::WithIdentGeneric(ident, Spanned::new(e.span(), Box::new(path)))
                 }))
-            .or(ident.map(PathEnd::Ident))
-            .or(just("*::").ignore_then(ident).map(PathEnd::WithIdent));
+            .or(rust_or_digits_ident.map(PathEnd::Ident))
+            .or(just("*::")
+                .ignore_then(rust_or_digits_ident)
+                .map(PathEnd::WithIdent));
         path_start
             .map_with(|v, e| v.spanned(e.span()))
             .then(path_end.clone().map_with(|v, e| v.spanned(e.span())))
@@ -640,7 +669,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
     }
 
     uses.then(
-        binding(ident, object, path.clone(), comments)
+        binding(rust_or_digits_ident, object, path.clone(), comments)
             .repeated()
             .collect::<Vec<_>>(),
     )
