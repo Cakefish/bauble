@@ -33,13 +33,27 @@ struct TestFile {
     expected_values: Vec<Box<dyn Fn(Object, &BaubleContext)>>,
 }
 
+impl TestFile {
+    fn new(
+        path: &str,
+        content: &str,
+        expected_values: Vec<Box<dyn Fn(Object, &BaubleContext)>>,
+    ) -> Self {
+        Self {
+            path: TypePath::new(String::from(path)).unwrap(),
+            content: String::from(content),
+            expected_values,
+        }
+    }
+}
+
 macro_rules! test_file {
     ($path:expr, $content:expr, $($expected_value:expr),* $(,)?) => {
-        TestFile {
-            path: TypePath::new(String::from($path)).unwrap(),
-            content: String::from($content),
-            expected_values: vec![$(expected_value_fn($expected_value)),*],
-        }
+        TestFile::new(
+            $path,
+            $content,
+            vec![$(expected_value_fn($expected_value)),*],
+        )
     };
 }
 
@@ -630,22 +644,32 @@ fn two_part_field() {
 
 #[test]
 fn name_matching_file_is_simplified() {
-    let a = &test_file!(
+    let a = &TestFile::new(
         "a",
         "a = integration::Test { x: -5, y: 5 }
         a_ref = $a", // local and full path are the same here
-        Test { x: -5, y: 5 },
-        TestRef("a".into()),
+        vec![
+            Box::new(|object, ctx| {
+                assert!(object.top_level);
+                (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+            }),
+            expected_value_fn(TestRef("a".into())),
+        ],
     );
     // test non-top-level file
-    let ac = &test_file!(
+    let ac = &TestFile::new(
         "a::c",
         "c = integration::Test { x: -5, y: 5 }\n\
         c_ref_local = $c\n\
         c_ref_full = $a::c",
-        Test { x: -5, y: 5 },
-        TestRef("a::c".into()),
-        TestRef("a::c".into()),
+        vec![
+            Box::new(|object, ctx| {
+                assert!(object.top_level);
+                (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+            }),
+            expected_value_fn(TestRef("a::c".into())),
+            expected_value_fn(TestRef("a::c".into())),
+        ],
     );
     // test refering to them from a separate file
     let b = &test_file!(
