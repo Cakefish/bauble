@@ -225,6 +225,11 @@ pub enum AnyVal<'a> {
 pub struct ConvertMeta<'a> {
     pub symbols: &'a Symbols<'a>,
     pub additional_objects: &'a mut AdditionalObjects,
+    // TODO: in stage 2 (of asset per file impl) this probably needs to be `0` rather than anything
+    // that could conflict with the name of a local asset. Because this is used to name inline
+    // objects uniquely.
+    //
+    /// Used as a prefix to uniquely name inline objects.
     pub object_name: TypePathElem<&'a str>,
     pub default_span: Span,
 }
@@ -284,8 +289,8 @@ impl AdditionalObjects {
             .expect("idx is just a number, and we know name is a valid path elem.");
 
         self.objects.push(super::create_object(
-            self.file_path.borrow(),
-            name.borrow(),
+            self.file_path.join(&name),
+            false,
             val,
             symbols,
         )?);
@@ -314,8 +319,8 @@ impl AdditionalObjects {
 
         for (name, value) in unspanned.into_objects() {
             self.objects.push(super::create_object(
-                self.file_path.borrow(),
-                name.borrow(),
+                self.file_path.join(&name),
+                false,
                 value.into_spanned(span),
                 symbols,
             )?);
@@ -893,13 +898,13 @@ where
                     {
                         let variant = Self::get_variant(variant, meta.symbols)?
                             .spanned(Self::variant_span(variant, &meta));
-                        let ty = variants.get(&*variant).ok_or(
+                        let ty = variants.get(&*variant).ok_or_else(|| {
                             ConversionError::UnknownVariant {
                                 variant: variant.clone(),
                                 ty: ty_id.value,
                             }
-                            .spanned(span),
-                        )?;
+                            .spanned(span)
+                        })?;
                         (
                             variant.map(|v| v.to_owned()),
                             extra_attributes.convert_with(value, meta.reborrow(), ty)?,

@@ -586,11 +586,16 @@ impl TypeRegistry {
                 for (name, value) in additonal.into_objects() {
                     objects.push(crate::Object {
                         object_path: file.join(&name),
+                        top_level: false,
                         value,
                     })
                 }
 
-                objects.push(crate::Object { object_path, value })
+                objects.push(crate::Object {
+                    object_path,
+                    top_level: false,
+                    value,
+                })
             }
 
             // Check that instantiated objects match after being serialized to bauble text and

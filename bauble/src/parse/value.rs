@@ -168,6 +168,7 @@ impl SpannedValue for ParseVal {
 pub struct Binding {
     pub type_path: Option<Path>,
     pub value: ParseVal,
+    pub is_first: bool,
 }
 
 #[derive(Debug)]
