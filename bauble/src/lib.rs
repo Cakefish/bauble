@@ -49,7 +49,15 @@ macro_rules! bauble_test {
     ($ctx_static:ident [$($ty:ty),* $(,)?] [$($source:literal),* $(,)?] [$($test_value:expr),* $(,)?]) => {
         static $ctx_static: std::sync::OnceLock<std::sync::RwLock<$crate::BaubleContext>> = std::sync::OnceLock::new();
         {
-            let file_path = $crate::path::TypePath::new("test").unwrap();
+            let file_sources = [$($source),*];
+            let file_paths = if file_sources.len() == 1 {
+                vec![$crate::path::TypePath::new(String::from("test")).unwrap()]
+            } else {
+                (0..file_sources.len()).map(|i| {
+                    $crate::path::TypePath::new(format!("test{i}")).unwrap()
+                }).collect()
+            };
+
             let ctx = $ctx_static.get_or_init(|| {
                 let mut ctx = $crate::BaubleContextBuilder::new();
                 $(ctx.register_type::<$ty, _>();)*
@@ -57,9 +65,9 @@ macro_rules! bauble_test {
                 let mut ctx = ctx.build();
                 ctx.type_registry().validate(true).expect("Invalid type registry");
 
-                $(
-                    ctx.register_file(file_path, format!("\n{}\n", $source));
-                )*
+                for (path, source) in file_paths.iter().zip(file_sources) {
+                    ctx.register_file(path.borrow(), format!("\n{}\n", source));
+                }
 
                 std::sync::RwLock::new(ctx)
             });
@@ -73,15 +81,35 @@ macro_rules! bauble_test {
             }
 
             // Test round-trip of objects through source format
-            let re_source = $crate::display_formatted(objects.as_slice(), ctx.read().unwrap().type_registry(), &$crate::DisplayConfig {
-                ..$crate::DisplayConfig::default()
-            });
+            let mut file_objects = ::std::collections::HashMap::new();
+            for object in &objects {
+                use $crate::SpannedValue;
+                file_objects
+                    .entry(object.value.span().file())
+                    .or_insert(Vec::new())
+                    .push(object.clone());
+            }
 
-            let (re_objects, errors) = ctx.write().unwrap().reload_paths([(file_path, re_source.as_str())]);
+            let re_path_sources = file_objects.iter().map(|(file_id, objects)| {
+                let ctx = ctx.read().unwrap();
+                let re_source = bauble::display_formatted(
+                    objects.as_slice(),
+                    ctx.type_registry(),
+                    &$crate::DisplayConfig {
+                        ..$crate::DisplayConfig::default()
+                    },
+                );
+                (ctx.get_file_path(*file_id).to_owned(), re_source)
+            })
+            .collect::<Vec<_>>();
+
+            let (re_objects, errors) = ctx.write().unwrap().reload_paths(re_path_sources.iter().map(|(p, s)| (p.borrow(), s)));
 
             if !errors.is_empty() {
                 $crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
-                eprintln!("{re_source}");
+                for (path, re_source) in re_path_sources {
+                    eprintln!("In file \"{path}\": {re_source}");
+                }
                 panic!("Error re-converting");
             }
 

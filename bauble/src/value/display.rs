@@ -688,13 +688,13 @@ where
             types: w.ctx(),
         };
         let mut w = w.with_ctx(&ctx);
-        let mut iter = written.into_iter();
+        let mut objects_to_write = written.into_iter();
 
-        if let Some(o) = iter.next() {
+        if let Some(o) = objects_to_write.next() {
             o.indented_display(w.reborrow());
         }
 
-        for o in iter {
+        for o in objects_to_write {
             w.write("\n\n");
             o.indented_display(w.reborrow());
         }
