@@ -469,14 +469,28 @@ impl BaubleContext {
     /// * `path` describes the bauble "module" that the file corresponds to. That is it say, what
     ///   prefix path is necessary inside of bauble to reference the context of this file.
     /// * `source` is the string of Bauble text to be parsed.
+    ///
+    /// If a file with this path already exists, its content will be overwritten.
     pub fn register_file(&mut self, path: TypePath<&str>, source: impl Into<String>) -> FileId {
-        let node = self.root_node.build_nodes(path);
-        let id = FileId(self.files.len());
-        node.source = Some(id);
-        self.files
-            .push((path.to_owned(), ariadne::Source::from(source.into())));
+        let existing_file_id = self
+            .root_node
+            .node_at(path.borrow())
+            .and_then(|node| node.source);
+        match existing_file_id {
+            Some(id) => {
+                *self.file_mut(id).1 = Source::from(source.into());
+                id
+            }
+            None => {
+                let node = self.root_node.build_nodes(path);
+                let id = FileId(self.files.len());
+                node.source = Some(id);
+                self.files
+                    .push((path.to_owned(), ariadne::Source::from(source.into())));
 
-        id
+                id
+            }
+        }
     }
 
     /// Iterates all registered files.
@@ -520,19 +534,8 @@ impl BaubleContext {
     ) -> (Vec<crate::Object>, BaubleErrors) {
         let ids = paths
             .into_iter()
-            .map(|(path, source)| {
-                let file_id = self
-                    .root_node
-                    .node_at(path.borrow())
-                    .and_then(|node| node.source);
-                match file_id {
-                    Some(id) => {
-                        *self.file_mut(id).1 = Source::from(source.into());
-                        id
-                    }
-                    None => self.register_file(path.borrow(), source),
-                }
-            })
+            .map(|(path, source)| self.register_file(path.borrow(), source))
+            // Need to collect to avoid conflicts of borrowing `self`.
             .collect::<Vec<_>>();
 
         self.reload_files(ids)
