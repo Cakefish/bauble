@@ -431,22 +431,22 @@ pub fn ref_explicit_type_multiple_files() {
         [Test]
         [
             "test = integration::Test{ x: -5, y: 5 }",
-            "r: Ref<integration::Test> = $test::test"
+            "r: Ref<integration::Test> = $test0::test"
         ]
         [
             Test { x: -5, y: 5 },
-            Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test0::test").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
         [
-            "r: Ref<integration::Test> = $test::test",
+            "r: Ref<integration::Test> = $test1::test",
             "test = integration::Test{ x: -5, y: 5 }"
         ]
         [
-            Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test1::test").to_owned()),
             Test { x: -5, y: 5 },
         ]
     );
@@ -458,22 +458,22 @@ pub fn ref_implicit_type_multiple_files() {
         [Test]
         [
             "test = integration::Test{ x: -5, y: 5 }",
-            "r = $test::test"
+            "r = $test0::test"
         ]
         [
             Test { x: -5, y: 5 },
-            Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test0::test").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
         [
-            "r = $test::test",
+            "r = $test1::test",
             "test = integration::Test{ x: -5, y: 5 }"
         ]
         [
-            Ref::<Test>::from_path(TypePath::new_unchecked("test::test").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test1::test").to_owned()),
             Test { x: -5, y: 5 },
         ]
     );
