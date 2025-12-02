@@ -688,4 +688,40 @@ fn name_matching_file_is_simplified() {
     );
 }
 
+#[test]
+#[should_panic = "'a::1' refers to an existing asset"]
+fn duplicate_name_after_simplification() {
+    let a = &TestFile::new(
+        "a",
+        "a = integration::Test { x: -5, y: 5 }\n\
+        1 = integration::Test { x: -5, y: 5 }", // local and full path are the same here
+        vec![
+            Box::new(|object, ctx| {
+                assert!(object.top_level);
+                (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+            }),
+            Box::new(|object, ctx| {
+                assert!(!object.top_level);
+                (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+            }),
+        ],
+    );
+    // test non-top-level file
+    let a1 = &TestFile::new(
+        "a::1",
+        "1 = integration::Test { x: -5, y: 5 }",
+        vec![Box::new(|object, ctx| {
+            assert!(object.top_level);
+            (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+        })],
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, a1],
+    );
+}
+
 // TODO: in stage 2, test that only first object can be named `0`.
