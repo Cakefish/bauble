@@ -484,11 +484,18 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                     |_| Vec::new(),
                 )));
 
-            let structure = ident
+            let field_ident = ident
+                .then(just("::").then(ident))
+                .map_with(|(ident_a, (separator, ident_b)), extra| {
+                    format!("{}{}{}", ident_a.value, separator, ident_b.value).spanned(extra.span())
+                })
+                .or(ident);
+            let field = field_ident
                 .padded_by(comments)
                 .padded()
                 .then_ignore(just(':').padded().padded_by(comments))
-                .then(object.clone())
+                .then(object.clone());
+            let structure = field
                 .separated_by(separator)
                 .allow_trailing()
                 .collect::<Vec<_>>()

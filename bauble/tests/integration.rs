@@ -528,3 +528,102 @@ fn decimal_digits_identifiers() {
         &[a],
     );
 }
+
+#[derive(PartialEq, Debug)]
+struct TestNamespaceFieldIdent {
+    x: i32,
+    mynamespace_y: u32,
+}
+
+impl<'alloc_lifetime> bauble::Bauble<'alloc_lifetime, bauble::DefaultAllocator>
+    for TestNamespaceFieldIdent
+{
+    fn construct_type(registry: &mut bauble::types::TypeRegistry) -> bauble::types::Type {
+        let path =
+            bauble::path::TypePath::new("integration::TestNamespaceFieldIdent".to_owned()).unwrap();
+        let meta = bauble::types::TypeMeta {
+            path,
+            ..Default::default()
+        };
+
+        let x_field = (
+            "x",
+            bauble::types::FieldType::from(
+                registry.get_or_register_type::<i32, bauble::DefaultAllocator>(),
+            ),
+        );
+        let mynamespace_y_field = (
+            "mynamespace::y",
+            bauble::types::FieldType::from(
+                registry.get_or_register_type::<u32, bauble::DefaultAllocator>(),
+            ),
+        );
+
+        bauble::types::Type {
+            meta,
+            kind: bauble::types::TypeKind::Struct(bauble::types::Fields::Named(
+                bauble::types::NamedFields::empty().with_required([x_field, mynamespace_y_field]),
+            )),
+        }
+    }
+    fn from_bauble(
+        bauble::Val {
+            attributes:
+                bauble::Spanned {
+                    value: mut _attributes,
+                    span: _attributes_span,
+                },
+            value: bauble::Spanned { span, value },
+            ty,
+        }: bauble::Val,
+        allocator: &bauble::DefaultAllocator,
+    ) -> Result<
+        <bauble::DefaultAllocator as bauble::BaubleAllocator<'alloc_lifetime>>::Out<Self>,
+        bauble::ToRustError,
+    > {
+        let bauble::Value::Struct(bauble::FieldsKind::Named(mut fields)) = value else {
+            Err(Self::error(
+                span,
+                bauble::ToRustErrorKind::WrongType { found: ty },
+            ))?
+        };
+
+        let mut take_field = |name: &str| {
+            fields.swap_remove(name).ok_or_else(|| {
+                Self::error(
+                    span,
+                    bauble::ToRustErrorKind::MissingField {
+                        field: name.to_owned(),
+                    },
+                )
+            })
+        };
+
+        let x = bauble::Bauble::from_bauble(take_field("x")?, allocator)
+            .and_then(|res| unsafe { bauble::BaubleAllocator::validate(allocator, res) })?;
+        let mynamespace_y =
+            bauble::Bauble::from_bauble(take_field("mynamespace::y")?, allocator)
+                .and_then(|res| unsafe { bauble::BaubleAllocator::validate(allocator, res) })?;
+        let this = Self { x, mynamespace_y };
+        Ok(unsafe { bauble::BaubleAllocator::wrap(allocator, this) })
+    }
+}
+
+#[test]
+fn two_part_field() {
+    let a = &test_file!(
+        "a",
+        "test = integration::TestNamespaceFieldIdent{ x: -5, mynamespace::y: 5 }",
+        TestNamespaceFieldIdent {
+            x: -5,
+            mynamespace_y: 5
+        },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<TestNamespaceFieldIdent, _>();
+        },
+        &[a],
+    );
+}
