@@ -646,7 +646,9 @@ pub(crate) fn resolve_delayed(
                         );
                     }
                 }
-                ctx.register_asset(d.asset.value.borrow(), *ty);
+                if let Err(e) = ctx.register_asset(d.asset.value.borrow(), *ty) {
+                    errors.push(ConversionError::Custom(e).spanned(d.asset.span))
+                }
                 false
             } else {
                 true
@@ -837,10 +839,13 @@ pub(crate) fn register_assets(
             res
         };
 
-        match ty {
-            Ok(ty) => {
-                Symbols { uses, .. } = symbols;
-                let ref_ty = ctx.register_asset(path.borrow(), ty);
+        Symbols { uses, .. } = symbols;
+        let ref_ty = ty.and_then(|ty| {
+            ctx.register_asset(path.borrow(), ty)
+                .map_err(|e| ConversionError::Custom(e).spanned(span))
+        });
+        match ref_ty {
+            Ok(ref_ty) => {
                 let mut symbols = Symbols { ctx: &*ctx, uses };
                 // Add to Symbols::uses so other items in the same file can directly reference this
                 // without full path.
@@ -856,10 +861,7 @@ pub(crate) fn register_assets(
                 }
                 Symbols { uses, .. } = symbols;
             }
-            Err(err) => {
-                Symbols { uses, .. } = symbols;
-                errors.push(err)
-            }
+            Err(err) => errors.push(err),
         };
     }
 

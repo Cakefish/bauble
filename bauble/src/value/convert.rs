@@ -6,12 +6,10 @@ use crate::{
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
-    value::Fields,
-};
-
-use super::{
-    Attributes, Ident, Result, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
-    ValueTrait,
+    value::{
+        Attributes, Fields, Ident, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
+        ValueTrait, error::Result,
+    },
 };
 
 pub fn no_attr() -> Option<&'static Attributes<Val>> {

@@ -428,13 +428,15 @@ impl CtxNode {
         node.reference.ty = Some(id);
     }
 
-    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
+    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId) -> Result<(), ()> {
         let node = self.build_nodes(path);
         if node.reference.asset.is_some() {
-            panic!("Multiple assets with the same path");
+            // Multiple assets with the same path
+            return Err(());
         }
 
         node.reference.asset = Some(ty);
+        Ok(())
     }
 }
 
@@ -503,11 +505,28 @@ impl BaubleContext {
     /// With this method you can expose assets that aren't in bauble.
     ///
     /// Returns ID of internal Ref type for `ty`.
-    pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) -> TypeId {
+    ///
+    /// Returns an error if an asset was already registered at this path. This can occur due to
+    /// simplification of the top level asset path to match the current file. E.g. the top-level
+    /// asset in `a::1` will conflict with the path of object `1` in file `a`.
+    //
+    // TODO: in stage 2 we might be able to adjust this so that local object paths are
+    // distinguished from top level objects, such that they don't clash.
+    pub fn register_asset(
+        &mut self,
+        path: TypePath<&str>,
+        ty: TypeId,
+    ) -> Result<TypeId, crate::CustomError> {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
         self.root_node.build_type(ref_ty, &self.registry);
-        self.root_node.build_asset(path, ref_ty);
-        ref_ty
+        self.root_node.build_asset(path, ref_ty).map_err(|()| {
+            crate::CustomError::new(format!(
+                "'{path}' refers to an existing asset in another file. This can be \n\
+                caused by special cased path simplification for the first object in a \n\
+                file.",
+            ))
+        })?;
+        Ok(ref_ty)
     }
 
     fn file(&self, file: FileId) -> (TypePath<&str>, &Source) {
