@@ -62,6 +62,13 @@ fn make_ctx(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder)) -> bau
     ctx
 }
 
+fn panic_errors(ctx: &bauble::BaubleContext, errors: bauble::BaubleErrors) -> ! {
+    let mut buf = Vec::new();
+    errors.write_errors(ctx, &mut buf);
+    let error_msg = String::from_utf8(buf).unwrap();
+    panic!("{error_msg}");
+}
+
 fn test_load(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder), files: &[&TestFile]) {
     let mut ctx = make_ctx(with_ctx_builder);
 
@@ -72,8 +79,7 @@ fn test_load(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder), files
 
     let (objects, errors) = ctx.load_all();
     if !errors.is_empty() {
-        bauble::print_errors(Err::<(), _>(errors), &ctx);
-        panic!("Error converting");
+        panic_errors(&ctx, errors);
     }
     compare_objects(objects, files, &ctx);
 }
@@ -92,21 +98,19 @@ fn test_reload(
 
     let (objects, errors) = ctx.load_all();
     if !errors.is_empty() {
-        bauble::print_errors(Err::<(), _>(errors), &ctx);
-        panic!("Error converting");
+        panic_errors(&ctx, errors);
     }
     compare_objects(objects, start, &ctx);
 
     // Test reloading with new content and new files that are nested as submodules.
     let (objects, errors) = ctx.reload_paths(new.iter().map(|f| (f.path.borrow(), &f.content)));
     if !errors.is_empty() {
-        bauble::print_errors(Err::<(), _>(errors), &ctx);
-        panic!("Error converting reload");
+        panic_errors(&ctx, errors);
     }
     compare_objects(objects, new, &ctx);
 }
 
-/// Doesn't fail test when some files have errors as long as they had no expected values.
+/// Doesn't fail test when some files have errors as long as all expected values are loaded.
 ///
 /// Expects at least one error.
 fn test_load_partial(
@@ -124,7 +128,7 @@ fn test_load_partial(
     if errors.is_empty() {
         panic!("At least one error is expected");
     } else {
-        bauble::print_errors(Err::<(), _>(errors), &ctx);
+        errors.print_errors(&ctx);
     }
     compare_objects(objects, files, &ctx);
 }
@@ -170,7 +174,7 @@ fn new_nested_reload_paths() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic = "This identifier was already used"]
 fn duplicate_objects() {
     let a = &test_file!(
         "a",
@@ -190,7 +194,7 @@ fn duplicate_objects() {
 // NOTE: This currently fails because `b::test` isn't allowed by itself but if we add support for
 // that we still want this case to fail.
 #[test]
-#[should_panic]
+#[should_panic = "found ':' expected identifier, or '*'"]
 fn duplicate_objects_across_files() {
     let a = &test_file!(
         "a",
@@ -318,8 +322,8 @@ fn same_file_references() {
 }
 
 #[test]
-#[should_panic] // TODO: see todo in `register_assets` about registering assets in the correct
-// order.
+// TODO: see todo in `register_assets` about registering assets in the correct order.
+#[should_panic = "Expected this path to refer to an asset"]
 fn same_file_references_reverse() {
     let a = &test_file!(
         "a",
@@ -357,7 +361,8 @@ fn same_file_references_reverse_full() {
 }
 
 #[test]
-#[should_panic] // TODO: see todo in `register_assets` where `add_use` is called.
+// TODO: see todo in `register_assets` where `add_use` is called.
+#[should_panic = "Expected this path to refer to a valid reference"]
 fn reference_with_use() {
     let a = &test_file!(
         "a",
@@ -480,7 +485,7 @@ pub fn ref_implicit_type_multiple_files() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic = "Expected this path to refer to a type"]
 pub fn ref_explicit_type_incorrect() {
     #[derive(Bauble, PartialEq, Eq, Debug)]
     struct Incorrect(u32);

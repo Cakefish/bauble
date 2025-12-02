@@ -72,8 +72,10 @@ pub mod private {
         let (objects, errors) = ctx.write().unwrap().load_all();
 
         if !errors.is_empty() {
-            crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
-            panic!("Error converting");
+            let mut buf = Vec::new();
+            errors.write_errors(&ctx.read().unwrap(), &mut buf);
+            let error_msg = String::from_utf8(buf).unwrap();
+            panic!("Error converting: \n{error_msg}");
         }
 
         // Test round-trip of objects through source format
@@ -107,11 +109,14 @@ pub mod private {
             .reload_paths(re_path_sources.iter().map(|(p, s)| (p.borrow(), s)));
 
         if !errors.is_empty() {
-            crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
+            errors.print_errors(&ctx.read().unwrap());
             for (path, re_source) in re_path_sources {
                 eprintln!("In file \"{path}\": {re_source}");
             }
-            panic!("Error re-converting");
+            let mut buf = Vec::new();
+            errors.write_errors(&ctx.read().unwrap(), &mut buf);
+            let error_msg = String::from_utf8(buf).unwrap();
+            panic!("Error re-converting: \n{error_msg}");
         }
 
         assert_eq!(objects, re_objects);
