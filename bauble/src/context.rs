@@ -431,7 +431,7 @@ impl CtxNode {
     fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
         let node = self.build_nodes(path);
         if node.reference.asset.is_some() {
-            panic!("Multiple types with the same path");
+            panic!("Multiple assets with the same path");
         }
 
         node.reference.asset = Some(ty);
