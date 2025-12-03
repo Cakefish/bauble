@@ -16,8 +16,14 @@ fn expected_value_fn<T: for<'a> Bauble<'a> + PartialEq + std::fmt::Debug>(
 ) -> Box<dyn Fn(Object, &BaubleContext)> {
     Box::new(move |object, ctx| {
         let result = T::from_bauble(object.value, &bauble::DefaultAllocator);
-        let read_value = bauble::print_errors(result, ctx).unwrap();
-        assert_eq!(&read_value, &expected_value);
+        match result {
+            Ok(read_value) => assert_eq!(read_value, expected_value),
+            Err(error) => {
+                let errors = bauble::BaubleErrors::from(error);
+                let error_msg = errors.try_to_string(ctx).unwrap();
+                panic!("Error converting object to rust value: \n{error_msg}");
+            }
+        }
     })
 }
 
@@ -63,10 +69,7 @@ fn make_ctx(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder)) -> bau
 }
 
 fn panic_errors(ctx: &bauble::BaubleContext, errors: bauble::BaubleErrors) -> ! {
-    let mut buf = Vec::new();
-    errors.write_errors(ctx, &mut buf);
-    let error_msg = String::from_utf8(buf).unwrap();
-    panic!("{error_msg}");
+    panic!("{}", errors.try_to_string(ctx).unwrap());
 }
 
 fn test_load(with_ctx_builder: &dyn Fn(&mut bauble::BaubleContextBuilder), files: &[&TestFile]) {

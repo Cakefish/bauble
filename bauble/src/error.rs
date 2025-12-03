@@ -210,6 +210,13 @@ impl BaubleErrors {
             ctx,
         );
     }
+
+    /// Writes errors and attempts to convert them to a string.
+    pub fn try_to_string(&self, ctx: &BaubleContext) -> Result<String, std::string::FromUtf8Error> {
+        let mut buf = Vec::new();
+        self.write_errors(ctx, &mut buf);
+        String::from_utf8(buf)
+    }
 }
 
 impl<B: BaubleError> From<B> for BaubleErrors {
@@ -227,13 +234,4 @@ impl<B: BaubleError> From<Vec<B>> for BaubleErrors {
                 .collect(),
         )
     }
-}
-
-/// Will print the errors of `res` in case of an error, otherwise, return the ok value of `res` of type `T`.
-pub fn print_errors<T>(res: Result<T, impl Into<BaubleErrors>>, ctx: &BaubleContext) -> Option<T> {
-    res.map_err(|errors| {
-        let errors: BaubleErrors = errors.into();
-        errors.print_errors(ctx)
-    })
-    .ok()
 }

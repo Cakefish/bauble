@@ -616,7 +616,7 @@ impl TypeRegistry {
             let (loaded_objects, errors) = ctx.load_all();
 
             if !errors.is_empty() {
-                crate::print_errors(Err::<(), _>(errors), &ctx);
+                errors.print_errors(&ctx);
 
                 return Err(TypeSystemError::InstantiableErrors);
             }
