@@ -16,7 +16,7 @@ pub use bauble_macros::Bauble;
 
 pub use builtin::Ref;
 pub use context::{BaubleContext, BaubleContextBuilder, FileId, PathReference, Source};
-pub use error::{BaubleError, BaubleErrors, CustomError, Level, print_errors};
+pub use error::{BaubleError, BaubleErrors, CustomError, Level};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use traits::{
     Bauble, BaubleAllocator, DefaultAllocator, ToRustError, ToRustErrorKind, VariantKind,
@@ -72,8 +72,8 @@ pub mod private {
         let (objects, errors) = ctx.write().unwrap().load_all();
 
         if !errors.is_empty() {
-            crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
-            panic!("Error converting");
+            let error_msg = errors.try_to_string(&ctx.read().unwrap()).unwrap();
+            panic!("Error converting: \n{error_msg}");
         }
 
         // Test round-trip of objects through source format
@@ -107,11 +107,12 @@ pub mod private {
             .reload_paths(re_path_sources.iter().map(|(p, s)| (p.borrow(), s)));
 
         if !errors.is_empty() {
-            crate::print_errors(Err::<(), _>(errors), &ctx.read().unwrap());
+            let mut error_msg = errors.try_to_string(&ctx.read().unwrap()).unwrap();
             for (path, re_source) in re_path_sources {
-                eprintln!("In file \"{path}\": {re_source}");
+                use std::fmt::Write;
+                writeln!(&mut error_msg, "In file \"{path}\": {re_source}").unwrap();
             }
-            panic!("Error re-converting");
+            panic!("Error re-converting: \n{error_msg}");
         }
 
         assert_eq!(objects, re_objects);
@@ -120,6 +121,30 @@ pub mod private {
         // that match the provided test values.
         compare_objects(objects, ctx);
         compare_objects(re_objects, ctx);
+    }
+
+    /// Converts bauble object to the type of the `expected_value` and then asserts that they are
+    /// the same.
+    ///
+    /// Panics if converting object fails.
+    pub fn expected_from_bauble<T>(
+        expected_value: T,
+        value: crate::Object,
+        ctx: &std::sync::RwLock<crate::BaubleContext>,
+    ) where
+        T: PartialEq + for<'a> crate::Bauble<'a> + std::fmt::Debug,
+    {
+        match <T as crate::Bauble>::from_bauble(value.value, &crate::DefaultAllocator) {
+            Ok(read_value) => {
+                assert_eq!(read_value, expected_value);
+            }
+            Err(error) => {
+                let error_msg = crate::BaubleErrors::from(error)
+                    .try_to_string(&ctx.read().unwrap())
+                    .unwrap();
+                panic!("Error converting object to rust value: \n{error_msg}");
+            }
+        }
     }
 }
 
@@ -147,16 +172,7 @@ macro_rules! bauble_test {
 
                 $(
                     let value = objects.next().expect("Not as many objects as test expr in bauble test?");
-                    // Infer type for `read_value` to be the same as `test_value`.
-                    let [test_value, read_value] = [
-                        $test_value,
-                        $crate::print_errors(
-                            $crate::Bauble::from_bauble(value.value, &$crate::DefaultAllocator),
-                            &ctx.read().unwrap()
-                        ).unwrap(),
-                    ];
-
-                    assert_eq!(read_value, test_value);
+                    $crate::private::expected_from_bauble($test_value, value, &ctx);
                 )*
 
                 if objects.next().is_some() {
