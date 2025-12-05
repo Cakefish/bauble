@@ -505,3 +505,26 @@ pub fn ref_explicit_type_incorrect() {
         ]
     );
 }
+
+#[test]
+fn decimal_digits_identifiers() {
+    let a = &test_file!(
+        "a",
+        "2 = integration::Test { x: -5, y: 5 }\n\
+         123 = integration::Test { x: -5, y: 5 }\n\
+         test_ref2 = $2
+         test_ref23 = $123
+         ",
+        Test { x: -5, y: 5 },
+        Test { x: -5, y: 5 },
+        TestRef("a::2".into()),
+        TestRef("a::123".into()),
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a],
+    );
+}
