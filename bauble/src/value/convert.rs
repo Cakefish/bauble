@@ -254,7 +254,7 @@ impl ConvertMeta<'_> {
 
 /// Represents additional objects added when parsing other objects.
 ///
-/// Also known as sub-assets.
+/// Also known as sub-objects/sub-assets.
 pub(super) struct AdditionalObjects {
     objects: Vec<super::Object>,
     name_allocs: HashMap<TypePathElem, u64>,
@@ -328,16 +328,37 @@ impl AdditionalObjects {
     }
 }
 
+/// Keeps track of existing names used for additional objects and allocates new names.
 enum NameAllocs<'a> {
     Owned(HashMap<TypePathElem, u64>),
     Borrowed(&'a mut HashMap<TypePathElem, u64>),
+    Custom(&'a mut dyn FnMut(TypePathElem<&str>) -> TypePathElem),
 }
 
 impl NameAllocs<'_> {
-    fn get_mut(&mut self) -> &mut HashMap<TypePathElem, u64> {
+    fn reborrow(&mut self) -> NameAllocs<'_> {
         match self {
-            NameAllocs::Owned(m) => m,
-            NameAllocs::Borrowed(m) => m,
+            Self::Owned(m) => NameAllocs::Borrowed(m),
+            Self::Borrowed(m) => NameAllocs::Borrowed(m),
+            Self::Custom(f) => NameAllocs::Custom(f),
+        }
+    }
+
+    /// Allocate a new name for an object that will be referenced by the parnet object
+    /// `object_name`.
+    fn allocate_name(&mut self, object_name: TypePathElem<&str>) -> TypePathElem {
+        let from_map = |m: &mut HashMap<TypePathElem, u64>| {
+            let idx = *m
+                .entry(object_name.to_owned())
+                .and_modify(|i| *i += 1u64)
+                .or_insert(0);
+            TypePathElem::new(format!("{}@{idx}", object_name))
+                .expect("idx is just a number, and we know name is a valid path elem.")
+        };
+        match self {
+            Self::Owned(m) => from_map(m),
+            Self::Borrowed(m) => from_map(m),
+            Self::Custom(f) => f(object_name),
         }
     }
 }
@@ -375,7 +396,29 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         }
     }
 
-    /// Add the type id to the path this keeps track of, for better unique names for sub-objects.
+    /// Create a new instance with a custom closure to create unique names.
+    ///
+    /// This allows creating the additional objects as objects that aren't sub-objects (aka inline
+    /// objects).
+    ///
+    /// The closure is passed the name of the parent object and can optionally use that in its
+    /// naming logic. Note, a number representing the type id of the current subobject may be
+    /// appended to the parent object name.
+    pub fn new_with_custom_namer(
+        file_path: TypePath<&'a str>,
+        object_name: TypePathElem<&'a str>,
+        namer: &'a mut impl FnMut(TypePathElem<&str>) -> TypePathElem,
+    ) -> Self {
+        Self {
+            file_path,
+            object_name,
+            objects: Vec::new(),
+            name_allocs: NameAllocs::Custom(namer),
+        }
+    }
+
+    /// Add the type id to the parent object name this keeps track of, for better unique names for
+    /// sub-objects.
     pub fn in_type<R>(
         &mut self,
         ty: TypeId,
@@ -383,11 +426,12 @@ impl<'a> AdditionalUnspannedObjects<'a> {
     ) -> R {
         let name = TypePathElem::new(format!("{}&{}", self.object_name, ty.inner())).unwrap();
 
-        let mut inner = AdditionalUnspannedObjects::new_with_name_allocs(
-            self.file_path,
-            name.borrow(),
-            self.name_allocs.get_mut(),
-        );
+        let mut inner = AdditionalUnspannedObjects {
+            file_path: self.file_path,
+            object_name: name.borrow(),
+            objects: Vec::new(),
+            name_allocs: self.name_allocs.reborrow(),
+        };
 
         let res = f(&mut inner);
 
@@ -398,19 +442,9 @@ impl<'a> AdditionalUnspannedObjects<'a> {
 
     /// Add an additional object, and get a reference to it.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
-        let idx = *self
-            .name_allocs
-            .get_mut()
-            .entry(self.object_name.to_owned())
-            .and_modify(|i| *i += 1u64)
-            .or_insert(0);
-        let name = TypePathElem::new(format!("{}@{idx}", self.object_name))
-            .expect("idx is just a number, and we know name is a valid path elem.");
-
+        let name = self.name_allocs.allocate_name(self.object_name);
         let res = Value::Ref(self.file_path.join(&name));
-
         self.objects.push((name, val));
-
         res
     }
 

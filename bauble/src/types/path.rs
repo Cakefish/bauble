@@ -380,11 +380,15 @@ impl<S: AsRef<str>> TypePath<S> {
     }
 
     /// Split the start segment with the remaining segments.
+    ///
+    /// Returns `None` if self is empty.
     pub fn get_start(&self) -> Option<(TypePathElem<&str>, TypePath<&str>)> {
         self.borrow().split_start()
     }
 
     /// Split the end segment with the remaining segments.
+    ///
+    /// Returns `None` if self is empty.
     pub fn get_end(&self) -> Option<(TypePath<&str>, TypePathElem<&str>)> {
         self.borrow().split_end()
     }
