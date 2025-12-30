@@ -726,7 +726,7 @@ impl TypeRegistry {
         }
     }
 
-    /// Register `T` if it is not registerted already, then get the trait ID for `T`.
+    /// Register `T` if it is not registered already, then get the trait ID for `T`.
     pub fn get_or_register_trait<T: ?Sized + BaubleTrait>(&mut self) -> TraitId {
         let rust_id = std::any::TypeId::of::<T>();
         if let Some(id) = self.type_from_rust.get(&rust_id) {

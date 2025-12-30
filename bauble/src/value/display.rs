@@ -500,6 +500,8 @@ impl IndentedDisplay<ValueDisplayCtx<'_, Val>> for Val {
             w.write(" ");
         }
 
+        // If the type is transparent over a trait type or a ref to a trait type, then the concrete
+        // type of the inner value will not be apparent from the outer context, so `typed` is false.
         let typed = match w.ctx().types.key_type(*self.ty).kind {
             TypeKind::Transparent(t) | TypeKind::Ref(t) => {
                 !matches!(w.ctx().types.key_type(t).kind, TypeKind::Trait(_))
@@ -516,6 +518,7 @@ impl IndentedDisplay<ValueDisplayCtx<'_, Val>> for Val {
 
         let mut w = w.with_type(path.as_str());
 
+        // If we are not in a typed context the type may need to be explicitly specified.
         if !w.is_typed()
             && !path.is_empty()
             && match w.ctx().types.key_type(*self.ty).kind {
