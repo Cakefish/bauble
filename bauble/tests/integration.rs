@@ -724,4 +724,33 @@ fn duplicate_name_after_simplification() {
     );
 }
 
+/// Paths won't collide after simplification but we don't want to allow names of objects in the
+/// same file to collide.
+#[test]
+#[should_panic = "This identifier was already used"]
+fn duplicate_name_before_simplification() {
+    let a = &TestFile::new(
+        "a",
+        "a = integration::Test { x: -5, y: 5 }\n\
+        a = integration::Test { x: -5, y: 5 }",
+        vec![
+            Box::new(|object, ctx| {
+                assert!(object.top_level);
+                (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+            }),
+            Box::new(|object, ctx| {
+                assert!(!object.top_level);
+                (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+            }),
+        ],
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a],
+    );
+}
+
 // TODO: in stage 2, test that only first object can be named `0`.
