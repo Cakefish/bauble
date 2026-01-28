@@ -680,10 +680,11 @@ fn name_matching_file_is_simplified() {
         TestRef("a::c".into()),
     );
 
-    test_load(
+    test_reload(
         &|ctx| {
             ctx.register_type::<Test, _>();
         },
+        &[a, ac, b],
         &[a, ac, b],
     );
 }

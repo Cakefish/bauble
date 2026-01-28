@@ -398,22 +398,31 @@ impl CtxNode {
             && self.source.is_none()
     }
 
-    /// Clears all assets in the module this node references (if any).
+    /// Clears all assets in the file this node references (if any).
     ///
     /// Does not recurse into other files, but will clear inline submodules in the current file (if
     /// that feature is added).
-    fn clear_child_assets(&mut self) {
+    fn clear_file_assets(&mut self) {
         self.children.retain(|_, node| {
-            if node.source.is_some() {
-                return true;
+            // `AssetKind::TopLevel` will be from other files and we don't want to clear those.
+            node.reference
+                .asset
+                .take_if(|(_, kind)| matches!(kind, AssetKind::Local));
+
+            // Avoid clearing assets from other files, but recurse into inline submodules (if that
+            // feature is added).
+            if node.source.is_none() {
+                node.clear_file_assets();
             }
-
-            node.clear_child_assets();
-
-            node.reference.asset = None;
 
             !node.is_empty()
         });
+
+        // Top level assets match the path of their file so this will be from this file if it is
+        // top level.
+        self.reference
+            .asset
+            .take_if(|(_, kind)| matches!(kind, AssetKind::TopLevel));
     }
 
     /// Builds all path elements as modules
@@ -614,7 +623,7 @@ impl BaubleContext {
             // Need a partial borrow here.
             let (path, _) = &self.files[file.0];
             if let Some(node) = self.root_node.node_at_mut(path.borrow()) {
-                node.clear_child_assets();
+                node.clear_file_assets();
             }
         }
 
