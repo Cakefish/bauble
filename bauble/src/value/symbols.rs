@@ -331,8 +331,8 @@ impl<'a> Symbols<'a> {
     pub fn resolve_asset(&self, path: &Path) -> Result<(TypeId, TypePath)> {
         let item = self.resolve_item(path, RefKind::Asset)?.into_owned();
 
-        if let Some(asset) = item.asset {
-            Ok(asset)
+        if let Some((ty, path, _kind)) = item.asset {
+            Ok((ty, path))
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),

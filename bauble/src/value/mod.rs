@@ -572,11 +572,12 @@ impl PathKind {
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
 ///
 /// What they are referencing needs to be loaded in order to determine their type.
-pub struct DelayedRegister {
-    pub asset: Spanned<TypePath>,
-    pub reference: Spanned<PathKind>,
+pub(crate) struct DelayedRegister {
+    asset: Spanned<TypePath>,
+    asset_kind: crate::AssetKind,
+    reference: Spanned<PathKind>,
     /// The type we want a potential reference to resolve into.
-    pub expected_ty_path: Option<Spanned<PathKind>>,
+    expected_ty_path: Option<Spanned<PathKind>>,
 }
 
 pub(crate) fn resolve_delayed(
@@ -596,7 +597,7 @@ pub(crate) fn resolve_delayed(
                 PathKind::Indirect(path, ident) => {
                     ctx.ref_with_ident(path.borrow(), ident.borrow())
                 }
-            } && let Some((ty, _)) = &r.asset
+            } && let Some((ty, _, _)) = &r.asset
             {
                 // TODO: for now, it is assumed all references which explicitly
                 // specify their inner type should have that inner type resolved
@@ -646,7 +647,7 @@ pub(crate) fn resolve_delayed(
                         );
                     }
                 }
-                if let Err(e) = ctx.register_asset(d.asset.value.borrow(), *ty) {
+                if let Err(e) = ctx.register_asset(d.asset.value.borrow(), *ty, d.asset_kind) {
                     errors.push(ConversionError::Custom(e).spanned(d.asset.span))
                 }
                 false
@@ -775,6 +776,12 @@ pub(crate) fn register_assets(
         let span = ident.span;
         let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
         let path = object_path(file_path, ident, binding);
+        let top_level = path.borrow() == file_path;
+        let kind = if top_level {
+            crate::AssetKind::TopLevel
+        } else {
+            crate::AssetKind::Local
+        };
         let symbols = Symbols { ctx: &*ctx, uses };
 
         // To register an asset we need to determine its type.
@@ -829,6 +836,7 @@ pub(crate) fn register_assets(
 
                 delayed.push(DelayedRegister {
                     expected_ty_path,
+                    asset_kind: kind,
                     asset: path.spanned(span),
                     reference,
                 });
@@ -841,7 +849,7 @@ pub(crate) fn register_assets(
 
         Symbols { uses, .. } = symbols;
         let ref_ty = ty.and_then(|ty| {
-            ctx.register_asset(path.borrow(), ty)
+            ctx.register_asset(path.borrow(), ty, kind)
                 .map_err(|e| ConversionError::Custom(e).spanned(span))
         });
         match ref_ty {
@@ -853,7 +861,7 @@ pub(crate) fn register_assets(
                     ident.to_owned(),
                     PathReference {
                         ty: None,
-                        asset: Some((ref_ty, path.clone())),
+                        asset: Some((ref_ty, path.clone(), kind)),
                         module: None,
                     },
                 ) {

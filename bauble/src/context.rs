@@ -11,13 +11,27 @@ pub type Source = ariadne::Source<String>;
 #[derive(Clone, Default)]
 struct DefaultUses(IndexMap<TypePathElem, TypePath>);
 
+/// Assets can be either top level or local.
+#[derive(Clone, Copy, Debug)]
+pub enum AssetKind {
+    // TODO: update this in stage 2
+    /// The first asset in a file, if it has the same as the file.
+    ///
+    /// These assets share the same path as the file and are generally intended to be globally
+    /// visible and referencable.
+    TopLevel,
+    /// All assets that aren't considered top level. These are generally intended to only be
+    /// referenced from the same file (although this isn't enforced yet).
+    Local,
+}
+
 /// A type containing multiple references generally derived from a path.
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
     /// The type referenced by a path.
     pub ty: Option<TypeId>,
     /// The asset (and its path) referenced by the path.
-    pub asset: Option<(TypeId, TypePath)>,
+    pub asset: Option<(TypeId, TypePath, AssetKind)>,
     /// If the reference references a module.
     pub module: Option<TypePath>,
 }
@@ -33,10 +47,10 @@ impl PathReference {
     }
 
     /// Constructs a path reference referencing the 'any' type.
-    pub fn any(path: TypePath) -> Self {
+    pub fn any(path: TypePath, kind: AssetKind) -> Self {
         Self {
             ty: Some(TypeRegistry::any_type()),
-            asset: Some((TypeRegistry::any_type(), path.clone())),
+            asset: Some((TypeRegistry::any_type(), path.clone(), kind)),
             module: Some(path.clone()),
         }
     }
@@ -202,7 +216,7 @@ impl BaubleContextBuilder {
 #[derive(Default, Clone, Debug)]
 struct InnerReference {
     ty: Option<TypeId>,
-    asset: Option<TypeId>,
+    asset: Option<(TypeId, AssetKind)>,
     redirect: Option<TypePath>,
 }
 
@@ -244,7 +258,10 @@ impl CtxNode {
     fn reference(&self, root: &Self) -> PathReference {
         let mut this = PathReference {
             ty: self.reference.ty,
-            asset: self.reference.asset.map(|ty| (ty, self.path.clone())),
+            asset: self
+                .reference
+                .asset
+                .map(|(ty, kind)| (ty, self.path.clone(), kind)),
             module: (!self.children.is_empty()).then(|| self.path.clone()),
         };
 
@@ -428,14 +445,14 @@ impl CtxNode {
         node.reference.ty = Some(id);
     }
 
-    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId) -> Result<(), ()> {
+    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId, kind: AssetKind) -> Result<(), ()> {
         let node = self.build_nodes(path);
         if node.reference.asset.is_some() {
             // Multiple assets with the same path
             return Err(());
         }
 
-        node.reference.asset = Some(ty);
+        node.reference.asset = Some((ty, kind));
         Ok(())
     }
 }
@@ -516,16 +533,19 @@ impl BaubleContext {
         &mut self,
         path: TypePath<&str>,
         ty: TypeId,
+        kind: AssetKind,
     ) -> Result<TypeId, crate::CustomError> {
         let ref_ty = self.registry.get_or_register_asset_ref(ty);
         self.root_node.build_type(ref_ty, &self.registry);
-        self.root_node.build_asset(path, ref_ty).map_err(|()| {
-            crate::CustomError::new(format!(
-                "'{path}' refers to an existing asset in another file. This can be \n\
+        self.root_node
+            .build_asset(path, ref_ty, kind)
+            .map_err(|()| {
+                crate::CustomError::new(format!(
+                    "'{path}' refers to an existing asset in another file. This can be \n\
                 caused by special cased path simplification for the first object in a \n\
                 file.",
-            ))
-        })?;
+                ))
+            })?;
         Ok(ref_ty)
     }
 
@@ -750,18 +770,24 @@ impl BaubleContext {
     }
 
     /// Get all the assets starting from `path`, with an optional maximum depth of `max_depth`.
+    ///
+    /// Inline objects are not registered as assets, they are exclusively visible in the list of
+    /// objects returned when loading/reloading files.
     pub fn assets(
         &self,
         path: TypePath<&str>,
         max_depth: Option<usize>,
-    ) -> impl Iterator<Item = TypePath<&str>> {
+    ) -> impl Iterator<Item = (TypePath<&str>, AssetKind)> {
         self.root_node
             .node_at(path)
             .map(|node| node.iter_all_children(max_depth))
             .into_iter()
             .flatten()
-            .filter(|node| node.reference(&self.root_node).asset.is_some())
-            .map(|node| node.path.borrow())
+            .filter_map(|node| {
+                node.reference(&self.root_node)
+                    .asset
+                    .map(|(_, _, kind)| (node.path.borrow(), kind))
+            })
     }
 
     /// Get all the types starting from `path`, with an optional maximum depth of `max_depth`.
