@@ -96,7 +96,9 @@ mod formatter {
             LineWriter(self.0.reborrow())
         }
 
-        pub fn write_recursive(&mut self, f: impl FnOnce(Formatter<CTX>)) {
+        /// Executes `f` with a formatter that has an additional level of indention and writes a
+        /// newline afterwards.
+        pub fn write_indented(&mut self, f: impl FnOnce(Formatter<CTX>)) {
             f(self.0.bump_indent());
             self.0.new_line();
         }
@@ -203,7 +205,15 @@ mod formatter {
         }
 
         // pub fn map_ctx<'b, C>(&'b mut self, c: impl FnOnce(&CTX) -> C)
+
         pub fn write_line(&mut self, f: impl FnOnce(LineWriter<CTX>)) {
+            f(LineWriter(self.reborrow()));
+            self.new_line();
+        }
+
+        /// Like [`write_line`](Self::write_line) but the newline comes before the content written
+        /// by `f`.
+        pub fn write_line_prefix(&mut self, f: impl FnOnce(LineWriter<CTX>)) {
             self.new_line();
             f(LineWriter(self.reborrow()));
         }
@@ -229,9 +239,9 @@ fn slice_display<CTX, T: IndentedDisplay<CTX>>(slice: &[T], mut w: LineWriter<CT
         [] => {}
         [item] => item.indented_display(w),
         items => {
-            w.write_recursive(|mut f| {
+            w.write_indented(|mut f| {
                 for item in items {
-                    f.write_line(|mut l| {
+                    f.write_line_prefix(|mut l| {
                         item.indented_display(l.reborrow());
                         l.write(",");
                     });
@@ -271,9 +281,9 @@ where
             Value::Map(items) => {
                 w.write("{");
                 if !items.is_empty() {
-                    w.write_recursive(|mut f| {
+                    w.write_indented(|mut f| {
                         for (key, value) in items {
-                            f.write_line(|mut l| {
+                            f.write_line_prefix(|mut l| {
                                 key.indented_display(l.reborrow());
                                 l.write(": ");
                                 value.indented_display(l.reborrow());
@@ -296,9 +306,9 @@ where
                     FieldsKind::Named(items) => {
                         w.write(" {");
                         if !items.is_empty() {
-                            w.write_recursive(|mut f| {
+                            w.write_indented(|mut f| {
                                 for (field, value) in items {
-                                    f.write_line(|mut l| {
+                                    f.write_line_prefix(|mut l| {
                                         l.fmt(field);
                                         l.write(": ");
                                         value.indented_display(l.reborrow());
@@ -416,9 +426,9 @@ where
             }
             _ => {
                 w.write("#[");
-                w.write_recursive(|mut f| {
+                w.write_indented(|mut f| {
                     for (ident, val) in self.iter() {
-                        f.write_line(|mut w| {
+                        f.write_line_prefix(|mut w| {
                             w.fmt(ident);
                             w.write(" = ");
                             val.indented_display(w.reborrow());

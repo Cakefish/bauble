@@ -110,7 +110,7 @@ pub mod private {
             let mut error_msg = errors.try_to_string(&ctx.read().unwrap()).unwrap();
             for (path, re_source) in re_path_sources {
                 use std::fmt::Write;
-                writeln!(&mut error_msg, "In file \"{path}\": {re_source}").unwrap();
+                writeln!(&mut error_msg, "In file \"{path}\":\n{re_source}").unwrap();
             }
             panic!("Error re-converting: \n{error_msg}");
         }
