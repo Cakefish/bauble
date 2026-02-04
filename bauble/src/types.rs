@@ -248,6 +248,9 @@ impl Display for TypeSystemError<'_> {
 }
 
 impl TypeRegistry {
+    /// The path of the builtin in generic `Ref<_>` type without the generics.
+    pub const REF_TYPE_PATH: &str = "Ref";
+
     /// This is not performant and should not be exposed API, it is used for tests.
     #[doc(hidden)]
     pub fn find_rust_type(&self, ty: TypeId) -> Option<std::any::TypeId> {
@@ -429,8 +432,12 @@ impl TypeRegistry {
                 this.asset_refs.insert(inner, id);
                 let ty = Type {
                     meta: TypeMeta {
-                        path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
-                            .expect("Invariant"),
+                        path: TypePath::new(format!(
+                            "{}<{}>",
+                            Self::REF_TYPE_PATH,
+                            this.key_type(inner).meta.path
+                        ))
+                        .expect("Invariant"),
                         traits: this.key_type(inner).meta.traits.clone(),
                         ..Default::default()
                     },
