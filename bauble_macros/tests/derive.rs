@@ -14,7 +14,7 @@ fn test_struct() {
     bauble_test!(
         [Test]
         r#"
-        test = derive::Test { x: -5, y: 5, z: Some(true) }
+        a = derive::Test { x: -5, y: 5, z: Some(true) }
         "#
         [Test {
             x: -5,
@@ -31,7 +31,7 @@ fn test_tuple() {
 
     bauble_test!(
         [Test]
-        "test = derive::Test(-5, 5)"
+        "a = derive::Test(-5, 5)"
         [Test(-5, 5)]
     );
 }
@@ -116,7 +116,7 @@ fn test_std_types() {
     bauble_test!(
         [Test]
         r#"
-        test = derive::Test {
+        a = derive::Test {
             a: [(2, 0), (1, -1), (5, 10)],
             b: {
                 "🔑": [true, true, false],

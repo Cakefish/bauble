@@ -329,30 +329,34 @@ impl<'a> Symbols<'a> {
     }
 
     pub fn resolve_asset(&self, path: &Path) -> Result<(TypeId, TypePath)> {
-        let item = self.resolve_item(path, RefKind::Asset)?;
+        let item = self.resolve_item(path, RefKind::Asset)?.into_owned();
 
-        item.asset.clone().ok_or(
-            ConversionError::RefError(Box::new(RefError {
+        if let Some((ty, path, _kind)) = item.asset {
+            Ok((ty, path))
+        } else {
+            Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
                 path: self.resolve_path(path)?.value,
-                path_ref: item.into_owned(),
+                path_ref: item,
                 kind: RefKind::Asset,
             }))
-            .spanned(path.span()),
-        )
+            .spanned(path.span()))
+        }
     }
 
     pub fn resolve_type(&self, path: &Path) -> Result<TypeId> {
         let item = self.resolve_item(path, RefKind::Type)?;
 
-        item.ty.ok_or(
-            ConversionError::RefError(Box::new(RefError {
+        if let Some(ty) = item.ty {
+            Ok(ty)
+        } else {
+            Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
                 path: self.resolve_path(path)?.value,
                 path_ref: item.into_owned(),
                 kind: RefKind::Type,
             }))
-            .spanned(path.span()),
-        )
+            .spanned(path.span()))
+        }
     }
 }

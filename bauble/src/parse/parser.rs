@@ -681,13 +681,19 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             .collect::<Vec<_>>(),
     )
     .validate(|(uses, values), _, emitter| {
-        values.into_iter().fold(
+        values.into_iter().enumerate().fold(
             ParseValues {
                 uses,
                 values: IndexMap::default(),
             },
-            |mut values, (ident, type_path, value)| {
-                let binding = Binding { type_path, value };
+            |mut values, (i, (ident, type_path, value))| {
+                let is_first = i == 0;
+
+                let binding = Binding {
+                    type_path,
+                    value,
+                    is_first,
+                };
 
                 if values.values.contains_key(&ident) {
                     emitter.emit(Rich::custom(

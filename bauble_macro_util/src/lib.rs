@@ -433,7 +433,7 @@ fn parse_fields(
                                     let ident = meta.input.parse::<Ident>()?;
                                     attribute = Some(ident);
                                 } else {
-                                    attribute = Some(field.ident.clone().ok_or(meta.error("For unnamed fields the attribute specifier needs to be annotated with `attribute = ident`"))?);
+                                    attribute = Some(field.ident.clone().ok_or_else(|| meta.error("For unnamed fields the attribute specifier needs to be annotated with `attribute = ident`"))?);
                                 }
 
                                 Ok(())

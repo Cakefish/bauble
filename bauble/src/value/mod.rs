@@ -519,7 +519,12 @@ impl<T: ValueTrait> Value<T> {
 #[allow(missing_docs)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Object<Inner = Val> {
+    /// Path that refers to this object.
     pub object_path: TypePath,
+    // TODO: update doc in stage 2
+    /// `true` when this object appears at the top of a file and its name matches the file. The
+    /// object's path will be reduced to just the path of the file.
+    pub top_level: bool,
     pub value: Inner,
 }
 
@@ -528,6 +533,7 @@ impl Object<Val> {
     pub fn into_unspanned(self) -> Object<UnspannedVal> {
         Object {
             object_path: self.object_path,
+            top_level: self.top_level,
             value: self.value.into_unspanned(),
         }
     }
@@ -566,11 +572,12 @@ impl PathKind {
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
 ///
 /// What they are referencing needs to be loaded in order to determine their type.
-pub struct DelayedRegister {
-    pub asset: Spanned<TypePath>,
-    pub reference: Spanned<PathKind>,
+pub(crate) struct DelayedRegister {
+    asset: Spanned<TypePath>,
+    asset_kind: crate::AssetKind,
+    reference: Spanned<PathKind>,
     /// The type we want a potential reference to resolve into.
-    pub expected_ty_path: Option<Spanned<PathKind>>,
+    expected_ty_path: Option<Spanned<PathKind>>,
 }
 
 pub(crate) fn resolve_delayed(
@@ -590,7 +597,7 @@ pub(crate) fn resolve_delayed(
                 PathKind::Indirect(path, ident) => {
                     ctx.ref_with_ident(path.borrow(), ident.borrow())
                 }
-            } && let Some((ty, _)) = &r.asset
+            } && let Some((ty, _, _)) = &r.asset
             {
                 // TODO: for now, it is assumed all references which explicitly
                 // specify their inner type should have that inner type resolved
@@ -640,7 +647,9 @@ pub(crate) fn resolve_delayed(
                         );
                     }
                 }
-                ctx.register_asset(d.asset.value.borrow(), *ty);
+                if let Err(e) = ctx.register_asset(d.asset.value.borrow(), *ty, d.asset_kind) {
+                    errors.push(ConversionError::Custom(e).spanned(d.asset.span))
+                }
                 false
             } else {
                 true
@@ -717,8 +726,32 @@ pub(crate) fn resolve_delayed(
     }
 }
 
+/// Computes the path of an object.
+///
+/// Normally, the path is just the files's bauble path joined with the object name.
+///
+/// If an object is the first in the file and its name matches the file name, it receives a special
+/// path that is just the file's bauble path.
+fn object_path(
+    file_path: TypePath<&str>,
+    ident: &TypePathElem<&str>,
+    binding: &crate::parse::Binding,
+) -> TypePath<String> {
+    if binding.is_first && {
+        let file_name = file_path
+            .split_end()
+            .expect("file_path must not be empty")
+            .1;
+        *ident == file_name
+    } {
+        file_path.to_owned()
+    } else {
+        file_path.join(ident)
+    }
+}
+
 pub(crate) fn register_assets(
-    path: TypePath<&str>,
+    file_path: TypePath<&str>,
     ctx: &mut crate::context::BaubleContext,
     values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
@@ -742,7 +775,13 @@ pub(crate) fn register_assets(
     for (ident, binding) in &values.values {
         let span = ident.span;
         let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = path.join(ident);
+        let path = object_path(file_path, ident, binding);
+        let top_level = path.borrow() == file_path;
+        let kind = if top_level {
+            crate::AssetKind::TopLevel
+        } else {
+            crate::AssetKind::Local
+        };
         let symbols = Symbols { ctx: &*ctx, uses };
 
         // To register an asset we need to determine its type.
@@ -797,6 +836,7 @@ pub(crate) fn register_assets(
 
                 delayed.push(DelayedRegister {
                     expected_ty_path,
+                    asset_kind: kind,
                     asset: path.spanned(span),
                     reference,
                 });
@@ -807,10 +847,13 @@ pub(crate) fn register_assets(
             res
         };
 
-        match ty {
-            Ok(ty) => {
-                Symbols { uses, .. } = symbols;
-                let ref_ty = ctx.register_asset(path.borrow(), ty);
+        Symbols { uses, .. } = symbols;
+        let ref_ty = ty.and_then(|ty| {
+            ctx.register_asset(path.borrow(), ty, kind)
+                .map_err(|e| ConversionError::Custom(e).spanned(span))
+        });
+        match ref_ty {
+            Ok(ref_ty) => {
                 let mut symbols = Symbols { ctx: &*ctx, uses };
                 // Add to Symbols::uses so other items in the same file can directly reference this
                 // without full path.
@@ -818,7 +861,7 @@ pub(crate) fn register_assets(
                     ident.to_owned(),
                     PathReference {
                         ty: None,
-                        asset: Some((ref_ty, path.clone())),
+                        asset: Some((ref_ty, path.clone(), kind)),
                         module: None,
                     },
                 ) {
@@ -826,10 +869,7 @@ pub(crate) fn register_assets(
                 }
                 Symbols { uses, .. } = symbols;
             }
-            Err(err) => {
-                Symbols { uses, .. } = symbols;
-                errors.push(err)
-            }
+            Err(err) => errors.push(err),
         };
     }
 
@@ -855,12 +895,13 @@ pub(crate) fn convert_values(
 
     let mut symbols = default_symbols.clone();
 
-    let path = symbols.ctx.get_file_path(file);
+    let file_path = symbols.ctx.get_file_path(file);
 
     // Add asset
-    for (symbol, _) in &values.values {
-        let ident = TypePathElem::new(symbol.as_str()).expect("Invariant");
-        let path = path.join(&ident);
+    for (ident, binding) in &values.values {
+        let span = ident.span;
+        let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
+        let path = object_path(file_path, &ident, binding);
 
         if let Some(PathReference {
             asset: Some(asset), ..
@@ -874,30 +915,19 @@ pub(crate) fn convert_values(
                     module: None,
                 },
             ) {
-                use_errors.push(e.spanned(symbol.span));
+                use_errors.push(e.spanned(span));
             }
         } else {
             // Didn't pre-register assets.
-            use_errors.push(ConversionError::UnregisteredAsset.spanned(symbol.span));
+            use_errors.push(ConversionError::UnregisteredAsset.spanned(span));
         }
     }
 
     symbols.add(use_symbols);
 
-    let mut additional_objects = AdditionalObjects::new(path.to_owned());
+    let mut additional_objects = AdditionalObjects::new(file_path.to_owned());
 
     let default_span = crate::Span::new(file, 0..0);
-
-    macro_rules! meta {
-        ($name:expr) => {
-            ConvertMeta {
-                symbols: &symbols,
-                additional_objects: &mut additional_objects,
-                object_name: $name,
-                default_span,
-            }
-        };
-    }
 
     let mut ok = Vec::new();
     let mut err = use_errors;
@@ -923,8 +953,16 @@ pub(crate) fn convert_values(
         };
 
         let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
+        let path = object_path(file_path, &ident, binding);
 
-        match convert_object(path, &binding.value, ty, meta!(ident)) {
+        let convert_meta = ConvertMeta {
+            symbols: &symbols,
+            additional_objects: &mut additional_objects,
+            object_name: ident,
+            default_span,
+        };
+        let top_level = path.borrow() == file_path;
+        match convert_object(path, top_level, &binding.value, ty, convert_meta) {
             Ok(obj) => ok.push(obj),
             Err(e) => err.push(e),
         }
@@ -943,24 +981,26 @@ pub(crate) fn convert_values(
 /// Converts a parsed value to a object value using a conversion context and existing symbols. Also
 /// does some rudimentary checking if the symbols are okay.
 fn convert_object(
-    path: TypePath<&str>,
+    object_path: TypePath<String>,
+    top_level: bool,
     value: &ParseVal,
     expected_type: TypeId,
     mut meta: ConvertMeta,
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
-    create_object(path, meta.object_name, value, meta.symbols)
+    create_object(object_path, top_level, value, meta.symbols)
 }
 
 fn create_object(
-    path: TypePath<&str>,
-    name: TypePathElem<&str>,
+    object_path: TypePath<String>,
+    top_level: bool,
     value: Val,
     symbols: &Symbols,
 ) -> Result<Object> {
     if symbols.ctx.type_registry().impls_top_level_trait(*value.ty) {
         Ok(Object {
-            object_path: path.join(&name),
+            object_path,
+            top_level,
             value,
         })
     } else {

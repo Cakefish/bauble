@@ -6,12 +6,10 @@ use crate::{
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
-    value::Fields,
-};
-
-use super::{
-    Attributes, Ident, Result, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
-    ValueTrait,
+    value::{
+        Attributes, Fields, Ident, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
+        ValueTrait, error::Result,
+    },
 };
 
 pub fn no_attr() -> Option<&'static Attributes<Val>> {
@@ -225,6 +223,11 @@ pub enum AnyVal<'a> {
 pub struct ConvertMeta<'a> {
     pub symbols: &'a Symbols<'a>,
     pub additional_objects: &'a mut AdditionalObjects,
+    // TODO: in stage 2 (of asset per file impl) this probably needs to be `0` rather than anything
+    // that could conflict with the name of a local asset. Because this is used to name inline
+    // objects uniquely.
+    //
+    /// Used as a prefix to uniquely name inline objects.
     pub object_name: TypePathElem<&'a str>,
     pub default_span: Span,
 }
@@ -251,10 +254,10 @@ impl ConvertMeta<'_> {
 
 /// Represents additional objects added when parsing other objects.
 ///
-/// Also known as sub-assets.
+/// Also known as sub-objects/sub-assets.
 pub(super) struct AdditionalObjects {
     objects: Vec<super::Object>,
-    name_allocs: std::collections::HashMap<TypePathElem, u64>,
+    name_allocs: HashMap<TypePathElem, u64>,
     file_path: TypePath,
 }
 
@@ -284,8 +287,8 @@ impl AdditionalObjects {
             .expect("idx is just a number, and we know name is a valid path elem.");
 
         self.objects.push(super::create_object(
-            self.file_path.borrow(),
-            name.borrow(),
+            self.file_path.join(&name),
+            false,
             val,
             symbols,
         )?);
@@ -314,8 +317,8 @@ impl AdditionalObjects {
 
         for (name, value) in unspanned.into_objects() {
             self.objects.push(super::create_object(
-                self.file_path.borrow(),
-                name.borrow(),
+                self.file_path.join(&name),
+                false,
                 value.into_spanned(span),
                 symbols,
             )?);
@@ -325,16 +328,37 @@ impl AdditionalObjects {
     }
 }
 
+/// Keeps track of existing names used for additional objects and allocates new names.
 enum NameAllocs<'a> {
-    Owned(std::collections::HashMap<TypePathElem, u64>),
-    Borrowed(&'a mut std::collections::HashMap<TypePathElem, u64>),
+    Owned(HashMap<TypePathElem, u64>),
+    Borrowed(&'a mut HashMap<TypePathElem, u64>),
+    Custom(&'a mut dyn FnMut(TypePathElem<&str>) -> TypePathElem),
 }
 
 impl NameAllocs<'_> {
-    fn get_mut(&mut self) -> &mut std::collections::HashMap<TypePathElem, u64> {
+    fn reborrow(&mut self) -> NameAllocs<'_> {
         match self {
-            NameAllocs::Owned(m) => m,
-            NameAllocs::Borrowed(m) => m,
+            Self::Owned(m) => NameAllocs::Borrowed(m),
+            Self::Borrowed(m) => NameAllocs::Borrowed(m),
+            Self::Custom(f) => NameAllocs::Custom(f),
+        }
+    }
+
+    /// Allocate a new name for an object that will be referenced by the parent object
+    /// `object_name`.
+    fn allocate_name(&mut self, object_name: TypePathElem<&str>) -> TypePathElem {
+        let from_map = |m: &mut HashMap<TypePathElem, u64>| {
+            let idx = *m
+                .entry(object_name.to_owned())
+                .and_modify(|i| *i += 1u64)
+                .or_insert(0);
+            TypePathElem::new(format!("{}@{idx}", object_name))
+                .expect("idx is just a number, and we know name is a valid path elem.")
+        };
+        match self {
+            Self::Owned(m) => from_map(m),
+            Self::Borrowed(m) => from_map(m),
+            Self::Custom(f) => f(object_name),
         }
     }
 }
@@ -354,7 +378,7 @@ impl<'a> AdditionalUnspannedObjects<'a> {
             file_path,
             object_name,
             objects: Vec::new(),
-            name_allocs: NameAllocs::Owned(std::collections::HashMap::default()),
+            name_allocs: NameAllocs::Owned(HashMap::default()),
         }
     }
 
@@ -372,7 +396,29 @@ impl<'a> AdditionalUnspannedObjects<'a> {
         }
     }
 
-    /// Add the type id to the path this keeps track of, for better unique names for sub-objects.
+    /// Create a new instance with a custom closure to create unique names.
+    ///
+    /// This allows creating the additional objects as objects that aren't sub-objects (aka inline
+    /// objects).
+    ///
+    /// The closure is passed the name of the parent object and can optionally use that in its
+    /// naming logic. Note, a number representing the type id of the current subobject may be
+    /// appended to the parent object name.
+    pub fn new_with_custom_namer(
+        file_path: TypePath<&'a str>,
+        object_name: TypePathElem<&'a str>,
+        namer: &'a mut impl FnMut(TypePathElem<&str>) -> TypePathElem,
+    ) -> Self {
+        Self {
+            file_path,
+            object_name,
+            objects: Vec::new(),
+            name_allocs: NameAllocs::Custom(namer),
+        }
+    }
+
+    /// Add the type id to the parent object name this keeps track of, for better unique names for
+    /// sub-objects.
     pub fn in_type<R>(
         &mut self,
         ty: TypeId,
@@ -380,11 +426,12 @@ impl<'a> AdditionalUnspannedObjects<'a> {
     ) -> R {
         let name = TypePathElem::new(format!("{}&{}", self.object_name, ty.inner())).unwrap();
 
-        let mut inner = AdditionalUnspannedObjects::new_with_name_allocs(
-            self.file_path,
-            name.borrow(),
-            self.name_allocs.get_mut(),
-        );
+        let mut inner = AdditionalUnspannedObjects {
+            file_path: self.file_path,
+            object_name: name.borrow(),
+            objects: Vec::new(),
+            name_allocs: self.name_allocs.reborrow(),
+        };
 
         let res = f(&mut inner);
 
@@ -395,19 +442,9 @@ impl<'a> AdditionalUnspannedObjects<'a> {
 
     /// Add an additional object, and get a reference to it.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
-        let idx = *self
-            .name_allocs
-            .get_mut()
-            .entry(self.object_name.to_owned())
-            .and_modify(|i| *i += 1u64)
-            .or_insert(0);
-        let name = TypePathElem::new(format!("{}@{idx}", self.object_name))
-            .expect("idx is just a number, and we know name is a valid path elem.");
-
+        let name = self.name_allocs.allocate_name(self.object_name);
         let res = Value::Ref(self.file_path.join(&name));
-
         self.objects.push((name, val));
-
         res
     }
 
@@ -893,13 +930,13 @@ where
                     {
                         let variant = Self::get_variant(variant, meta.symbols)?
                             .spanned(Self::variant_span(variant, &meta));
-                        let ty = variants.get(&*variant).ok_or(
+                        let ty = variants.get(&*variant).ok_or_else(|| {
                             ConversionError::UnknownVariant {
                                 variant: variant.clone(),
                                 ty: ty_id.value,
                             }
-                            .spanned(span),
-                        )?;
+                            .spanned(span)
+                        })?;
                         (
                             variant.map(|v| v.to_owned()),
                             extra_attributes.convert_with(value, meta.reborrow(), ty)?,

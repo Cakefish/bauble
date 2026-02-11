@@ -248,6 +248,9 @@ impl Display for TypeSystemError<'_> {
 }
 
 impl TypeRegistry {
+    /// The path of the builtin in generic `Ref<_>` type without the generics.
+    pub const REF_TYPE_PATH: &str = "Ref";
+
     /// This is not performant and should not be exposed API, it is used for tests.
     #[doc(hidden)]
     pub fn find_rust_type(&self, ty: TypeId) -> Option<std::any::TypeId> {
@@ -429,8 +432,12 @@ impl TypeRegistry {
                 this.asset_refs.insert(inner, id);
                 let ty = Type {
                     meta: TypeMeta {
-                        path: TypePath::new(format!("Ref<{}>", this.key_type(inner).meta.path))
-                            .expect("Invariant"),
+                        path: TypePath::new(format!(
+                            "{}<{}>",
+                            Self::REF_TYPE_PATH,
+                            this.key_type(inner).meta.path
+                        ))
+                        .expect("Invariant"),
                         traits: this.key_type(inner).meta.traits.clone(),
                         ..Default::default()
                     },
@@ -586,11 +593,16 @@ impl TypeRegistry {
                 for (name, value) in additonal.into_objects() {
                     objects.push(crate::Object {
                         object_path: file.join(&name),
+                        top_level: false,
                         value,
                     })
                 }
 
-                objects.push(crate::Object { object_path, value })
+                objects.push(crate::Object {
+                    object_path,
+                    top_level: false,
+                    value,
+                })
             }
 
             // Check that instantiated objects match after being serialized to bauble text and
@@ -721,7 +733,7 @@ impl TypeRegistry {
         }
     }
 
-    /// Register `T` if it is not registerted already, then get the trait ID for `T`.
+    /// Register `T` if it is not registered already, then get the trait ID for `T`.
     pub fn get_or_register_trait<T: ?Sized + BaubleTrait>(&mut self) -> TraitId {
         let rust_id = std::any::TypeId::of::<T>();
         if let Some(id) = self.type_from_rust.get(&rust_id) {
