@@ -344,7 +344,7 @@ impl NameAllocs<'_> {
         }
     }
 
-    /// Allocate a new name for an object that will be referenced by the parnet object
+    /// Allocate a new name for an object that will be referenced by the parent object
     /// `object_name`.
     fn allocate_name(&mut self, object_name: TypePathElem<&str>) -> TypePathElem {
         let from_map = |m: &mut HashMap<TypePathElem, u64>| {
