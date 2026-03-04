@@ -575,11 +575,16 @@ impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseVal {
 
 impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX> for Object<V> {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
-        let Some((_, ident)) = self.object_path.get_end() else {
-            return;
+        let ident = if self.top_level {
+            crate::value::BindingIdent::TOP_LEVEL_IDENTIFIER
+        } else {
+            let Some((_, end)) = self.object_path.get_end() else {
+                return;
+            };
+            end.into_str()
         };
 
-        w.write(ident.as_str());
+        w.write(ident);
 
         if let Some(registry) = w.ctx().type_registry() {
             let ty = self.value.ty();
@@ -755,7 +760,7 @@ impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseValues {
                 w.write("\n\n");
             }
 
-            w.write(ident);
+            w.write(ident.as_str());
             if let Some(ty) = &binding.type_path {
                 w.write(": ");
                 w.fmt(ty);
@@ -767,7 +772,7 @@ impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseValues {
         for (ident, binding) in iter {
             w.write("\n\n");
 
-            w.write(ident);
+            w.write(ident.as_str());
             if let Some(ty) = &binding.type_path {
                 w.write(": ");
                 w.fmt(ty);

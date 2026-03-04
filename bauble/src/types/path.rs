@@ -666,6 +666,10 @@ impl<'a> TypePath<&'a str> {
             Some((TypePath(""), TypePathElem(*self)))
         }
     }
+
+    pub fn into_str(self) -> &'a str {
+        self.0
+    }
 }
 
 /// An iterator of segments in a path.

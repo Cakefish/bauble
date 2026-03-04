@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use crate::{
     BaubleErrors, FileId, VariantKind,
     context::PathReference,
-    parse::{ParseVal, ParseValues, Path, PathEnd},
+    parse::{BindingIdent, ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
@@ -726,28 +726,24 @@ pub(crate) fn resolve_delayed(
     }
 }
 
-/// Computes the path of an object.
+/// Returns the identifier and the path of an object.
 ///
-/// Normally, the path is just the files's bauble path joined with the object name.
+/// The top level object in each file will have a path that matches the path of the file containing
+/// it. The identifier for these objects is always "0" and it can be referred to locally in the
+/// same file using this identifier.
 ///
-/// If an object is the first in the file and its name matches the file name, it receives a special
-/// path that is just the file's bauble path.
-fn object_path(
+/// TODO: make sure this is updated
+/// For other objects, the path is just the files's bauble path joined with the object identifier.
+fn object_ident_path<'a>(
     file_path: TypePath<&str>,
-    ident: &TypePathElem<&str>,
-    binding: &crate::parse::Binding,
-) -> TypePath<String> {
-    if binding.is_first && {
-        let file_name = file_path
-            .split_end()
-            .expect("file_path must not be empty")
-            .1;
-        *ident == file_name
-    } {
-        file_path.to_owned()
-    } else {
-        file_path.join(ident)
-    }
+    binding_ident: &'a BindingIdent,
+) -> (TypePathElem<&'a str>, TypePath<String>) {
+    let ident = TypePathElem::new(binding_ident.as_str()).expect("Invariant");
+    let path = match binding_ident {
+        BindingIdent::TopLevel(_) => file_path.to_owned(),
+        BindingIdent::Local(_) => file_path.join(&ident),
+    };
+    (ident, path)
 }
 
 pub(crate) fn register_assets(
@@ -773,15 +769,13 @@ pub(crate) fn register_assets(
 
     // TODO: Register these in a correct order to allow for assets referencing assets.
     for (ident, binding) in &values.values {
-        let span = ident.span;
-        let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = object_path(file_path, ident, binding);
-        let top_level = path.borrow() == file_path;
-        let kind = if top_level {
+        let span = ident.span();
+        let kind = if ident.is_top_level() {
             crate::AssetKind::TopLevel
         } else {
             crate::AssetKind::Local
         };
+        let (ident, path) = object_ident_path(file_path, ident);
         let symbols = Symbols { ctx: &*ctx, uses };
 
         // To register an asset we need to determine its type.
@@ -897,11 +891,10 @@ pub(crate) fn convert_values(
 
     let file_path = symbols.ctx.get_file_path(file);
 
-    // Add asset
-    for (ident, binding) in &values.values {
-        let span = ident.span;
-        let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = object_path(file_path, &ident, binding);
+    // Add assets from this file to symbols.
+    for ident in values.values.keys() {
+        let span = ident.span();
+        let (ident, path) = object_ident_path(file_path, &ident);
 
         if let Some(PathReference {
             asset: Some(asset), ..
@@ -932,13 +925,14 @@ pub(crate) fn convert_values(
     let mut ok = Vec::new();
     let mut err = use_errors;
 
-    for (ident, binding) in values.values.iter() {
+    for (ident, binding) in &values.values {
         let ref_ty = match symbols.resolve_asset(
             &Path {
-                leading: Vec::new().spanned(ident.span.sub_span(0..0)),
-                last: PathEnd::Ident(ident.clone()).spanned(ident.span),
+                leading: Vec::new().spanned(ident.span().sub_span(0..0)),
+                last: PathEnd::Ident(ident.as_str().to_owned().spanned(ident.span()))
+                    .spanned(ident.span()),
             }
-            .spanned(ident.span),
+            .spanned(ident.span()),
         ) {
             Ok((ty, _)) => ty,
             Err(e) => {
@@ -952,8 +946,8 @@ pub(crate) fn convert_values(
             _ => unreachable!("Invariant"),
         };
 
-        let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = object_path(file_path, &ident, binding);
+        let top_level = ident.is_top_level();
+        let (ident, path) = object_ident_path(file_path, &ident);
 
         let convert_meta = ConvertMeta {
             symbols: &symbols,
@@ -961,7 +955,6 @@ pub(crate) fn convert_values(
             object_name: ident,
             default_span,
         };
-        let top_level = path.borrow() == file_path;
         match convert_object(path, top_level, &binding.value, ty, convert_meta) {
             Ok(obj) => ok.push(obj),
             Err(e) => err.push(e),

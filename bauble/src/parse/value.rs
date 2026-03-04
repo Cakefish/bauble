@@ -2,7 +2,7 @@ use core::fmt;
 
 use crate::{
     SpanExt,
-    spanned::Spanned,
+    spanned::{Span, Spanned},
     value::{AnyVal, Ident, SpannedValue, ValueTrait},
 };
 use indexmap::IndexMap;
@@ -168,11 +168,47 @@ impl SpannedValue for ParseVal {
 pub struct Binding {
     pub type_path: Option<Path>,
     pub value: ParseVal,
-    pub is_first: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum BindingIdent {
+    /// This is the top level asset in a parsed file.
+    ///
+    /// It has the special cased identifier `0` and appears as the first item in the file..
+    ///
+    /// This holds no identifier string because it will have the same path as the file containing
+    /// it.
+    TopLevel(Spanned<()>),
+    /// This is a local asset. I.e. any additional assets in a parsed file.
+    Local(Ident),
+}
+
+impl BindingIdent {
+    /// Special cased identifier that is required and only allowed for the first asset in a file
+    /// (i.e. the top level asset that is named after the file).
+    pub const TOP_LEVEL_IDENTIFIER: &str = "0";
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::TopLevel(_) => Self::TOP_LEVEL_IDENTIFIER,
+            Self::Local(ident) => &*ident,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Self::TopLevel(span) => span.span,
+            Self::Local(ident) => ident.span,
+        }
+    }
+
+    pub fn is_top_level(&self) -> bool {
+        matches!(self, Self::TopLevel(_))
+    }
 }
 
 #[derive(Debug)]
 pub struct ParseValues {
     pub uses: Vec<Spanned<PathTreeNode>>,
-    pub values: IndexMap<Ident, Binding>,
+    pub values: IndexMap<BindingIdent, Binding>,
 }

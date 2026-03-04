@@ -7,7 +7,7 @@ use crate::{
     Attributes, BaubleContext, FieldsKind, PrimitiveValue, Value,
     context::FileId,
     parse::{
-        Binding, ParseVal,
+        Binding, BindingIdent, ParseVal,
         value::{ParseValues, Path, PathEnd, PathTreeEnd, PathTreeNode},
     },
     spanned::{SpanExt, Spanned},
@@ -688,20 +688,45 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             },
             |mut values, (i, (ident, type_path, value))| {
                 let is_first = i == 0;
+                let has_top_level_ident = *ident == BindingIdent::TOP_LEVEL_IDENTIFIER;
 
-                let binding = Binding {
-                    type_path,
-                    value,
-                    is_first,
+                match (is_first, has_top_level_ident) {
+                    (true, true) | (false, false) => {}
+                    (true, false) => {
+                        emitter.emit(Rich::custom(
+                            ident.span,
+                            format!(
+                                "The first item must '{}' as the identifier",
+                                BindingIdent::TOP_LEVEL_IDENTIFIER
+                            ),
+                        ));
+                    }
+                    (false, true) => {
+                        emitter.emit(Rich::custom(
+                            ident.span,
+                            format!(
+                                "Identifier '{}' is only allowed for the first item",
+                                BindingIdent::TOP_LEVEL_IDENTIFIER
+                            ),
+                        ));
+                    }
+                }
+
+                let binding_ident = if has_top_level_ident {
+                    BindingIdent::TopLevel(ident.map(|_| ()))
+                } else {
+                    BindingIdent::Local(ident)
                 };
 
-                if values.values.contains_key(&ident) {
+                let binding = Binding { type_path, value };
+
+                if values.values.contains_key(&binding_ident) {
                     emitter.emit(Rich::custom(
-                        ident.span,
+                        binding_ident.span(),
                         "This identifier was already used".to_string(),
                     ));
                 }
-                values.values.insert(ident, binding);
+                values.values.insert(binding_ident, binding);
                 values
             },
         )
