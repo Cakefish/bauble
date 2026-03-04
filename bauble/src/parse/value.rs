@@ -116,6 +116,8 @@ pub struct PathTreeNode {
 
 #[derive(Debug, Clone)]
 pub struct ParseVal {
+    /// Type known from the value (i.e. for struct types) or explicitly specified by prefixing the
+    /// value with `<type>`.
     pub ty: Option<Path>,
     pub attributes: Spanned<crate::Attributes<ParseVal>>,
     pub value: Spanned<crate::Value<ParseVal>>,
@@ -166,6 +168,8 @@ impl SpannedValue for ParseVal {
 
 #[derive(Debug, Clone)]
 pub struct Binding {
+    /// Type explicitly specified in the binding definition. This is the syntax where `: type`
+    /// appears after the identifier before `=`.
     pub type_path: Option<Path>,
     pub value: ParseVal,
 }

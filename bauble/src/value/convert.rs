@@ -92,14 +92,18 @@ fn resolve_type(
     Ok(ty)
 }
 
+/// Returns type if it can be determined from the provided `ParseVal` without further context
+/// (other than resolving types and looking at the type of referenced objects).
 pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<Spanned<TypeId>>> {
     let types = symbols.ctx.type_registry();
 
+    // Type was specified via a prefixed "<type>" or this is value where the type is explicit like a struct value.
     if let Some(ty) = &value.ty {
         return Ok(Some(symbols.resolve_type(ty)?.spanned(ty.span())));
     };
 
     let ty = match &*value.value {
+        // Determine referenced value type by looking up referenced path.
         Value::Ref(path) => Some(symbols.resolve_asset(path)?.0.spanned(path.span())),
         Value::Or(paths) => {
             let mut ty = None;
@@ -115,8 +119,8 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
                     types::TypeKind::Generic(type_set) => {
                         if let Some(instance) = types.iter_type_set(type_set).next()
                             && let types::TypeKind::EnumVariant {
-                                fields: types::Fields::Unit,
                                 enum_type,
+                                fields: types::Fields::Unit,
                                 ..
                             } = &types.key_type(instance).kind
                         {

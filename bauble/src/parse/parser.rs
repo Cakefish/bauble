@@ -516,13 +516,13 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
 
             let path_p = path.clone().padded_by(comments).padded();
 
-            // Parser for tuple structs
-            let unnamed_struct = path_p
+            // Parser for tuple structs (unnamed fields).
+            let tuple_struct = path_p
                 .clone()
                 .then(tuple.clone())
                 .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Unnamed(fields))));
 
-            // Parser for structs
+            // Parser for structs with named fields
             let named_struct = path_p
                 .clone()
                 .then(structure.clone())
@@ -567,7 +567,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                     .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 
-            let path_value = path
+            // Parser for unit structs (no fields).
+            let unit_struct = path
                 .clone()
                 .map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
 
@@ -603,10 +604,10 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 array.map(no_type),
                 tuple.map(no_type),
                 map.map(no_type),
-                unnamed_struct,
+                tuple_struct,
                 named_struct,
                 path_or.map(no_type),
-                path_value,
+                unit_struct,
                 raw.map(no_type),
                 literal.map(no_type),
             ))
