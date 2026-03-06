@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, SpannedValue, bauble_test};
+use bauble::{Bauble, Ref, SpannedValue, bauble_test, path::TypePath};
 
 #[test]
 fn test_struct() {
@@ -385,11 +385,15 @@ fn test_generic() {
         use derive::{Foo, Bar, Str};
 
         0: Foo<Bar> = Foo(Bar(24))
-        b: Foo<Str> = Foo(Str("test"))
+        b: Ref<Foo<Str>> = $test::c
+        c: Foo<Str> = Foo(Str("test"))
+        d: Ref<Foo<Bar>> = $0
         "#
         [
             Foo(Bar(24)),
+            Ref::<Foo<Str>>::from_path(TypePath::new("test::c").unwrap().to_owned()),
             Foo(Str(String::from("test"))),
+            Ref::<Foo<Bar>>::from_path(TypePath::new("test").unwrap().to_owned()),
         ]
     );
 }
