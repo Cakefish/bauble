@@ -430,19 +430,25 @@ pub fn ref_implicit_type() {
 pub fn ref_explicit_type() {
     bauble::bauble_test!(
         [Test]
-        "0 = integration::Test{ x: -2, y: 2 }\n\
-        r: Ref<integration::Test> = $0"
+        "use integration::Test;\n\
+        0 = integration::Test{ x: -2, y: 2 }\n\
+        r1: Ref<integration::Test> = $0\n\
+        r2: Ref<Test> = $0"
         [
             Test { x: -2, y: 2 },
+            Ref::<Test>::from_path(TypePath::new_unchecked("test").to_owned()),
             Ref::<Test>::from_path(TypePath::new_unchecked("test").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
-        "0: Ref<integration::Test> = $test::t\n\
+        "use integration::Test;\n\
+        0: Ref<integration::Test> = $test::t\n\
+        r2: Ref<Test> = $test::t\n\
         t = integration::Test{ x: -2, y: 2 }"
         [
+            Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
             Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
             Test { x: -2, y: 2 },
         ]
