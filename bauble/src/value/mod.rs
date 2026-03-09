@@ -9,7 +9,7 @@ use crate::{
     parse::{BindingIdent, ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
-    types::{self, TypeId},
+    types::{self, TypeId, TypeRegistry},
 };
 
 mod convert;
@@ -795,7 +795,7 @@ pub(crate) fn register_assets(
             let res = value_type(&binding.value, &symbols)
                 .map(|v| {
                     convert::default_value_type(
-                        &symbols,
+                        symbols.ctx.type_registry(),
                         binding.value.value.value.primitive_type(),
                         v,
                     )
@@ -814,10 +814,10 @@ pub(crate) fn register_assets(
 
             if res.is_err()
                 && let Value::Ref(reference) = &*binding.value.value
-                && let Ok(reference) = symbols.resolve_path(reference)
+                && let Ok(reference) = symbols.resolve_path(reference, false)
             {
                 let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
-                    match symbols.resolve_path(expected_ty_path) {
+                    match symbols.resolve_path(expected_ty_path, true) {
                         Ok(s) => Some(s),
                         Err(e) => {
                             errors.push(e);
@@ -877,9 +877,9 @@ pub(crate) fn register_assets(
 pub(crate) fn convert_values(
     file: FileId,
     values: ParseValues,
-    default_symbols: &Symbols,
+    ctx: &crate::context::BaubleContext,
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
-    let mut use_symbols = Symbols::new(default_symbols.ctx);
+    let mut use_symbols = Symbols::new(ctx);
     let mut use_errors = Vec::new();
     for use_path in values.uses {
         if let Err(e) = use_symbols.add_use(&use_path) {
@@ -887,11 +887,11 @@ pub(crate) fn convert_values(
         }
     }
 
-    let mut symbols = default_symbols.clone();
+    let mut symbols = Symbols::new(ctx);
 
     let file_path = symbols.ctx.get_file_path(file);
 
-    // Add assets from this file to symbols.
+    // Add assets from this file to Symbols::use.
     for ident in values.values.keys() {
         let span = ident.span();
         let (ident, path) = object_ident_path(file_path, &ident);
@@ -941,7 +941,8 @@ pub(crate) fn convert_values(
             }
         };
 
-        let ty = match symbols.ctx.type_registry().key_type(ref_ty).kind {
+        let type_registry = symbols.ctx.type_registry();
+        let ty = match type_registry.key_type(ref_ty).kind {
             types::TypeKind::Ref(type_id) => type_id,
             _ => unreachable!("Invariant"),
         };
@@ -981,16 +982,17 @@ fn convert_object(
     mut meta: ConvertMeta,
 ) -> Result<Object> {
     let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
-    create_object(object_path, top_level, value, meta.symbols)
+    let types = meta.symbols.ctx.type_registry();
+    create_object(object_path, top_level, value, types)
 }
 
 fn create_object(
     object_path: TypePath<String>,
     top_level: bool,
     value: Val,
-    symbols: &Symbols,
+    type_registry: &TypeRegistry,
 ) -> Result<Object> {
-    if symbols.ctx.type_registry().impls_top_level_trait(*value.ty) {
+    if type_registry.impls_top_level_trait(*value.ty) {
         Ok(Object {
             object_path,
             top_level,
@@ -998,7 +1000,7 @@ fn create_object(
         })
     } else {
         Err(ConversionError::MissingRequiredTrait {
-            tr: symbols.ctx.type_registry().top_level_trait(),
+            tr: type_registry.top_level_trait(),
             ty: *value.ty,
         }
         .spanned(value.span()))

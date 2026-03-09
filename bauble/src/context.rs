@@ -526,6 +526,13 @@ impl BaubleContext {
         self.files.iter().map(|e| (e.0.borrow(), e.1.text()))
     }
 
+    /// Given an asset type registers the internal Ref type for that asset and returns its ID.
+    pub(crate) fn register_asset_ref_ty(&mut self, ty: TypeId) -> TypeId {
+        let ref_ty = self.registry.get_or_register_asset_ref(ty);
+        self.root_node.build_type(ref_ty, &self.registry);
+        ref_ty
+    }
+
     /// Registers an asset. This is done automatically for any objects in a file that gets registered.
     ///
     /// With this method you can expose assets that aren't in bauble.
@@ -544,10 +551,10 @@ impl BaubleContext {
         ty: TypeId,
         kind: AssetKind,
     ) -> Result<TypeId, crate::CustomError> {
-        let ref_ty = self.registry.get_or_register_asset_ref(ty);
-        self.root_node.build_type(ref_ty, &self.registry);
+        let ref_ty = self.register_asset_ref_ty(ty);
         self.root_node
             .build_asset(path, ref_ty, kind)
+            // TODO: this error should no longer be possible?
             .map_err(|()| {
                 crate::CustomError::new(format!(
                     "'{path}' refers to an existing asset in another file. This can be \n\
@@ -686,7 +693,7 @@ impl BaubleContext {
             // Skip files with errors
             .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
         {
-            match crate::value::convert_values(file, values, &crate::value::Symbols::new(&*self)) {
+            match crate::value::convert_values(file, values, &self) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
             }

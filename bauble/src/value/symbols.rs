@@ -157,7 +157,7 @@ impl<'a> Symbols<'a> {
             .and_then(|reference| reference.module.clone())
     }
 
-    pub fn resolve_path(&self, raw_path: &Path) -> Result<Spanned<PathKind>> {
+    pub fn resolve_path(&self, raw_path: &Path, for_type: bool) -> Result<Spanned<PathKind>> {
         let mut leading = TypePath::empty();
 
         let mut path_iter = raw_path.leading.iter();
@@ -195,19 +195,35 @@ impl<'a> Symbols<'a> {
             }
         }
 
+        let generic_with_non_type_error = || {
+            ConversionError::Custom(CustomError::new("Cannot use generics for non-type paths"))
+                .spanned(raw_path.span())
+        };
         let path = match &raw_path.last.value {
             PathEnd::WithIdent(ident) => PathKind::Indirect(
                 leading,
                 TypePathElem::new(ident.to_string()).map_err(|p| p.spanned(raw_path.span()))?,
             ),
             PathEnd::Ident(ident) => {
-                leading
-                    .push_str(ident.as_str())
-                    .map_err(|p| p.spanned(raw_path.span()))?;
-                PathKind::Direct(leading)
+                let path = if leading.is_empty()
+                    && for_type
+                    && let Some(r) = self.uses.get(ident.as_str())
+                    && let Some(ty) = r.ty
+                {
+                    self.ctx.type_registry().key_type(ty).meta.path.clone()
+                } else {
+                    leading
+                        .push_str(ident.as_str())
+                        .map_err(|p| p.spanned(raw_path.span()))?;
+                    leading
+                };
+                PathKind::Direct(path)
             }
             PathEnd::WithIdentGeneric(ident, generic) => {
-                let generic = self.resolve_path(&generic.value)?;
+                if !for_type {
+                    return Err(generic_with_non_type_error());
+                }
+                let generic = self.resolve_path(&generic.value, true)?;
                 PathKind::Indirect(
                     leading,
                     TypePathElem::new(format!("{ident}<{generic}>"))
@@ -215,11 +231,24 @@ impl<'a> Symbols<'a> {
                 )
             }
             PathEnd::IdentGeneric(ident, generic) => {
-                let generic = self.resolve_path(&generic.value)?;
-                leading
-                    .push_str(&format!("{ident}<{generic}>"))
-                    .map_err(|p| p.spanned(raw_path.span()))?;
-                PathKind::Direct(leading)
+                if !for_type {
+                    return Err(generic_with_non_type_error());
+                }
+                let generic = self.resolve_path(&generic.value, true)?;
+                let path = if leading.is_empty()
+                    && let Some(r) = self.uses.get(ident.as_str())
+                    && let Some(ty) = r.ty
+                {
+                    let outer_path = &self.ctx.type_registry().key_type(ty).meta.path;
+                    TypePath::new(format!("{outer_path}<{generic}>"))
+                        .map_err(|p| p.spanned(raw_path.span()))?
+                } else {
+                    leading
+                        .push_str(&format!("{ident}<{generic}>"))
+                        .map_err(|p| p.spanned(raw_path.span()))?;
+                    leading
+                };
+                PathKind::Direct(path)
             }
         };
         Ok(path.spanned(raw_path.span()))
@@ -230,63 +259,12 @@ impl<'a> Symbols<'a> {
         raw_path: &Path,
         ref_kind: RefKind,
     ) -> Result<Cow<'_, PathReference>> {
-        fn resolve_path(
-            symbols: &Symbols,
-            raw_path: &Path,
-            ref_kind: RefKind,
-        ) -> Result<Spanned<PathKind>> {
-            let raw_path_split = raw_path.split_generic();
-            let is_generic = raw_path_split.is_some();
-            let (path, &generic) = raw_path_split
-                .as_ref()
-                .map(|(l, r)| (l, r))
-                .unwrap_or((raw_path, &raw_path));
-
-            let path = symbols.resolve_path(path)?;
-
-            Ok(if matches!(ref_kind, RefKind::Type) {
-                match path.value {
-                    PathKind::Direct(type_path) => {
-                        if let Some(r) = symbols.uses.get(type_path.as_str())
-                            && let Some(ty) = r.ty
-                        {
-                            let path = &symbols.ctx.type_registry().key_type(ty).meta.path;
-                            if is_generic {
-                                let generic = resolve_path(symbols, generic, ref_kind)?;
-                                PathKind::Direct(
-                                    TypePath::new(format!("{path}<{generic}>")).unwrap(),
-                                )
-                            } else {
-                                PathKind::Direct(TypePath::new(path.to_string()).unwrap())
-                            }
-                        } else if is_generic {
-                            let generic = resolve_path(symbols, generic, ref_kind)?;
-                            PathKind::Direct(
-                                TypePath::new(format!("{type_path}<{generic}>")).unwrap(),
-                            )
-                        } else {
-                            PathKind::Direct(TypePath::new(format!("{type_path}")).unwrap())
-                        }
-                    }
-                    PathKind::Indirect(type_path, type_path_elem) => {
-                        if is_generic {
-                            let generic = resolve_path(symbols, generic, ref_kind)?;
-                            PathKind::Indirect(
-                                type_path,
-                                TypePathElem::new(format!("{type_path_elem}<{generic}>")).unwrap(),
-                            )
-                        } else {
-                            PathKind::Indirect(type_path, type_path_elem)
-                        }
-                    }
-                }
-                .spanned(path.span)
-            } else {
-                path
-            })
-        }
-
-        let path = resolve_path(self, raw_path, ref_kind)?;
+        // NOTE: Resolve path resolves the full path for types referred to via `uses`. This is
+        // unnecessary for the usage here (outside of types with generic parameters) because the
+        // type info is available directly in `self.uses`. However, this is neccessary for other
+        // uses of `resolve_path` where the type needs to be looked up later when `Symbols` is not
+        // available.
+        let path = self.resolve_path(raw_path, matches!(ref_kind, RefKind::Type))?;
 
         let reference = match &path.value {
             PathKind::Direct(path) => {
@@ -336,7 +314,7 @@ impl<'a> Symbols<'a> {
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
-                path: self.resolve_path(path)?.value,
+                path: self.resolve_path(path, false)?.value,
                 path_ref: item,
                 kind: RefKind::Asset,
             }))
@@ -352,7 +330,7 @@ impl<'a> Symbols<'a> {
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.clone()),
-                path: self.resolve_path(path)?.value,
+                path: self.resolve_path(path, true)?.value,
                 path_ref: item.into_owned(),
                 kind: RefKind::Type,
             }))

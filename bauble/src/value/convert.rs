@@ -5,7 +5,7 @@ use crate::{
     parse::ParseVal,
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
-    types::{self, TypeId},
+    types::{self, TypeId, TypeRegistry},
     value::{
         Attributes, Fields, Ident, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
         ValueTrait, error::Result,
@@ -52,17 +52,16 @@ fn set_attributes<C: ConvertValue>(
 }
 
 fn resolve_type(
-    symbols: &Symbols,
+    types: &TypeRegistry,
     expected_type: TypeId,
     val_type: &mut Option<Spanned<TypeId>>,
     primitive_type: Option<types::Primitive>,
     span: crate::Span,
 ) -> Result<Spanned<TypeId>> {
-    let types = symbols.ctx.type_registry();
     let ty = if types.key_type(expected_type).kind.instanciable() {
         expected_type.spanned(val_type.map(|s| s.span).unwrap_or(span))
     } else {
-        match default_value_type(symbols, primitive_type, *val_type) {
+        match default_value_type(types, primitive_type, *val_type) {
             Some(ty) => {
                 let ty = ty.spanned(val_type.map_or(span, |s| s.span));
                 *val_type = Some(ty);
@@ -186,11 +185,10 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
     Ok(ty)
 }
 pub(super) fn default_value_type(
-    symbols: &Symbols,
+    types: &TypeRegistry,
     primitive: Option<types::Primitive>,
     value_type: Option<Spanned<TypeId>>,
 ) -> Option<TypeId> {
-    let types = symbols.ctx.type_registry();
     if let Some(value_type) = value_type {
         let enum_type = match &types.key_type(value_type.value).kind {
             types::TypeKind::EnumVariant { enum_type, .. } => *enum_type,
@@ -280,7 +278,7 @@ impl AdditionalObjects {
         &mut self,
         name: TypePathElem<&str>,
         val: Val,
-        symbols: &Symbols,
+        types: &TypeRegistry,
     ) -> Result<Value> {
         let idx = *self
             .name_allocs
@@ -294,7 +292,7 @@ impl AdditionalObjects {
             self.file_path.join(&name),
             false,
             val,
-            symbols,
+            types,
         )?);
 
         Ok(Value::Ref(self.file_path.join(&name)))
@@ -308,7 +306,7 @@ impl AdditionalObjects {
         &mut self,
         span: Span,
         object_name: TypePathElem<&str>,
-        symbols: &Symbols,
+        types: &TypeRegistry,
         f: impl FnOnce(&mut AdditionalUnspannedObjects) -> R,
     ) -> Result<R> {
         let mut unspanned = AdditionalUnspannedObjects::new_with_name_allocs(
@@ -324,7 +322,7 @@ impl AdditionalObjects {
                 self.file_path.join(&name),
                 false,
                 value.into_spanned(span),
-                symbols,
+                types,
             )?);
         }
 
@@ -487,15 +485,15 @@ where
         )
         .then_some(expected_type.spanned(value.span)));
 
+        let types = meta.symbols.ctx.type_registry();
         let ty_id = resolve_type(
-            meta.symbols,
+            types,
             expected_type,
             &mut val_ty,
             value.value.primitive_type(),
             value.span,
         )?;
 
-        let types = meta.symbols.ctx.type_registry();
         let ty = types.key_type(ty_id.value);
 
         let span = value.span;
@@ -825,7 +823,7 @@ where
                     let mut v = meta.additional_objects.with_additional_unspanned(
                         span,
                         meta.object_name,
-                        meta.symbols,
+                        meta.symbols.ctx.type_registry(),
                         |additional| {
                             ty.meta
                                 .default
@@ -1075,8 +1073,9 @@ where
                         *ty,
                     )?;
 
+                    let types = meta.symbols.ctx.type_registry();
                     meta.additional_objects
-                        .add_object(object_name.borrow(), val, meta.symbols)?
+                        .add_object(object_name.borrow(), val, types)?
                 }
                 (types::TypeKind::Primitive(primitive), Value::Primitive(value))
                     if !matches!(value, PrimitiveValue::Default) =>
@@ -1140,10 +1139,11 @@ where
                     )?;
                 }
                 (_, Value::Primitive(PrimitiveValue::Default)) => {
+                    let types = meta.symbols.ctx.type_registry();
                     let mut v = meta.additional_objects.with_additional_unspanned(
                         span,
                         meta.object_name,
-                        meta.symbols,
+                        types,
                         |additional| -> Result<_> {
                             Ok(types
                                 .instantiate(*ty_id, additional)
