@@ -154,23 +154,23 @@ fn test_load_partial(
 fn new_nested_reload_paths() {
     let a = &test_file!(
         "a",
-        r#"test = integration::Test { x: -5, y: 5 }"#,
+        r#"0 = integration::Test { x: -5, y: 5 }"#,
         Test { x: -5, y: 5 },
     );
 
     let new_a = &test_file!(
         "a",
-        r#"test = integration::Test { x: -15, y: 15 }"#,
+        r#"0 = integration::Test { x: -15, y: 15 }"#,
         Test { x: -15, y: 15 },
     );
     let new_ab = &test_file!(
         "a::b",
-        r#"test = integration::Test { x: -3, y: 3 }"#,
+        r#"0 = integration::Test { x: -3, y: 3 }"#,
         Test { x: -3, y: 3 },
     );
     let new_abc = &test_file!(
         "a::b::c",
-        r#"test = integration::Test { x: -4, y: 1 }"#,
+        r#"0 = integration::Test { x: -4, y: 1 }"#,
         Test { x: -4, y: 1 },
     );
 
@@ -195,8 +195,10 @@ fn new_nested_reload_paths() {
 fn duplicate_objects() {
     let a = &test_file!(
         "a",
-        "test = integration::Test{ x: -5, y: 5 }\n\
-        test = integration::Test{ x: -5, y: 4 }",
+        "0 = integration::Test{ x: -5, y: 5 }\n\
+        a = integration::Test{ x: -5, y: 4 }\n\
+        a = integration::Test{ x: -5, y: 4 }",
+        Test { x: -5, y: 5 },
         Test { x: -5, y: 5 },
     );
 
@@ -218,7 +220,7 @@ fn duplicate_objects_across_files() {
         "b::test = integration::Test{ x: -5, y: 5 }",
         Test { x: -5, y: 5 },
     );
-    let ab = &test_file!("a::b", "test = integration::Test{ x: -5, y: 5 }",);
+    let ab = &test_file!("a::b", "0 = integration::Test{ x: -5, y: 5 }",);
 
     test_load(
         &|ctx| {
@@ -233,7 +235,7 @@ fn empty_module() {
     let a = &test_file!(
         "a",
         "use a::empty_module;\n\
-         test = integration::Test { x: -5, y: 5 }",
+         0 = integration::Test { x: -5, y: 5 }",
         Test { x: -5, y: 5 },
     );
 
@@ -249,8 +251,8 @@ fn empty_module() {
 
 #[test]
 fn default_uses() {
-    let a = &test_file!("a", "test = Test { x: -5, y: 5 }", Test { x: -5, y: 5 },);
-    let ab = &test_file!("a::b", "test = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
+    let a = &test_file!("a", "0 = Test { x: -5, y: 5 }", Test { x: -5, y: 5 },);
+    let ab = &test_file!("a::b", "0 = Test { x: -4, y: 3 }", Test { x: -4, y: 3 },);
 
     test_load(
         &|ctx| {
@@ -269,13 +271,13 @@ fn default_uses() {
 fn some_files_fail() {
     let a = &test_file!(
         "a",
-        "test = integration::Test { x: -5, y: 5 }",
+        "0 = integration::Test { x: -5, y: 5 }",
         Test { x: -5, y: 5 },
     );
     let b = &test_file!("b", "This file fails to parse",);
     let c = &test_file!(
         "c",
-        "test = integration::Test { x: -3, y: 3 }",
+        "0 = integration::Test { x: -3, y: 3 }",
         Test { x: -3, y: 3 },
     );
 
@@ -323,10 +325,10 @@ impl bauble::Bauble<'_> for TestRef {
 fn same_file_references() {
     let a = &test_file!(
         "a",
-        "test = integration::Test { x: -5, y: 5 }\n\
-         test_ref = $test",
+        "0 = integration::Test { x: -5, y: 5 }\n\
+         test_ref = $0",
         Test { x: -5, y: 5 },
-        TestRef("a::test".into()),
+        TestRef("a".into()),
     );
 
     test_load(
@@ -344,7 +346,7 @@ fn same_file_references() {
 fn same_file_references_reverse() {
     let a = &test_file!(
         "a",
-        "test_ref = $test\n\
+        "0 = $test\n\
         test = integration::Test { x: -5, y: 5 }",
         TestRef("a::test".into()),
         Test { x: -5, y: 5 },
@@ -363,7 +365,7 @@ fn same_file_references_reverse() {
 fn same_file_references_reverse_full() {
     let a = &test_file!(
         "a",
-        "test_ref = $a::test\n\
+        "0 = $a::test\n\
         test = integration::Test { x: -5, y: 5 }",
         TestRef("a::test".into()),
         Test { x: -5, y: 5 },
@@ -384,12 +386,12 @@ fn reference_with_use() {
     let a = &test_file!(
         "a",
         "use b::test;\n\
-        test_ref = $test",
-        TestRef("b::test".into()),
+        0 = $test",
+        TestRef("b".into()),
     );
     let b = &test_file!(
         "b",
-        "test = integration::Test { x: -5, y: 5 }",
+        "0 = integration::Test { x: -5, y: 5 }",
         Test { x: -5, y: 5 },
     );
 
@@ -405,17 +407,17 @@ fn reference_with_use() {
 pub fn ref_implicit_type() {
     bauble::bauble_test!(
         [Test]
-        "t = integration::Test{ x: -5, y: 5 }\n\
-        r = $t"
+        "0 = integration::Test{ x: -5, y: 5 }\n\
+        r = $0"
         [
             Test { x: -5, y: 5 },
-            Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
-        "r = $test::t\n\
+        "0 = $test::t\n\
         t = integration::Test{ x: -5, y: 5 }"
         [
             Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
@@ -428,17 +430,17 @@ pub fn ref_implicit_type() {
 pub fn ref_explicit_type() {
     bauble::bauble_test!(
         [Test]
-        "t = integration::Test{ x: -2, y: 2 }\n\
-        r: Ref<integration::Test> = $t"
+        "0 = integration::Test{ x: -2, y: 2 }\n\
+        r: Ref<integration::Test> = $0"
         [
             Test { x: -2, y: 2 },
-            Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
-        "r: Ref<integration::Test> = $test::t\n\
+        "0: Ref<integration::Test> = $test::t\n\
         t = integration::Test{ x: -2, y: 2 }"
         [
             Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
@@ -452,23 +454,23 @@ pub fn ref_explicit_type_multiple_files() {
     bauble::bauble_test!(
         [Test]
         [
-            "t = integration::Test{ x: -5, y: 5 }",
-            "r: Ref<integration::Test> = $test0::t"
+            "0 = integration::Test{ x: -5, y: 5 }",
+            "0: Ref<integration::Test> = $test0"
         ]
         [
             Test { x: -5, y: 5 },
-            Ref::<Test>::from_path(TypePath::new_unchecked("test0::t").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test0").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
         [
-            "r: Ref<integration::Test> = $test1::t",
-            "t = integration::Test{ x: -5, y: 5 }"
+            "0: Ref<integration::Test> = $test1",
+            "0 = integration::Test{ x: -5, y: 5 }"
         ]
         [
-            Ref::<Test>::from_path(TypePath::new_unchecked("test1::t").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test1").to_owned()),
             Test { x: -5, y: 5 },
         ]
     );
@@ -479,23 +481,23 @@ pub fn ref_implicit_type_multiple_files() {
     bauble::bauble_test!(
         [Test]
         [
-            "t = integration::Test{ x: -5, y: 5 }",
-            "r = $test0::t"
+            "0 = integration::Test{ x: -5, y: 5 }",
+            "0 = $test0"
         ]
         [
             Test { x: -5, y: 5 },
-            Ref::<Test>::from_path(TypePath::new_unchecked("test0::t").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test0").to_owned()),
         ]
     );
 
     bauble::bauble_test!(
         [Test]
         [
-            "r = $test1::t",
-            "t = integration::Test{ x: -5, y: 5 }"
+            "0 = $test1",
+            "0 = integration::Test{ x: -5, y: 5 }"
         ]
         [
-            Ref::<Test>::from_path(TypePath::new_unchecked("test1::t").to_owned()),
+            Ref::<Test>::from_path(TypePath::new_unchecked("test1").to_owned()),
             Test { x: -5, y: 5 },
         ]
     );
@@ -509,7 +511,7 @@ pub fn ref_explicit_type_incorrect() {
 
     bauble::bauble_test!(
         [Test, Incorrect]
-        "i: Incorrect = Incorrect(0)\n\
+        "0: Incorrect = Incorrect(0)\n\
         r: Ref<Incorrect> = $test::t\n\
         t = integration::Test{ x: -2, y: 2 }"
         [
@@ -524,13 +526,17 @@ pub fn ref_explicit_type_incorrect() {
 fn decimal_digits_identifiers() {
     let a = &test_file!(
         "a",
-        "2 = integration::Test { x: -5, y: 5 }\n\
+        "0 = integration::Test { x: -5, y: 5 }\n\
+         2 = integration::Test { x: -5, y: 5 }\n\
          123 = integration::Test { x: -5, y: 5 }\n\
+         test_ref1 = $0
          test_ref2 = $2
-         test_ref23 = $123
+         test_ref3 = $123
          ",
         Test { x: -5, y: 5 },
         Test { x: -5, y: 5 },
+        Test { x: -5, y: 5 },
+        TestRef("a".into()),
         TestRef("a::2".into()),
         TestRef("a::123".into()),
     );
@@ -627,7 +633,7 @@ impl<'alloc_lifetime> bauble::Bauble<'alloc_lifetime, bauble::DefaultAllocator>
 fn two_part_field() {
     let a = &test_file!(
         "a",
-        "test = integration::TestNamespaceFieldIdent{ x: -5, mynamespace::y: 5 }",
+        "0 = integration::TestNamespaceFieldIdent{ x: -5, mynamespace::y: 5 }",
         TestNamespaceFieldIdent {
             x: -5,
             mynamespace_y: 5
@@ -646,8 +652,8 @@ fn two_part_field() {
 fn name_matching_file_is_simplified() {
     let a = &TestFile::new(
         "a",
-        "a = integration::Test { x: -5, y: 5 }
-        a_ref = $a", // local and full path are the same here
+        "0 = integration::Test { x: -5, y: 5 }
+        a_ref = $0",
         vec![
             Box::new(|object, ctx| {
                 assert!(object.top_level);
@@ -659,9 +665,9 @@ fn name_matching_file_is_simplified() {
     // test non-top-level file
     let ac = &TestFile::new(
         "a::c",
-        "c = integration::Test { x: -5, y: 5 }\n\
-        c_ref_local = $c\n\
-        c_ref_full = $a::c",
+        "0 = integration::Test { x: -5, y: 5 }\n\
+        ref_local = $0\n\
+        ref_full = $a::c",
         vec![
             Box::new(|object, ctx| {
                 assert!(object.top_level);
@@ -674,7 +680,7 @@ fn name_matching_file_is_simplified() {
     // test refering to them from a separate file
     let b = &test_file!(
         "b",
-        "a_ref = $a\n\
+        "0 = $a\n\
          c_ref = $a::c",
         TestRef("a".into()),
         TestRef("a::c".into()),
@@ -694,7 +700,7 @@ fn name_matching_file_is_simplified() {
 fn duplicate_name_after_simplification() {
     let a = &TestFile::new(
         "a",
-        "a = integration::Test { x: -5, y: 5 }\n\
+        "0 = integration::Test { x: -5, y: 5 }\n\
         1 = integration::Test { x: -5, y: 5 }", // local and full path are the same here
         vec![
             Box::new(|object, ctx| {
@@ -710,7 +716,7 @@ fn duplicate_name_after_simplification() {
     // test non-top-level file
     let a1 = &TestFile::new(
         "a::1",
-        "1 = integration::Test { x: -5, y: 5 }",
+        "0 = integration::Test { x: -5, y: 5 }",
         vec![Box::new(|object, ctx| {
             assert!(object.top_level);
             (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
@@ -728,12 +734,12 @@ fn duplicate_name_after_simplification() {
 /// Paths won't collide after simplification but we don't want to allow names of objects in the
 /// same file to collide.
 #[test]
-#[should_panic = "This identifier was already used"]
+#[should_panic = "Identifier '0' is only allowed for the first item"]
 fn duplicate_name_before_simplification() {
     let a = &TestFile::new(
         "a",
-        "a = integration::Test { x: -5, y: 5 }\n\
-        a = integration::Test { x: -5, y: 5 }",
+        "0 = integration::Test { x: -5, y: 5 }\n\
+        0 = integration::Test { x: -5, y: 5 }",
         vec![
             Box::new(|object, ctx| {
                 assert!(object.top_level);
@@ -754,4 +760,22 @@ fn duplicate_name_before_simplification() {
     );
 }
 
-// TODO: in stage 2, test that only first object can be named `0`.
+#[test]
+#[should_panic = "The first item must have '0' as the identifier"]
+fn special_identifier_required_for_first_object() {
+    let a = &TestFile::new(
+        "a",
+        "1 = integration::Test { x: -5, y: 5 }",
+        vec![Box::new(|object, ctx| {
+            assert!(object.top_level);
+            (expected_value_fn(Test { x: -5, y: 5 }))(object, ctx)
+        })],
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a],
+    );
+}

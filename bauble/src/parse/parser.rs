@@ -690,16 +690,17 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 let is_first = i == 0;
                 let has_top_level_ident = *ident == BindingIdent::TOP_LEVEL_IDENTIFIER;
 
-                match (is_first, has_top_level_ident) {
-                    (true, true) | (false, false) => {}
+                let error_emitted = match (is_first, has_top_level_ident) {
+                    (true, true) | (false, false) => false,
                     (true, false) => {
                         emitter.emit(Rich::custom(
                             ident.span,
                             format!(
-                                "The first item must '{}' as the identifier",
+                                "The first item must have '{}' as the identifier",
                                 BindingIdent::TOP_LEVEL_IDENTIFIER
                             ),
                         ));
+                        true
                     }
                     (false, true) => {
                         emitter.emit(Rich::custom(
@@ -709,8 +710,9 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                                 BindingIdent::TOP_LEVEL_IDENTIFIER
                             ),
                         ));
+                        true
                     }
-                }
+                };
 
                 let binding_ident = if has_top_level_ident {
                     BindingIdent::TopLevel(ident.map(|_| ()))
@@ -720,7 +722,9 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
 
                 let binding = Binding { type_path, value };
 
-                if values.values.contains_key(&binding_ident) {
+                // Note, we don't emit this if a more specific error about the identifier was
+                // already emitted above.
+                if values.values.contains_key(&binding_ident) && !error_emitted {
                     emitter.emit(Rich::custom(
                         binding_ident.span(),
                         "This identifier was already used".to_string(),
