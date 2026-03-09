@@ -5,6 +5,7 @@
 mod builtin;
 mod context;
 mod error;
+mod local_context;
 mod parse;
 mod spanned;
 mod traits;
