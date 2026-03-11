@@ -45,11 +45,6 @@ impl<'a> Symbols<'a> {
         Ok(())
     }
 
-    pub fn add(&mut self, symbols: Symbols) {
-        // TODO: what about conflicting entries?
-        self.uses.extend(symbols.uses)
-    }
-
     pub fn add_use(&mut self, use_path: &Spanned<PathTreeNode>) -> Result<()> {
         fn add_use_inner(
             this: &mut Symbols,

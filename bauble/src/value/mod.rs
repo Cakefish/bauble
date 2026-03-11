@@ -879,15 +879,14 @@ pub(crate) fn convert_values(
     values: ParseValues,
     ctx: &crate::context::BaubleContext,
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
-    let mut use_symbols = Symbols::new(ctx);
-    let mut use_errors = Vec::new();
-    for use_path in values.uses {
-        if let Err(e) = use_symbols.add_use(&use_path) {
-            use_errors.push(e);
-        }
-    }
+    let mut errors = Vec::new();
 
     let mut symbols = Symbols::new(ctx);
+    for use_path in values.uses {
+        if let Err(e) = symbols.add_use(&use_path) {
+            errors.push(e);
+        }
+    }
 
     let file_path = symbols.ctx.get_file_path(file);
 
@@ -908,22 +907,17 @@ pub(crate) fn convert_values(
                     module: None,
                 },
             ) {
-                use_errors.push(e.spanned(span));
+                errors.push(e.spanned(span));
             }
         } else {
             // Didn't pre-register assets.
-            use_errors.push(ConversionError::UnregisteredAsset.spanned(span));
+            errors.push(ConversionError::UnregisteredAsset.spanned(span));
         }
     }
 
-    symbols.add(use_symbols);
-
-    let mut additional_objects = AdditionalObjects::new(file_path.to_owned());
-
     let default_span = crate::Span::new(file, 0..0);
-
-    let mut ok = Vec::new();
-    let mut err = use_errors;
+    let mut additional_objects = AdditionalObjects::new(file_path.to_owned());
+    let mut objects = Vec::new();
 
     for (ident, binding) in &values.values {
         let ref_ty = match symbols.resolve_asset(
@@ -936,7 +930,7 @@ pub(crate) fn convert_values(
         ) {
             Ok((ty, _)) => ty,
             Err(e) => {
-                err.push(e);
+                errors.push(e);
                 continue;
             }
         };
@@ -944,7 +938,7 @@ pub(crate) fn convert_values(
         let type_registry = symbols.ctx.type_registry();
         let ty = match type_registry.key_type(ref_ty).kind {
             types::TypeKind::Ref(type_id) => type_id,
-            _ => unreachable!("Invariant"),
+            _ => unreachable!("The type registered with an object is always a reference"),
         };
 
         let top_level = ident.is_top_level();
@@ -957,18 +951,18 @@ pub(crate) fn convert_values(
             default_span,
         };
         match convert_object(path, top_level, &binding.value, ty, convert_meta) {
-            Ok(obj) => ok.push(obj),
-            Err(e) => err.push(e),
+            Ok(obj) => objects.push(obj),
+            Err(e) => errors.push(e),
         }
     }
 
-    let mut objects = additional_objects.into_objects();
+    let mut all_objects = additional_objects.into_objects();
 
-    if err.is_empty() {
-        objects.extend(ok);
-        Ok(objects)
+    if errors.is_empty() {
+        all_objects.extend(objects);
+        Ok(all_objects)
     } else {
-        Err(err.into())
+        Err(errors.into())
     }
 }
 
