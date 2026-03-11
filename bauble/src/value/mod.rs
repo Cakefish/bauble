@@ -780,14 +780,12 @@ pub(crate) fn register_assets(
 
         // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path
-            // If the value is a reference, then an explicit type should
-            // still be delayed. The reason why it should be delayed is
-            // because the type of the reference `Ref<T>`, where `T` is
-            // the type of the referenced object, may not exist at this
-            // point, and as such trying to resolve the type may cause
-            // issues because the type is not known and depends on the
-            // order the reference was created compared to the
-            // referenced object, which is undesired behaviour.
+            // If the explicit type is a reference, resolving to a type ID
+            // should be delayed. The type of the reference `Ref<T>` is only
+            // registered when registering an object of type `T`. So the when
+            // the referenced object has yet to be registered, the reference
+            // type may not exist. Thus, trying to resolve the type at this
+            // point can fail.
             && !matches!(binding.value.value.value, Value::Ref(_))
         {
             symbols.resolve_type(ty)
