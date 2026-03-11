@@ -780,20 +780,20 @@ pub(crate) fn register_assets(
 
         // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path
-            // If the explicit type is a reference, resolving to a type ID
-            // should be delayed. The type of the reference `Ref<T>` is only
+            // If the value is a reference, resolving an explicit type to a type
+            // ID should be delayed. The type of the reference `Ref<T>` is only
             // registered when registering an object of type `T`. So the when
             // the referenced object has yet to be registered, the reference
             // type may not exist. Thus, trying to resolve the type at this
             // point can fail.
-            && !matches!(binding.value.value.value, Value::Ref(_))
+            && !matches!(&*binding.value.value, Value::Ref(_))
         {
             symbols.resolve_type(ty)
         } else {
             let res = value_type(&binding.value, &symbols)
                 .map(|v| {
                     convert::default_value_type(
-                        symbols.ctx.type_registry(),
+                        ctx.type_registry(),
                         binding.value.value.value.primitive_type(),
                         v,
                     )
@@ -810,11 +810,21 @@ pub(crate) fn register_assets(
                     }
                 });
 
+            // We rely on this property so that an explicit type in
+            // `binding.type_path` is not ignored.
+            debug_assert!(
+                res.is_err() || !matches!(&*binding.value.value, Value::Ref(_)),
+                "Initial resolution steps should always fail for reference values",
+            );
+
             if res.is_err()
                 && let Value::Ref(reference) = &*binding.value.value
+                // TODO: Will the error be helpful when this part fails, since
+                // we just pass on the error from an earlier step?
                 && let Ok(reference) = symbols.resolve_path(reference, false)
             {
                 let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
+                    // Resolving to a full path won't fail even if the reference type is not yet registered.
                     match symbols.resolve_path(expected_ty_path, true) {
                         Ok(s) => Some(s),
                         Err(e) => {
