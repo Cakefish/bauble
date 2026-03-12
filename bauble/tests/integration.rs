@@ -510,20 +510,39 @@ pub fn ref_implicit_type_multiple_files() {
 }
 
 #[test]
-#[should_panic = "Expected this path to refer to a type"]
+#[should_panic = "Expected `Ref<integration::Incorrect>` which is a reference to `integration::Incorrect`, which is a struct with unnamed fields, but got `Ref<integration::Test>` which is a reference to `integration::Test`, which is a struct with named fields"]
 pub fn ref_explicit_type_incorrect() {
     #[derive(Bauble, PartialEq, Eq, Debug)]
     struct Incorrect(u32);
 
     bauble::bauble_test!(
         [Test, Incorrect]
-        "0: Incorrect = Incorrect(0)\n\
-        r: Ref<Incorrect> = $test::t\n\
+        "0: integration::Incorrect = Incorrect(0)\n\
+        r: Ref<integration::Incorrect> = $test::t\n\
         t = integration::Test{ x: -2, y: 2 }"
         [
             Incorrect(0),
             Ref::<Test>::from_path(TypePath::new_unchecked("test::t").to_owned()),
             Test { x: -2, y: 2 },
+        ]
+    );
+}
+
+#[test]
+#[should_panic = "TODO"]
+pub fn ref_explicit_type_incorrect_multiple_files() {
+    #[derive(Bauble, PartialEq, Eq, Debug)]
+    struct Incorrect(u32);
+
+    bauble::bauble_test!(
+        [Test, Incorrect]
+        [
+            "0 = integration::Test{ x: -5, y: 5 }",
+            "0: Ref<integration::Incorrect> = $test0"
+        ]
+        [
+            Test { x: -5, y: 5 },
+            Ref::<Test>::from_path(TypePath::new_unchecked("test0").to_owned()),
         ]
     );
 }
