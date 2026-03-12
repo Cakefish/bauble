@@ -767,7 +767,9 @@ pub(crate) fn register_assets(
     // points.
     let Symbols { mut uses, .. } = symbols;
 
-    // TODO: Register these in a correct order to allow for assets referencing assets.
+    // TODO: Register these in a correct order to allow for assets referencing assets. (NOTE: This
+    // is impossible to do in all cases since some of those assets may need to be delayed anyway
+    // due to referencing assets external to this file that are not registered yet).
     for (ident, binding) in &values.values {
         let span = ident.span();
         let kind = if ident.is_top_level() {
@@ -810,13 +812,6 @@ pub(crate) fn register_assets(
                     }
                 });
 
-            // We rely on this property so that an explicit type in
-            // `binding.type_path` is not ignored.
-            debug_assert!(
-                res.is_err() || !matches!(&*binding.value.value, Value::Ref(_)),
-                "Initial resolution steps should always fail for reference values",
-            );
-
             if res.is_err()
                 && let Value::Ref(reference) = &*binding.value.value
                 // TODO: Will the error be helpful when this part fails, since
@@ -846,7 +841,21 @@ pub(crate) fn register_assets(
                 continue;
             }
 
-            res
+            if let Ok(_res) = res
+                // We skipped `resolve_type` above because `Ref<T>` might not be registered, but if we
+                // found referenced asset in `value_type`, then the asset is already registered so
+                // `Ref<T>` will either also be registered or it will be the wrong type.
+                && let Some(ty) = &binding.type_path
+            {
+                // TODO: Unfortunately, the error is "Expected this path to refer to a type" when
+                // the `Ref<T>` isn't registered which is misleading as the actual issue is that it
+                // is the wrong type for `T`. Maybe we should just register the `Ref<T>` when
+                // registering each new type `T`, rather than when encountering an asset of type
+                // `T`. Is there any downside to this approach?
+                symbols.resolve_type(ty)
+            } else {
+                res
+            }
         };
 
         Symbols { uses, .. } = symbols;
