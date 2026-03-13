@@ -146,7 +146,7 @@ impl<'a> Symbols<'a> {
         add_use_inner(self, leading, &use_path.end)
     }
 
-    pub fn get_module(&self, ident: &str) -> Option<TypePath> {
+    fn get_module(&self, ident: &str) -> Option<TypePath> {
         self.uses
             .get(ident)
             .and_then(|reference| reference.module.clone())
@@ -249,11 +249,7 @@ impl<'a> Symbols<'a> {
         Ok(path.spanned(raw_path.span()))
     }
 
-    pub fn resolve_item(
-        &self,
-        raw_path: &Path,
-        ref_kind: RefKind,
-    ) -> Result<Cow<'_, PathReference>> {
+    fn resolve_item(&self, raw_path: &Path, ref_kind: RefKind) -> Result<Cow<'_, PathReference>> {
         // NOTE: Resolve path resolves the full path for types referred to via `uses`. This is
         // unnecessary for the usage here (outside of types with generic parameters) because the
         // type info is available directly in `self.uses`. However, this is neccessary for other
