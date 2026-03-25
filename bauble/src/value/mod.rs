@@ -1,3 +1,9 @@
+mod convert;
+mod display;
+mod early_context;
+mod error;
+mod symbols;
+
 use std::{collections::HashMap, hash::Hash};
 
 use indexmap::IndexMap;
@@ -12,17 +18,15 @@ use crate::{
     types::{self, TypeId, TypeRegistry},
 };
 
-mod convert;
-mod display;
-mod error;
-mod symbols;
-
 pub use convert::AdditionalUnspannedObjects;
 pub(crate) use convert::AnyVal;
-use convert::{AdditionalObjects, ConvertMeta, ConvertValue, no_attr, value_type};
+use convert::{AdditionalObjects, ConvertMeta, ConvertValue};
 pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
+use early_context::CombinedPathReference;
+pub(crate) use early_context::EarlyContext;
 use error::Result;
 pub use error::{ConversionError, RefError, RefKind};
+use symbols::EarlySymbols;
 pub(crate) use symbols::Symbols;
 
 // TODO(@docs)
@@ -698,7 +702,7 @@ pub(crate) fn resolve_delayed(
                                 // TODO: Could pass uses here for better suggestions.
                                 uses: None,
                                 path: map[&scc[0]].value.clone(),
-                                path_ref: PathReference::empty(),
+                                path_ref: PathReference::empty().into(),
                                 kind: RefKind::Asset,
                             }))
                             .spanned(map[&scc[0]].span),
@@ -746,30 +750,87 @@ fn object_ident_path<'a>(
     (ident, path)
 }
 
-pub(crate) fn register_assets(
+/// Registers all new asset paths into [`EarlyContext`] so they will be known for resolving full
+/// paths from `use`s in [`register_assets`].
+///
+/// We need to know what items brought into scope with `use` are assets rather than types or
+/// modules to properly dertermine the full path (otherwise there could be multiple candidates
+/// because items from different namespaces can have the same name).
+pub(crate) fn pre_register_assets(
+    ctx: &mut EarlyContext<'_>,
     file_path: TypePath<&str>,
-    ctx: &mut crate::context::BaubleContext,
+    values: &ParseValues,
+) -> std::result::Result<(), Vec<Spanned<ConversionError>>> {
+    let mut errors = Vec::new();
+
+    for ident in values.values.keys() {
+        let span = ident.span();
+        let kind = if ident.is_top_level() {
+            crate::AssetKind::TopLevel
+        } else {
+            crate::AssetKind::Local
+        };
+        let (_ident, path) = object_ident_path(file_path, ident);
+
+        match ctx.register_asset(path.borrow(), kind) {
+            Ok(()) => {}
+            Err(e) => errors.push(ConversionError::Custom(e).spanned(span)),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+pub(crate) fn register_assets(
+    ctx: &mut EarlyContext<'_>,
+    file_path: TypePath<&str>,
     values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
     let mut errors = Vec::new();
     let mut delayed = Vec::new();
 
-    let mut symbols = Symbols::new(ctx);
-    // Add `uses` to local `Symbols` instance
+    let mut symbols = EarlySymbols::new(ctx);
+    // Add `uses` to local symbols instance.
     for use_path in &values.uses {
-        // TODO: This will error if the referenced file is yet to be passed register_assets
         if let Err(e) = symbols.add_use(use_path) {
             errors.push(e);
         }
     }
 
-    // Move `uses` in/out of `Symbols` every loop so we have mutable access to `ctx` at certain
-    // points.
-    let Symbols { mut uses, .. } = symbols;
+    // Add assets from this file to Symbols::use.
+    for ident in values.values.keys() {
+        let span = ident.span();
+        let (ident, path) = object_ident_path(file_path, ident);
 
-    // TODO: Register these in a correct order to allow for assets referencing assets. (NOTE: This
-    // is impossible to do in all cases since some of those assets may need to be delayed anyway
-    // due to referencing assets external to this file that are not registered yet).
+        if let Some(CombinedPathReference {
+            asset: Some(asset), ..
+        }) = symbols.ctx.get_ref(path.borrow())
+        {
+            if let Err(e) = symbols.add_ref(
+                ident.to_owned(),
+                CombinedPathReference {
+                    ty: None,
+                    asset: Some(asset),
+                    module: None,
+                },
+            ) {
+                errors.push(e.spanned(span));
+            }
+        } else {
+            // Didn't pre-register assets.
+            errors.push(ConversionError::UnregisteredAsset.spanned(span));
+        }
+    }
+
+    // Resolve asset types and register the assets into `BaubleContext`.
+    //
+    // If the asset is a reference to another asset whose type is yet to be resolved, type
+    // resolution will be delayed by pushing an entry to `delayed`. These are then handled by
+    // `resolve_delayed`.
     for (ident, binding) in &values.values {
         let span = ident.span();
         let kind = if ident.is_top_level() {
@@ -777,8 +838,7 @@ pub(crate) fn register_assets(
         } else {
             crate::AssetKind::Local
         };
-        let (ident, path) = object_ident_path(file_path, ident);
-        let symbols = Symbols { ctx: &*ctx, uses };
+        let (_ident, path) = object_ident_path(file_path, ident);
 
         // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path
@@ -792,10 +852,10 @@ pub(crate) fn register_assets(
         {
             symbols.resolve_type(ty)
         } else {
-            let res = value_type(&binding.value, &symbols)
+            let res = convert::value_type(&binding.value, &symbols)
                 .map(|v| {
                     convert::default_value_type(
-                        ctx.type_registry(),
+                        symbols.ctx.type_registry(),
                         binding.value.value.value.primitive_type(),
                         v,
                     )
@@ -805,7 +865,7 @@ pub(crate) fn register_assets(
                     ConversionError::UnresolvedType.spanned(binding.value.value.span)
                 ))
                 .and_then(|v| {
-                    if ctx.type_registry().key_type(v).kind.instanciable() {
+                    if symbols.ctx.type_registry().key_type(v).kind.instanciable() {
                         Ok(v)
                     } else {
                         Err(ConversionError::UnresolvedType.spanned(binding.value.value.span))
@@ -816,11 +876,11 @@ pub(crate) fn register_assets(
                 && let Value::Ref(reference) = &*binding.value.value
                 // TODO: Will the error be helpful when this part fails, since
                 // we just pass on the error from an earlier step?
-                && let Ok(reference) = symbols.resolve_path(reference, false)
+                && let Ok(reference) = symbols.resolve_path(reference, symbols::ResolveKind::Asset)
             {
                 let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
                     // Resolving to a full path won't fail even if the reference type is not yet registered.
-                    match symbols.resolve_path(expected_ty_path, true) {
+                    match symbols.resolve_path(expected_ty_path, symbols::ResolveKind::Type) {
                         Ok(s) => Some(s),
                         Err(e) => {
                             errors.push(e);
@@ -837,7 +897,6 @@ pub(crate) fn register_assets(
                     asset: path.spanned(span),
                     reference,
                 });
-                Symbols { uses, .. } = symbols;
                 continue;
             }
 
@@ -858,30 +917,14 @@ pub(crate) fn register_assets(
             }
         };
 
-        Symbols { uses, .. } = symbols;
-        let ref_ty = ty.and_then(|ty| {
-            ctx.register_asset(path.borrow(), ty, kind)
+        if let Err(e) = ty.and_then(|ty| {
+            symbols
+                .bauble_ctx()
+                .register_asset(path.borrow(), ty, kind)
                 .map_err(|e| ConversionError::Custom(e).spanned(span))
-        });
-        match ref_ty {
-            Ok(ref_ty) => {
-                let mut symbols = Symbols { ctx: &*ctx, uses };
-                // Add to Symbols::uses so other items in the same file can directly reference this
-                // without full path.
-                if let Err(e) = symbols.add_ref(
-                    ident.to_owned(),
-                    PathReference {
-                        ty: None,
-                        asset: Some((ref_ty, path.clone(), kind)),
-                        module: None,
-                    },
-                ) {
-                    errors.push(e.spanned(binding.value.value.span));
-                }
-                Symbols { uses, .. } = symbols;
-            }
-            Err(err) => errors.push(err),
-        };
+        }) {
+            errors.push(e);
+        }
     }
 
     if errors.is_empty() {
@@ -910,7 +953,7 @@ pub(crate) fn convert_values(
     // Add assets from this file to Symbols::use.
     for ident in values.values.keys() {
         let span = ident.span();
-        let (ident, path) = object_ident_path(file_path, &ident);
+        let (ident, path) = object_ident_path(file_path, ident);
 
         if let Some(PathReference {
             asset: Some(asset), ..
@@ -959,7 +1002,7 @@ pub(crate) fn convert_values(
         };
 
         let top_level = ident.is_top_level();
-        let (ident, path) = object_ident_path(file_path, &ident);
+        let (ident, path) = object_ident_path(file_path, ident);
 
         let convert_meta = ConvertMeta {
             symbols: &symbols,
@@ -992,7 +1035,7 @@ fn convert_object(
     expected_type: TypeId,
     mut meta: ConvertMeta,
 ) -> Result<Object> {
-    let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
+    let value = value.convert(meta.reborrow(), expected_type, convert::no_attr())?;
     let types = meta.symbols.ctx.type_registry();
     create_object(object_path, top_level, value, types)
 }

@@ -1,21 +1,21 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashSet};
 
 use crate::{
     BaubleContext, BaubleError, CustomError,
-    context::PathReference,
     error::Level,
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
+    value::early_context::CombinedPathReference,
 };
 
 use super::{Ident, PathKind};
 
 #[derive(Clone, Debug)]
 pub struct RefError {
-    pub(super) uses: Option<HashMap<TypePathElem, PathReference>>,
+    pub(super) uses: Option<HashSet<TypePathElem>>,
     pub(super) path: PathKind,
-    pub(super) path_ref: PathReference,
+    pub(super) path_ref: CombinedPathReference,
     pub(super) kind: RefKind,
 }
 
@@ -573,7 +573,7 @@ impl BaubleError for Spanned<ConversionError> {
                             && let Some(uses) = &ref_err.uses
                         {
                             if let Some(suggestions) = get_suggestions(
-                                uses.keys().map(|ident| ident.as_str()).chain(options),
+                                uses.iter().map(|ident| ident.as_str()).chain(options),
                                 path.as_str(),
                             ) {
                                 errs.push((

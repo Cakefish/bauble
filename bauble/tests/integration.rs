@@ -247,6 +247,12 @@ fn empty_module() {
         },
         &[a, empty_module],
     );
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[empty_module, a],
+    );
 }
 
 #[test]
@@ -334,15 +340,13 @@ fn same_file_references() {
     test_load(
         &|ctx| {
             ctx.register_type::<Test, _>();
-            // TODO: TestRef doesn't need to be registered?!
+            // NOTE: TestRef doesn't need to be registered?!
         },
         &[a],
     );
 }
 
 #[test]
-// TODO: see todo in `register_assets` about registering assets in the correct order.
-#[should_panic = "Expected this path to refer to an asset"]
 fn same_file_references_reverse() {
     let a = &test_file!(
         "a",
@@ -355,7 +359,7 @@ fn same_file_references_reverse() {
     test_load(
         &|ctx| {
             ctx.register_type::<Test, _>();
-            // TODO: TestRef doesn't need to be registered?!
+            // NOTE: TestRef doesn't need to be registered?!
         },
         &[a],
     );
@@ -380,17 +384,15 @@ fn same_file_references_reverse_full() {
 }
 
 #[test]
-// TODO: see todo in `register_assets` where `add_use` is called.
-#[should_panic = "Expected this path to refer to a valid reference"]
 fn reference_with_use() {
     let a = &test_file!(
         "a",
         "use b::test;\n\
         0 = $test",
-        TestRef("b".into()),
+        TestRef("b::test".into()),
     );
     let b = &test_file!(
-        "b",
+        "b::test",
         "0 = integration::Test { x: -5, y: 5 }",
         Test { x: -5, y: 5 },
     );
@@ -399,6 +401,7 @@ fn reference_with_use() {
         &|ctx| {
             ctx.register_type::<Test, _>();
         },
+        // Test when the referencing file is loaded before the referenced file
         &[a, b],
     );
 }
@@ -543,6 +546,26 @@ pub fn ref_explicit_type_incorrect_multiple_files() {
         [
             Test { x: -5, y: 5 },
             Ref::<Test>::from_path(TypePath::new_unchecked("test0").to_owned()),
+        ]
+    );
+}
+
+/// Like above, but with file load order reversed.
+#[test]
+#[should_panic = "Error converting: \n\u{1b}[31mError:\u{1b}[0m Invalid explicit reference path 'Ref<integration::Incorrect>"]
+pub fn ref_explicit_type_incorrect_multiple_files_reverse() {
+    #[derive(Bauble, PartialEq, Eq, Debug)]
+    struct Incorrect(u32);
+
+    bauble::bauble_test!(
+        [Test, Incorrect]
+        [
+            "0: Ref<integration::Incorrect> = $test1",
+            "0 = integration::Test{ x: -5, y: 5 }",
+        ]
+        [
+            Ref::<Test>::from_path(TypePath::new_unchecked("test1").to_owned()),
+            Test { x: -5, y: 5 },
         ]
     );
 }

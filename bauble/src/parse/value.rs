@@ -195,7 +195,7 @@ impl BindingIdent {
     pub fn as_str(&self) -> &str {
         match self {
             Self::TopLevel(_) => Self::TOP_LEVEL_IDENTIFIER,
-            Self::Local(ident) => &*ident,
+            Self::Local(ident) => ident,
         }
     }
 

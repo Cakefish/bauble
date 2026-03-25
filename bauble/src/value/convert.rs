@@ -8,7 +8,7 @@ use crate::{
     types::{self, TypeId, TypeRegistry},
     value::{
         Attributes, Fields, Ident, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
-        ValueTrait, error::Result,
+        ValueTrait, error::Result, symbols::SymbolsCommon,
     },
 };
 
@@ -93,8 +93,11 @@ fn resolve_type(
 
 /// Returns type if it can be determined from the provided `ParseVal` without further context
 /// (other than resolving types and looking at the type of referenced objects).
-pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<Spanned<TypeId>>> {
-    let types = symbols.ctx.type_registry();
+pub(super) fn value_type<S: SymbolsCommon>(
+    value: &ParseVal,
+    symbols: &S,
+) -> Result<Option<Spanned<TypeId>>> {
+    let types = symbols.type_registry();
 
     // Type was specified via a prefixed "<type>" or this is value where the type is explicit like a struct value.
     if let Some(ty) = &value.ty {
@@ -103,7 +106,13 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
 
     let ty = match &*value.value {
         // Determine referenced value type by looking up referenced path.
-        Value::Ref(path) => Some(symbols.resolve_asset(path)?.0.spanned(path.span())),
+        Value::Ref(path) => Some(
+            symbols
+                .resolve_asset_type(path)?
+                // This happens if the asset exists but its type has not been resolved yet.
+                .ok_or_else(|| ConversionError::UnresolvedType.spanned(path.span()))?
+                .spanned(path.span()),
+        ),
         Value::Or(paths) => {
             let mut ty = None;
             for path in paths {

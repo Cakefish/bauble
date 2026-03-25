@@ -12,7 +12,7 @@ pub type Source = ariadne::Source<String>;
 struct DefaultUses(IndexMap<TypePathElem, TypePath>);
 
 /// Assets can be either top level or local.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AssetKind {
     // TODO: update this in stage 2
     /// The first asset in a file, if it has the same as the file.
@@ -228,9 +228,8 @@ struct CtxNode {
     /// This name can potentially reference:
     /// * A type
     /// * An asset
-    /// * A default use (aka `InnerReference::redirect`) (TODO: actually look into this, I don't
-    ///   understand why these are only added to the root node so I don't actually know how they
-    ///   work)
+    /// * A default use (aka `InnerReference::redirect`) (NOTE: These are only added to the root
+    ///   node).
     /// * A module (not represented here but via the `Self::children` field).
     reference: InnerReference,
     /// Full path to this node.
@@ -649,18 +648,17 @@ impl BaubleContext {
             }
         }
 
-        let mut delayed = Vec::new();
         let mut skip = Vec::new();
+        let mut early_ctx = crate::value::EarlyContext::new(self);
 
-        // Register assets from each successfully parsed file into the context.
+        // Register assets paths from each successfully parsed file into the early context (before
+        // types are known).
         for (file, values) in file_values.iter() {
             // Need a partial borrow here.
-            let (path, _) = self.file(*file);
+            let (path, _) = early_ctx.ctx.file(*file);
             let path = path.to_owned();
-            match crate::value::register_assets(path.borrow(), self, values) {
-                Ok(d) => {
-                    delayed.extend(d);
-                }
+            match crate::value::pre_register_assets(&mut early_ctx, path.borrow(), values) {
+                Ok(()) => {}
                 Err(e) => {
                     // Skip files that errored on registering.
                     skip.push(*file);
@@ -668,6 +666,33 @@ impl BaubleContext {
                 }
             }
         }
+
+        let mut delayed = Vec::new();
+        let mut skip_iter = skip.iter().copied().peekable();
+        let mut skip_more = Vec::new();
+
+        // Then, register assets from each successfully parsed file into the context (while
+        // resolving types).
+        for (file, values) in file_values
+            .iter()
+            // Skip files with errors
+            .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
+        {
+            // Need a partial borrow here.
+            let (path, _) = early_ctx.ctx.file(*file);
+            let path = path.to_owned();
+            match crate::value::register_assets(&mut early_ctx, path.borrow(), values) {
+                Ok(d) => {
+                    delayed.extend(d);
+                }
+                Err(e) => {
+                    // Skip files that errored on registering.
+                    skip_more.push(*file);
+                    errors.extend(BaubleErrors::from(e));
+                }
+            }
+        }
+        skip.extend(skip_more);
 
         // TODO: Less hacky way to get which files errored here?
         if let Err(e) = crate::value::resolve_delayed(delayed, self) {
@@ -693,7 +718,7 @@ impl BaubleContext {
             // Skip files with errors
             .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
         {
-            match crate::value::convert_values(file, values, &self) {
+            match crate::value::convert_values(file, values, self) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
             }
@@ -713,7 +738,7 @@ impl BaubleContext {
     }
 
     /// Takes a path in bauble, and if the path is valid, return meta information about the
-    /// bauble item at that path.
+    /// bauble item(s) at that path.
     pub fn get_ref(&self, path: TypePath<&str>) -> Option<PathReference> {
         self.root_node
             .node_at(path)
@@ -760,7 +785,7 @@ impl BaubleContext {
     /// `path` doesn't need to be the path of a file, it can be the path of anything in a file.
     ///
     /// Note, if a file `a` exists and a file `a::b::c` exists, `a::b` will get the ID of the file
-    /// at `a`.
+    /// at `a` even if nothing exists at `a::b`.
     pub fn get_file_id(&self, path: TypePath<&str>) -> Option<FileId> {
         self.root_node
             .walk_find(path, |node| node.source)
