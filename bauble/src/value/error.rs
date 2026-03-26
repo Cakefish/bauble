@@ -19,10 +19,11 @@ pub struct RefError {
     pub(super) kind: RefKind,
 }
 
-impl From<crate::path::PathError> for ConversionError {
-    fn from(value: crate::path::PathError) -> Self {
-        Self::PathError(value)
-    }
+/// `path::*::ident` refers to multiple items in the same namespace.
+#[derive(Clone, Debug)]
+pub struct AmbiguousWithIdent {
+    pub(crate) path: TypePath,
+    pub(crate) ident: TypePathElem,
 }
 
 /// An error type for conversions that happen inside of Bauble.
@@ -38,6 +39,7 @@ pub enum ConversionError {
     AmbiguousUse {
         ident: TypePathElem,
     },
+    AmbiguousWithIdent(AmbiguousWithIdent),
     ExpectedBitfield {
         got: TypeId,
     },
@@ -105,6 +107,7 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::Cycle(_) => Cow::Borrowed("A cycle was found"),
             ConversionError::PathError(_) => Cow::Borrowed("Path error"),
             ConversionError::AmbiguousUse { .. } => Cow::Borrowed("Ambiguous use"),
+            ConversionError::AmbiguousWithIdent(_) => Cow::Borrowed("Ambiguous with ident path"),
             ConversionError::ExpectedBitfield { .. } => Cow::Borrowed("Expected bitfield"),
             ConversionError::UnresolvedType => Cow::Borrowed("Unresolved type"),
             ConversionError::WrongLength { ty, .. } => Cow::Owned(format!(
@@ -340,6 +343,9 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::AmbiguousUse { ident } => Cow::Owned(format!(
                 "The identifier `{ident}` has been imported multiple times"
             )),
+            ConversionError::AmbiguousWithIdent(AmbiguousWithIdent { path, ident }) => Cow::Owned(
+                format!("`{path}::*::{ident}` refers to multiple items in the same namespace"),
+            ),
             ConversionError::ExpectedBitfield { got } => Cow::Owned(format!(
                 "But got the type `{}` which is {}",
                 types.key_type(*got).meta.path,
@@ -664,10 +670,28 @@ impl BaubleError for Spanned<ConversionError> {
     }
 }
 
+impl From<crate::path::PathError> for ConversionError {
+    fn from(value: crate::path::PathError) -> Self {
+        Self::PathError(value)
+    }
+}
+
+impl From<AmbiguousWithIdent> for ConversionError {
+    fn from(value: AmbiguousWithIdent) -> Self {
+        Self::AmbiguousWithIdent(value)
+    }
+}
+
 pub(super) type Result<T> = std::result::Result<T, Spanned<ConversionError>>;
 
 impl From<Spanned<crate::path::PathError>> for Spanned<ConversionError> {
     fn from(value: Spanned<crate::path::PathError>) -> Self {
         value.map(ConversionError::PathError)
+    }
+}
+
+impl From<Spanned<AmbiguousWithIdent>> for Spanned<ConversionError> {
+    fn from(value: Spanned<AmbiguousWithIdent>) -> Self {
+        value.map(ConversionError::AmbiguousWithIdent)
     }
 }

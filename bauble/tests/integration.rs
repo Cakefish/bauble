@@ -847,3 +847,83 @@ fn special_identifier_required_for_first_object() {
         &[a],
     );
 }
+
+#[test]
+#[should_panic = "`a::*::test` refers to multiple items in the same namespace"]
+fn ambiguous_ref_with_ident_via_reference() {
+    let a = &test_file!("a", "0 = $a::*::test", TestRef("b::test".into()),);
+    let a_b_test = &test_file!(
+        "a::b::test",
+        "0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let a_c_test = &test_file!(
+        "a::c::test",
+        "0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, a_b_test, a_c_test],
+    );
+}
+
+#[test]
+#[should_panic = "`a::*::test` refers to multiple items in the same namespace"]
+fn ambiguous_ref_with_ident_via_use() {
+    let a = &test_file!(
+        "a",
+        "use a::*::test;\n\
+        0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let a_b_test = &test_file!(
+        "a::b::test",
+        "0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let a_c_test = &test_file!(
+        "a::c::test",
+        "0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        &[a, a_b_test, a_c_test],
+    );
+}
+
+#[test]
+#[should_panic = "`a::*::test` refers to multiple items in the same namespace"]
+fn amiguous_ref_with_ident_multilayer() {
+    let a = &test_file!("a", "0 = $a::*::test", TestRef("b::test".into()));
+    let d = &test_file!(
+        "d",
+        "0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let a_b_test = &test_file!(
+        "a::b::test",
+        "0 = integration::Test { x: -5, y: 5 }",
+        Test { x: -5, y: 5 },
+    );
+    let a_c_test = &test_file!("a::c::test", "0 = $d", TestRef("d".into()));
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        // a and a_c_test will be delayed (they reference assets that aren't registered when they
+        // are processed)
+        // then a will be processed first (before a_c_test is registered)
+        // we want to ensure an error is still produced in this case
+        // right now it seems to be caught later on in the convert_values step
+        &[a_b_test, a, a_c_test, d],
+    );
+}

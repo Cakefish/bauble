@@ -1,6 +1,7 @@
 use crate::context::{AssetKind, BaubleContext, PathReference};
 use crate::path::{TypePath, TypePathElem};
 use crate::types::TypeId;
+use crate::value::AmbiguousWithIdent;
 use indexmap::IndexMap;
 
 fn try_reduce_option<T>(
@@ -108,19 +109,23 @@ struct EarlyPathReference {
 }
 
 impl EarlyPathReference {
-    /// Overrides references of `self` with references of `other`, returns true if
-    /// anything was overriden.
-    fn combine_override(&mut self, other: Self) -> bool {
-        let mut o = false;
-        if other.asset.is_some() {
-            o = true;
-            self.asset = other.asset;
+    /// Combine references of `self` with references of `other`.
+    ///
+    /// If there is a collision, `self` will be unchanged and this returns `false`.
+    fn combine(&mut self, other: Self) -> bool {
+        if self.asset.is_some() && other.asset.is_some()
+            || self.module.is_some() && other.module.is_some()
+        {
+            false
+        } else {
+            if other.asset.is_some() {
+                self.asset = other.asset;
+            }
+            if other.module.is_some() {
+                self.module = other.module;
+            }
+            true
         }
-        if other.module.is_some() {
-            o = true;
-            self.module = other.module;
-        }
-        o
     }
 }
 
@@ -328,39 +333,50 @@ impl<'a> EarlyContext<'a> {
     /// `ident`.
     ///
     /// Returns the [`PathReference`] from [`CtxNode::reference`]. If multiple nodes are found with
-    /// `ident`, the refs from these will be combined (potentially overriding each other).
+    /// `ident`, they will be combined and this will return an error if they have items in the same
+    /// namespace.
     ///
     /// Looks up from both pending items and items already registered in [`BaubleContext`].
     pub fn ref_with_ident(
         &self,
         path: TypePath<&str>,
         ident: TypePathElem<&str>,
-    ) -> Option<CombinedPathReference> {
+    ) -> Result<Option<CombinedPathReference>, AmbiguousWithIdent> {
+        let mut collided = false;
         let a = self
             .ctx
-            .ref_with_ident(path, ident)
+            .ref_with_ident(path, ident)?
             .map(CombinedPathReference::from);
         let b = self.root_node.node_at(path).and_then(|node| {
             node.iter_all_children(None)
                 .filter(|node| node.path.ends_with(*ident.borrow()))
                 .map(|node| node.reference())
-                .reduce(|a, mut b| {
-                    // TODO: produce error when multiple results collide.
-                    b.combine_override(a);
-                    b
+                .reduce(|mut a, b| {
+                    if !a.combine(b) {
+                        collided = true;
+                    }
+                    a
                 })
         });
+        if collided {
+            return Err(AmbiguousWithIdent {
+                path: path.to_owned(),
+                ident: ident.to_owned(),
+            });
+        }
 
-        // TODO: produce error on collision instead of panicking
-        if let Some(mut a) = a {
+        Ok(if let Some(mut a) = a {
             if let Some(b) = b {
-                a.combine_early(b).unwrap();
+                a.combine_early(b).map_err(|()| AmbiguousWithIdent {
+                    path: path.to_owned(),
+                    ident: ident.to_owned(),
+                })?;
             }
 
             Some(a)
         } else {
             b.map(CombinedPathReference::from)
-        }
+        })
     }
 
     /// Takes a path to a module in bauble, and if the path is valid, return the meta information

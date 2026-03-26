@@ -2,6 +2,7 @@ use crate::{
     Bauble, BaubleAllocator, BaubleErrors,
     path::{TypePath, TypePathElem},
     types::{BaubleTrait, TypeId, TypeRegistry},
+    value::AmbiguousWithIdent,
 };
 use indexmap::IndexMap;
 
@@ -73,23 +74,17 @@ impl PathReference {
         })
     }
 
-    /// Overrides references of `self` with references of `other`, returns true if
-    /// anything was overriden.
-    pub fn combine_override(&mut self, other: Self) -> bool {
-        let mut o = false;
+    /// Overrides references of `self` with references of `other`.
+    pub fn combine_override(&mut self, other: Self) {
         if other.ty.is_some() {
-            o = true;
             self.ty = other.ty;
         }
         if other.asset.is_some() {
-            o = true;
             self.asset = other.asset;
         }
         if other.module.is_some() {
-            o = true;
             self.module = other.module;
         }
-        o
     }
 }
 
@@ -760,24 +755,38 @@ impl BaubleContext {
     /// `ident`.
     ///
     /// Returns the [`PathReference`] from [`CtxNode::reference`]. If multiple nodes are found with
-    /// `ident`, the refs from these will be combined (potentially overriding each other).
-    //
-    // TODO: couldn't this overriding lead to unexpected behavior? Should we return an error when
-    // there are multiple results in the same namespace?
+    /// `ident`, they will be combined and this will return an error if they have items in the same
+    /// namespace.
     pub fn ref_with_ident(
         &self,
         path: TypePath<&str>,
         ident: TypePathElem<&str>,
-    ) -> Option<PathReference> {
-        self.root_node.node_at(path).and_then(|node| {
-            node.iter_all_children(None)
+    ) -> Result<Option<PathReference>, AmbiguousWithIdent> {
+        if let Some(node) = self.root_node.node_at(path) {
+            let mut combined = None::<PathReference>;
+            for reference in node
+                .iter_all_children(None)
                 .filter(|node| node.path.ends_with(*ident.borrow()))
                 .map(|node| node.reference(&self.root_node))
-                .reduce(|a, mut b| {
-                    b.combine_override(a);
-                    b
-                })
-        })
+            {
+                let new = if let Some(combined) = combined.take() {
+                    let Some(new) = combined.combined(reference) else {
+                        // collision if `combined()` returns `None`
+                        return Err(AmbiguousWithIdent {
+                            path: path.to_owned(),
+                            ident: ident.to_owned(),
+                        });
+                    };
+                    new
+                } else {
+                    reference
+                };
+                combined = Some(new);
+            }
+            Ok(combined)
+        } else {
+            Ok(None)
+        }
     }
 
     /// If there is any associated file for `path`, get the ID of that file.

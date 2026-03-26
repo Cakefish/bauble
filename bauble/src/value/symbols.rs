@@ -124,7 +124,11 @@ impl<'a> Symbols<'a> {
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
                     let path_end =
                         TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                    if let Some(reference) = this.ctx.ref_with_ident(leading.borrow(), path_end) {
+                    if let Some(reference) = this
+                        .ctx
+                        .ref_with_ident(leading.borrow(), path_end)
+                        .map_err(|e| e.spanned(ident.span))?
+                    {
                         this.add_ref(path_end.to_owned(), reference)
                             .map_err(|e| e.spanned(ident.span))?;
                     } else {
@@ -296,6 +300,7 @@ impl<'a> Symbols<'a> {
             PathKind::Indirect(path, ident) => self
                 .ctx
                 .ref_with_ident(path.borrow(), ident.borrow())
+                .map_err(|e| e.spanned(raw_path.span()))?
                 .map(Cow::Owned),
         };
 
@@ -461,7 +466,11 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                 PathTreeEnd::PathEnd(PathEnd::WithIdent(ident)) => {
                     let path_end =
                         TypePathElem::new(ident.as_str()).map_err(|e| e.spanned(ident.span))?;
-                    if let Some(reference) = this.ctx.ref_with_ident(leading.borrow(), path_end) {
+                    if let Some(reference) = this
+                        .ctx
+                        .ref_with_ident(leading.borrow(), path_end)
+                        .map_err(|e| e.spanned(ident.span))?
+                    {
                         this.add_ref(path_end.to_owned(), reference)
                             .map_err(|e| e.spanned(ident.span))?;
                     } else {
@@ -636,6 +645,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
             PathKind::Indirect(path, ident) => self
                 .ctx
                 .ref_with_ident(path.borrow(), ident.borrow())
+                .map_err(|e| e.spanned(raw_path.span()))?
                 .map(Cow::Owned),
         };
 

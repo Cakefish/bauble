@@ -25,7 +25,7 @@ pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
 use early_context::CombinedPathReference;
 pub(crate) use early_context::EarlyContext;
 use error::Result;
-pub use error::{ConversionError, RefError, RefKind};
+pub use error::{AmbiguousWithIdent, ConversionError, RefError, RefKind};
 use symbols::EarlySymbols;
 pub(crate) use symbols::Symbols;
 
@@ -576,6 +576,7 @@ impl PathKind {
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
 ///
 /// What they are referencing needs to be loaded in order to determine their type.
+#[derive(Debug)]
 pub(crate) struct DelayedRegister {
     asset: Spanned<TypePath>,
     asset_kind: crate::AssetKind,
@@ -596,10 +597,17 @@ pub(crate) fn resolve_delayed(
         delayed.retain(|d| {
             if let Some(r) = match &d.reference.value {
                 PathKind::Direct(path) => ctx.get_ref(path.borrow()),
-                // TODO: what if indirect path becomes ambiguous due to later registered items that
-                // were delayed?
+                // NOTE: If indirect path becomes ambiguous due to later registered items that
+                // were delayed, then we can miss that here. However, this will be caught later in
+                // `convert_values` when resolving this to a concrete path via `get_asset`.
                 PathKind::Indirect(path, ident) => {
-                    ctx.ref_with_ident(path.borrow(), ident.borrow())
+                    match ctx.ref_with_ident(path.borrow(), ident.borrow()) {
+                        Ok(reference) => reference,
+                        Err(e) => {
+                            errors.push(e.spanned(d.reference.span).into());
+                            return false;
+                        }
+                    }
                 }
             } && let Some((ty, _, _)) = &r.asset
             {
@@ -619,7 +627,13 @@ pub(crate) fn resolve_delayed(
                     let Some(desired_ty) = (match path {
                         PathKind::Direct(path) => ctx.get_ref(path.borrow()),
                         PathKind::Indirect(path, ident) => {
-                            ctx.ref_with_ident(path.borrow(), ident.borrow())
+                            match ctx.ref_with_ident(path.borrow(), ident.borrow()) {
+                                Ok(reference) => reference,
+                                Err(e) => {
+                                    errors.push(e.spanned(span).into());
+                                    return false;
+                                }
+                            }
                         }
                     }) else {
                         errors.push(
@@ -684,28 +698,32 @@ pub(crate) fn resolve_delayed(
             }
 
             for scc in petgraph::algo::tarjan_scc(&graph) {
-                if scc.len() == 1 {
-                    if map[&scc[0]].could_be(scc[0].borrow()) {
+                // len == 1
+                if let [referer] = scc.as_slice() {
+                    let referenced = map[referer];
+                    if referenced.could_be(referer.borrow()) {
                         // Ref refers to itself
                         errors.push(
                             ConversionError::Cycle(vec![(
-                                scc[0].to_string().spanned(scc[0].span),
-                                vec![map[&scc[0]].to_string().spanned(map[&scc[0]].span)],
+                                referer.map(|r| r.to_string()),
+                                vec![referenced.map(|r| r.to_string())],
                             )])
-                            .spanned(scc[0].span),
+                            .spanned(referer.span),
                         )
                     } else {
-                        // TODO: Is this path possible? Wouldn't Ref have to refer to itself for
-                        // scc.len() == 1?
+                        // In this case, `referer` remained unresolved because the referenced asset
+                        // is not available. This means an error occured when processing the
+                        // referenced asset above, or the referenced asset itself has a cycle error
+                        // or this error.
                         errors.push(
                             ConversionError::RefError(Box::new(RefError {
                                 // TODO: Could pass uses here for better suggestions.
                                 uses: None,
-                                path: map[&scc[0]].value.clone(),
+                                path: referenced.value.clone(),
                                 path_ref: PathReference::empty().into(),
                                 kind: RefKind::Asset,
                             }))
-                            .spanned(map[&scc[0]].span),
+                            .spanned(referenced.span),
                         )
                     }
                 } else {
