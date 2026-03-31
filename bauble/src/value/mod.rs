@@ -580,7 +580,10 @@ impl PathKind {
 pub(crate) struct DelayedRegister {
     asset: Spanned<TypePath>,
     asset_kind: crate::AssetKind,
-    reference: Spanned<PathKind>,
+    /// Full path to the referenced asset.
+    reference: TypePath,
+    /// Unresolved path to the referenced asset.
+    reference_original: Spanned<Path>,
     /// The type we want a potential reference to resolve into.
     expected_ty_path: Option<Spanned<PathKind>>,
 }
@@ -595,21 +598,8 @@ pub(crate) fn resolve_delayed(
 
         // Try to register delayed registers, and remove them as they succeed.
         delayed.retain(|d| {
-            if let Some(r) = match &d.reference.value {
-                PathKind::Direct(path) => ctx.get_ref(path.borrow()),
-                // NOTE: If indirect path becomes ambiguous due to later registered items that
-                // were delayed, then we can miss that here. However, this will be caught later in
-                // `convert_values` when resolving this to a concrete path via `get_asset`.
-                PathKind::Indirect(path, ident) => {
-                    match ctx.ref_with_ident(path.borrow(), ident.borrow()) {
-                        Ok(reference) => reference,
-                        Err(e) => {
-                            errors.push(e.spanned(d.reference.span).into());
-                            return false;
-                        }
-                    }
-                }
-            } && let Some((ty, _, _)) = &r.asset
+            if let Some(r) = ctx.get_ref(d.reference.borrow())
+                && let Some((ty, _, _)) = &r.asset
             {
                 // TODO: for now, it is assumed all references which explicitly
                 // specify their inner type should have that inner type resolved
@@ -688,10 +678,10 @@ pub(crate) fn resolve_delayed(
             let mut map = HashMap::new();
             for a in delayed.iter() {
                 let node_a = graph.add_node(a.asset.as_ref().map(|p| p.borrow()));
-                map.insert(node_a, a.reference.as_ref());
+                map.insert(node_a, (&a.reference, &a.reference_original));
 
                 for b in delayed.iter() {
-                    if a.reference.could_be(b.asset.borrow()) {
+                    if a.reference == *b.asset {
                         graph.add_edge(node_a, b.asset.as_ref().map(|p| p.borrow()), ());
                     }
                 }
@@ -700,46 +690,39 @@ pub(crate) fn resolve_delayed(
             for scc in petgraph::algo::tarjan_scc(&graph) {
                 // len == 1
                 if let [referer] = scc.as_slice() {
-                    let referenced = map[referer];
-                    if referenced.could_be(referer.borrow()) {
+                    let (referenced, referenced_original) = map[referer];
+                    if referenced.borrow() == **referer {
                         // Ref refers to itself
                         errors.push(
                             ConversionError::Cycle(vec![(
                                 referer.map(|r| r.to_string()),
-                                vec![referenced.map(|r| r.to_string())],
+                                vec![referenced_original.as_ref().map(|r| r.to_string())],
                             )])
                             .spanned(referer.span),
                         )
                     } else {
-                        // In this case, `referer` remained unresolved because the referenced asset
-                        // is not available. This means an error occured when processing the
-                        // referenced asset above, or the referenced asset itself has a cycle error
-                        // or this error.
+                        // We make sure that the referenced asset exists in the pre-registered
+                        // assets before producing `DelayedRegister`. So this error will only occur
+                        // if the referenced asset's type failed to resolve (such that it wasn't
+                        // registered in resolve_delayed).
                         errors.push(
-                            ConversionError::RefError(Box::new(RefError {
-                                // TODO: Could pass uses here for better suggestions.
-                                uses: None,
-                                path: referenced.value.clone(),
-                                path_ref: PathReference::empty().into(),
-                                kind: RefKind::Asset,
-                            }))
-                            .spanned(referenced.span),
-                        )
+                            ConversionError::Custom(crate::CustomError::new(format!(
+                                "{referenced_original} refers to an asset that failed to register",
+                            )))
+                            .spanned(referenced_original.span),
+                        );
                     }
                 } else {
-                    errors.push(
-                        ConversionError::Cycle(
-                            scc.iter()
-                                .map(|s| {
-                                    (
-                                        s.to_string().spanned(s.span),
-                                        vec![map[s].to_string().spanned(map[s].span)],
-                                    )
-                                })
-                                .collect(),
-                        )
-                        .spanned(scc[0].span),
-                    );
+                    let cycle = scc
+                        .iter()
+                        .map(|s| {
+                            (
+                                s.to_string().spanned(s.span),
+                                vec![map[s].1.as_ref().map(|r| r.to_string())],
+                            )
+                        })
+                        .collect();
+                    errors.push(ConversionError::Cycle(cycle).spanned(scc[0].span));
                 }
             }
 
@@ -891,13 +874,24 @@ pub(crate) fn register_assets(
                 });
 
             if res.is_err()
-                && let Value::Ref(reference) = &*binding.value.value
-                // TODO: Will the error be helpful when this part fails, since
-                // we just pass on the error from an earlier step?
-                && let Ok(reference) = symbols.resolve_path(reference, symbols::ResolveKind::Asset)
+                && let Value::Ref(ref_path) = &*binding.value.value
+                // Note: If this fails, then `value_type()` would have produced the same error
+                // already in `res` from calling `symbols.resolve_asset_type()` which uses
+                // `resolve_path` internally. So there is no extra information from this error.
+                //
+                // We use `resolve_asset` instead of just `resolve_path` because the asset should
+                // exist due to `pre_register_assets` or we will invevitably produce an error
+                // anyway, and the errors produced in register_assets are better than
+                // `resolve_delayed` because `symbols.uses` is available.
+                && let Ok((maybe_ty, reference)) = symbols.resolve_asset(ref_path)
             {
+                debug_assert!(
+                    maybe_ty.is_none(),
+                    "value_type should not produce an error if the referenced type is known"
+                );
                 let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
-                    // Resolving to a full path won't fail even if the reference type is not yet registered.
+                    // Resolving to a full path won't fail even if the reference type is not yet
+                    // registered.
                     match symbols.resolve_path(expected_ty_path, symbols::ResolveKind::Type) {
                         Ok(s) => Some(s),
                         Err(e) => {
@@ -910,10 +904,11 @@ pub(crate) fn register_assets(
                 };
 
                 delayed.push(DelayedRegister {
-                    expected_ty_path,
-                    asset_kind: kind,
                     asset: path.spanned(span),
+                    asset_kind: kind,
                     reference,
+                    reference_original: ref_path.clone().spanned(binding.value.span()),
+                    expected_ty_path,
                 });
                 continue;
             }

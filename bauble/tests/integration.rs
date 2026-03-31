@@ -927,3 +927,25 @@ fn amiguous_ref_with_ident_multilayer() {
         &[a_b_test, a, a_c_test, d],
     );
 }
+
+/// Test for error message suggesting local asset.
+#[test]
+#[should_panic = " Did you mean `test`?"]
+fn local_asset_suggested() {
+    let a = &test_file!(
+        "a",
+        "\n\
+        0 = $tet\n\
+        test = integration::Test { x: -5, y: 5 }",
+        TestRef("a::test".into()),
+        Test { x: -5, y: 5 },
+    );
+
+    test_load(
+        &|ctx| {
+            ctx.register_type::<Test, _>();
+        },
+        // Test when the referencing file is loaded before the referenced file
+        &[a],
+    );
+}

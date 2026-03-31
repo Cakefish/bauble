@@ -578,6 +578,8 @@ impl BaubleError for Spanned<ConversionError> {
                         if path.len() == 1
                             && let Some(uses) = &ref_err.uses
                         {
+                            // TODO: suggestions from `uses` could be improved by filtering by the
+                            // desired `kind`.
                             if let Some(suggestions) = get_suggestions(
                                 uses.iter().map(|ident| ident.as_str()).chain(options),
                                 path.as_str(),
@@ -645,6 +647,9 @@ impl BaubleError for Spanned<ConversionError> {
     }
 
     fn help(&self, ctx: &BaubleContext) -> Option<Cow<'static, str>> {
+        // The case where the user has some use statements (or local assets), but the `ident` they
+        // are using wasn't available in `uses`. This suggests potential items with a matching
+        // ident at the end of their path that could be brought into scope with a `use`.
         if let ConversionError::RefError(ref_err) = &self.value
             && ref_err.uses.is_some()
             && let PathKind::Direct(ident) = &ref_err.path

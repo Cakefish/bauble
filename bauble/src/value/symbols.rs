@@ -675,6 +675,23 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
         })
     }
 
+    /// Note, if an asset isn't registered in `BaubleContext` yet, its type will be unknown.
+    pub fn resolve_asset(&self, path: &Path) -> Result<(Option<TypeId>, TypePath)> {
+        let item = self.resolve_item(path, ResolveKind::Asset)?.into_owned();
+
+        if let Some((ty, path, _kind)) = item.asset {
+            Ok((ty, path))
+        } else {
+            Err(ConversionError::RefError(Box::new(RefError {
+                uses: Some(self.uses.keys().cloned().collect()),
+                path: self.resolve_path(path, ResolveKind::Asset)?.value,
+                path_ref: item,
+                kind: RefKind::Asset,
+            }))
+            .spanned(path.span()))
+        }
+    }
+
     pub fn resolve_type(&self, path: &Path) -> Result<TypeId> {
         let item = self.resolve_item(path, ResolveKind::Type)?;
 
@@ -715,19 +732,7 @@ impl SymbolsCommon for Symbols<'_> {
 impl SymbolsCommon for EarlySymbols<'_, '_> {
     /// Note, if an asset isn't registered in `BaubleContext` yet, its type will be unknown.
     fn resolve_asset_type(&self, path: &Path) -> Result<Option<TypeId>> {
-        let item = self.resolve_item(path, ResolveKind::Asset)?.into_owned();
-
-        if let Some((ty, _path, _kind)) = item.asset {
-            Ok(ty)
-        } else {
-            Err(ConversionError::RefError(Box::new(RefError {
-                uses: Some(self.uses.keys().cloned().collect()),
-                path: self.resolve_path(path, ResolveKind::Asset)?.value,
-                path_ref: item,
-                kind: RefKind::Asset,
-            }))
-            .spanned(path.span()))
-        }
+        self.resolve_asset(path).map(|(ty, _path)| ty)
     }
 
     fn resolve_type(&self, path: &Path) -> Result<TypeId> {
