@@ -91,6 +91,19 @@ impl CombinedPathReference {
             module: xor_option(self.module, other.module)?,
         })
     }
+
+    /// Overrides references of `self` with references of `other`.
+    pub(super) fn combine_override(&mut self, other: Self) {
+        if other.ty.is_some() {
+            self.ty = other.ty;
+        }
+        if other.asset.is_some() {
+            self.asset = other.asset;
+        }
+        if other.module.is_some() {
+            self.module = other.module;
+        }
+    }
 }
 
 /// A type containing multiple references generally derived from a path.

@@ -15,7 +15,7 @@ use super::{ConversionError, EarlyContext, PathKind, RefError, RefKind, Result};
 /// Indicates kind of item being resolved by [`Symbols::resolve_path`] or
 /// [`EarlySymbols::resolve_path`].
 #[derive(Clone, Copy)]
-pub(crate) enum ResolveKind {
+enum ResolveKind {
     Type,
     Asset,
 }
@@ -27,6 +27,18 @@ impl From<ResolveKind> for RefKind {
             ResolveKind::Asset => RefKind::Asset,
         }
     }
+}
+
+fn generic_with_non_type_error(raw_path: &Path) -> Spanned<ConversionError> {
+    ConversionError::Custom(CustomError::new("Cannot use generics for non-type paths"))
+        .spanned(raw_path.span())
+}
+
+fn generic_param_using_with_ident(span: crate::Span) -> Spanned<ConversionError> {
+    ConversionError::Custom(CustomError::new(
+        "Cannot use path::*::ident syntax in generic parameters",
+    ))
+    .spanned(span)
 }
 
 /// Representation of item names available in the current module.
@@ -212,65 +224,82 @@ impl<'a> Symbols<'a> {
             }
         }
 
-        let generic_with_non_type_error = || {
-            ConversionError::Custom(CustomError::new("Cannot use generics for non-type paths"))
-                .spanned(raw_path.span())
-        };
         let path = match &raw_path.last.value {
             PathEnd::WithIdent(ident) => PathKind::Indirect(
                 leading,
                 TypePathElem::new(ident.to_string()).map_err(|p| p.spanned(raw_path.span()))?,
             ),
             PathEnd::Ident(ident) => {
-                let used = if leading.is_empty() {
-                    self.uses.get(ident.as_str())
-                } else {
-                    None
-                };
-                let path = if let Some(r) = used
-                    && let ResolveKind::Type = kind
-                    && let Some(ty) = r.ty
-                {
-                    self.ctx.type_registry().key_type(ty).meta.path.clone()
-                } else if let Some(r) = used
-                    && let ResolveKind::Asset = kind
-                    && let Some((_ty, path, _kind)) = &r.asset
-                {
-                    path.clone()
-                } else {
-                    leading
-                        .push_str(ident.as_str())
-                        .map_err(|p| p.spanned(raw_path.span()))?;
-                    leading
-                };
-                PathKind::Direct(path)
+                leading
+                    .push_str(ident.as_str())
+                    .map_err(|p| p.spanned(raw_path.span()))?;
+                PathKind::Direct(leading)
             }
             PathEnd::WithIdentGeneric(ident, generic) => {
                 if !matches!(kind, ResolveKind::Type) {
-                    return Err(generic_with_non_type_error());
+                    return Err(generic_with_non_type_error(raw_path));
                 }
                 let generic = self.resolve_path(&generic.value, ResolveKind::Type)?;
+                let inner_path = match &generic.value {
+                    PathKind::Direct(generic) => {
+                        if let Some(r) = self.uses.get(generic.as_str())
+                            && let Some(ty) = r.ty
+                        {
+                            &self.ctx.type_registry().key_type(ty).meta.path
+                        } else {
+                            generic
+                        }
+                    }
+                    PathKind::Indirect(_, _) => {
+                        return Err(generic_param_using_with_ident(generic.span));
+                    }
+                };
                 PathKind::Indirect(
                     leading,
-                    TypePathElem::new(format!("{ident}<{generic}>"))
+                    TypePathElem::new(format!("{ident}<{inner_path}>"))
                         .map_err(|p| p.spanned(raw_path.span()))?,
                 )
             }
             PathEnd::IdentGeneric(ident, generic) => {
                 if !matches!(kind, ResolveKind::Type) {
-                    return Err(generic_with_non_type_error());
+                    return Err(generic_with_non_type_error(raw_path));
                 }
+
+                // The outer type and inner parameter in generic types need to be fully expanded
+                // based on `uses` here (since the resolved path for a concrete instance of the
+                // generic type only makes sense to lookup via full paths in the context and not
+                // via `uses`).
+
+                // Note: We could use `resolve_type` for the parameter to simplify computing
+                // `inner_path` except there are cases with reference types where the ref type
+                // isn't registered until an asset with the type is registered. So if there was
+                // `MyGeneric<Ref<MyType>>`, then calling `resolve_type` here could fail.
                 let generic = self.resolve_path(&generic.value, ResolveKind::Type)?;
+                let inner_path = match &generic.value {
+                    PathKind::Direct(generic) => {
+                        if let Some(r) = self.uses.get(generic.as_str())
+                            && let Some(ty) = r.ty
+                        {
+                            &self.ctx.type_registry().key_type(ty).meta.path
+                        } else {
+                            generic
+                        }
+                    }
+                    PathKind::Indirect(_, _) => {
+                        return Err(generic_param_using_with_ident(generic.span));
+                    }
+                };
+
                 let path = if leading.is_empty()
                     && let Some(r) = self.uses.get(ident.as_str())
                     && let Some(ty) = r.ty
                 {
                     let outer_path = &self.ctx.type_registry().key_type(ty).meta.path;
-                    TypePath::new(format!("{outer_path}<{generic}>"))
+                    TypePath::new(format!("{outer_path}<{inner_path}>"))
                         .map_err(|p| p.spanned(raw_path.span()))?
                 } else {
                     leading
-                        .push_str(&format!("{ident}<{generic}>"))
+                        .push_str(&format!("{ident}<{inner_path}>"))
                         .map_err(|p| p.spanned(raw_path.span()))?;
                     leading
                 };
@@ -280,23 +309,30 @@ impl<'a> Symbols<'a> {
         Ok(path.spanned(raw_path.span()))
     }
 
-    /// Note, the returned `PathReference` only makes sense to use for the `kind` passed here. The
-    /// same path for a different `kind` may return a different `PathReference`.
-    fn resolve_item(&self, raw_path: &Path, kind: ResolveKind) -> Result<Cow<'_, PathReference>> {
-        // NOTE: This resolves the full path referred to via `uses`. This is unnecessary in many
-        // cases because there is a `PathReference` is available in `self.uses`.
-        //
-        // However, there would be a few complications:
-        // 1. Paths for generic types always need to be fully resolved.
-        // 2. If a particular identifier is available at the root of the `BaubleContext` in one
-        //    namespace (e.g. type namespace) and in `self.uses` in another namespace (e.g. asset
-        //    namespace) then we could miss something if we naively return the `PathReference` from
-        //    `self.uses` (we would need to at least check `BaubleContext` if the `kind` of item
-        //    was `None` in `self.uses`).
+    fn resolve_item(
+        &self,
+        raw_path: &Path,
+        kind: ResolveKind,
+    ) -> Result<(Cow<'_, PathReference>, PathKind)> {
         let path = self.resolve_path(raw_path, kind)?;
 
         let reference = match &path.value {
-            PathKind::Direct(path) => self.ctx.get_ref(path.borrow()).map(Cow::Owned),
+            PathKind::Direct(path) => {
+                let r_uses = self.uses.get(path.as_str());
+                let r_ctx = self.ctx.get_ref(path.borrow());
+                // There can be overlap between items that are children of the root of ctx and the
+                // uses here. Items from uses take priority and collisions aren't errors.
+                if let Some(r_uses) = r_uses {
+                    Some(if let Some(mut r_ctx) = r_ctx {
+                        r_ctx.combine_override(r_uses.clone());
+                        Cow::Owned(r_ctx)
+                    } else {
+                        Cow::Borrowed(r_uses)
+                    })
+                } else {
+                    r_ctx.map(Cow::Owned)
+                }
+            }
             PathKind::Indirect(path, ident) => self
                 .ctx
                 .ref_with_ident(path.borrow(), ident.borrow())
@@ -304,16 +340,17 @@ impl<'a> Symbols<'a> {
                 .map(Cow::Owned),
         };
 
-        reference.ok_or_else(|| {
-            if let PathKind::Direct(path) = &*path
+        if let Some(reference) = reference {
+            Ok((reference, path.value))
+        } else {
+            Err(if let PathKind::Direct(path) = &*path
                 && let Some((leading, ident)) = path.get_end()
                 && let Some(r) = self.ctx.get_ref(leading)
                 && let Some(ty) = r.ty
                 && matches!(
                     self.ctx.type_registry().key_type(ty).kind,
                     types::TypeKind::Enum { .. } | types::TypeKind::Or(_)
-                )
-            {
+                ) {
                 ConversionError::UnknownVariant {
                     variant: ident.to_owned().spanned(raw_path.last.span),
                     ty,
@@ -326,19 +363,20 @@ impl<'a> Symbols<'a> {
                     kind: kind.into(),
                 }))
             }
-            .spanned(raw_path.span())
-        })
+            .spanned(raw_path.span()))
+        }
     }
 
     pub fn resolve_asset(&self, path: &Path) -> Result<(TypeId, TypePath)> {
-        let item = self.resolve_item(path, ResolveKind::Asset)?.into_owned();
+        let (item, resolved_path) = self.resolve_item(path, ResolveKind::Asset)?;
+        let item = item.into_owned();
 
         if let Some((ty, path, _kind)) = item.asset {
             Ok((ty, path))
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
-                path: self.resolve_path(path, ResolveKind::Asset)?.value,
+                path: resolved_path,
                 path_ref: item.into(),
                 kind: RefKind::Asset,
             }))
@@ -347,14 +385,14 @@ impl<'a> Symbols<'a> {
     }
 
     pub fn resolve_type(&self, path: &Path) -> Result<TypeId> {
-        let item = self.resolve_item(path, ResolveKind::Type)?;
+        let (item, resolved_path) = self.resolve_item(path, ResolveKind::Type)?;
 
         if let Some(ty) = item.ty {
             Ok(ty)
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
-                path: self.resolve_path(path, ResolveKind::Type)?.value,
+                path: resolved_path,
                 path_ref: item.into_owned().into(),
                 kind: RefKind::Type,
             }))
@@ -516,7 +554,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
             .and_then(|reference| reference.module.clone())
     }
 
-    pub fn resolve_path(&self, raw_path: &Path, kind: ResolveKind) -> Result<Spanned<PathKind>> {
+    fn resolve_path(&self, raw_path: &Path, kind: ResolveKind) -> Result<Spanned<PathKind>> {
         let mut leading = TypePath::empty();
 
         let mut path_iter = raw_path.leading.iter();
@@ -554,65 +592,75 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
             }
         }
 
-        let generic_with_non_type_error = || {
-            ConversionError::Custom(CustomError::new("Cannot use generics for non-type paths"))
-                .spanned(raw_path.span())
-        };
         let path = match &raw_path.last.value {
             PathEnd::WithIdent(ident) => PathKind::Indirect(
                 leading,
                 TypePathElem::new(ident.to_string()).map_err(|p| p.spanned(raw_path.span()))?,
             ),
             PathEnd::Ident(ident) => {
-                let used = if leading.is_empty() {
-                    self.uses.get(ident.as_str())
-                } else {
-                    None
-                };
-                let path = if let Some(r) = used
-                    && let ResolveKind::Type = kind
-                    && let Some(ty) = r.ty
-                {
-                    self.ctx.type_registry().key_type(ty).meta.path.clone()
-                } else if let Some(r) = used
-                    && let ResolveKind::Asset = kind
-                    && let Some((_ty, path, _kind)) = &r.asset
-                {
-                    path.clone()
-                } else {
-                    leading
-                        .push_str(ident.as_str())
-                        .map_err(|p| p.spanned(raw_path.span()))?;
-                    leading
-                };
-                PathKind::Direct(path)
+                leading
+                    .push_str(ident.as_str())
+                    .map_err(|p| p.spanned(raw_path.span()))?;
+                PathKind::Direct(leading)
             }
             PathEnd::WithIdentGeneric(ident, generic) => {
                 if !matches!(kind, ResolveKind::Type) {
-                    return Err(generic_with_non_type_error());
+                    return Err(generic_with_non_type_error(raw_path));
                 }
+
                 let generic = self.resolve_path(&generic.value, ResolveKind::Type)?;
+                let inner_path = match &generic.value {
+                    PathKind::Direct(generic) => {
+                        if let Some(r) = self.uses.get(generic.as_str())
+                            && let Some(ty) = r.ty
+                        {
+                            &self.ctx.type_registry().key_type(ty).meta.path
+                        } else {
+                            generic
+                        }
+                    }
+                    PathKind::Indirect(_, _) => {
+                        return Err(generic_param_using_with_ident(generic.span));
+                    }
+                };
+
                 PathKind::Indirect(
                     leading,
-                    TypePathElem::new(format!("{ident}<{generic}>"))
+                    TypePathElem::new(format!("{ident}<{inner_path}>"))
                         .map_err(|p| p.spanned(raw_path.span()))?,
                 )
             }
             PathEnd::IdentGeneric(ident, generic) => {
                 if !matches!(kind, ResolveKind::Type) {
-                    return Err(generic_with_non_type_error());
+                    return Err(generic_with_non_type_error(raw_path));
                 }
+
                 let generic = self.resolve_path(&generic.value, ResolveKind::Type)?;
+                let inner_path = match &generic.value {
+                    PathKind::Direct(generic) => {
+                        if let Some(r) = self.uses.get(generic.as_str())
+                            && let Some(ty) = r.ty
+                        {
+                            &self.ctx.type_registry().key_type(ty).meta.path
+                        } else {
+                            generic
+                        }
+                    }
+                    PathKind::Indirect(_, _) => {
+                        return Err(generic_param_using_with_ident(generic.span));
+                    }
+                };
+
                 let path = if leading.is_empty()
                     && let Some(r) = self.uses.get(ident.as_str())
                     && let Some(ty) = r.ty
                 {
                     let outer_path = &self.ctx.type_registry().key_type(ty).meta.path;
-                    TypePath::new(format!("{outer_path}<{generic}>"))
+                    TypePath::new(format!("{outer_path}<{inner_path}>"))
                         .map_err(|p| p.spanned(raw_path.span()))?
                 } else {
                     leading
-                        .push_str(&format!("{ident}<{generic}>"))
+                        .push_str(&format!("{ident}<{inner_path}>"))
                         .map_err(|p| p.spanned(raw_path.span()))?;
                     leading
                 };
@@ -628,20 +676,26 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
         &self,
         raw_path: &Path,
         kind: ResolveKind,
-    ) -> Result<Cow<'_, CombinedPathReference>> {
-        // NOTE: Similar to `Symbols::resolve_item`, this resolves the full path referred which is
-        // often unneccessary.
-        //
-        // But avoiding this has the same complications along with an additional ones:
-        // 3. There are other uses of `resolve_path` that need a full path because the resolved
-        //    path needs to be looked up later when `EarlySymbols` is no longer available.
-        // 4. Once an asset is registered with its type, the path reference stored in `uses` will
-        //    be outdated since it won't include the type (an up-to-date value isn't essential but
-        //    would lead to fewer assets to process in resolve_delayed).
+    ) -> Result<(Cow<'_, CombinedPathReference>, PathKind)> {
         let path = self.resolve_path(raw_path, kind)?;
 
         let reference = match &path.value {
-            PathKind::Direct(path) => self.ctx.get_ref(path.borrow()).map(Cow::Owned),
+            PathKind::Direct(path) => {
+                let r_uses = self.uses.get(path.as_str());
+                let r_ctx = self.ctx.get_ref(path.borrow());
+                // There can be overlap between items that are children of the root of ctx and the
+                // uses here. Items from uses take priority and collisions aren't errors.
+                if let Some(r_uses) = r_uses {
+                    Some(if let Some(mut r_ctx) = r_ctx {
+                        r_ctx.combine_override(r_uses.clone());
+                        Cow::Owned(r_ctx)
+                    } else {
+                        Cow::Borrowed(r_uses)
+                    })
+                } else {
+                    r_ctx.map(Cow::Owned)
+                }
+            }
             PathKind::Indirect(path, ident) => self
                 .ctx
                 .ref_with_ident(path.borrow(), ident.borrow())
@@ -649,16 +703,17 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                 .map(Cow::Owned),
         };
 
-        reference.ok_or_else(|| {
-            if let PathKind::Direct(path) = &*path
+        if let Some(reference) = reference {
+            Ok((reference, path.value))
+        } else {
+            Err(if let PathKind::Direct(path) = &*path
                 && let Some((leading, ident)) = path.get_end()
                 && let Some(r) = self.ctx.get_ref(leading)
                 && let Some(ty) = r.ty
                 && matches!(
                     self.ctx.type_registry().key_type(ty).kind,
                     types::TypeKind::Enum { .. } | types::TypeKind::Or(_)
-                )
-            {
+                ) {
                 ConversionError::UnknownVariant {
                     variant: ident.to_owned().spanned(raw_path.last.span),
                     ty,
@@ -671,20 +726,52 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                     kind: kind.into(),
                 }))
             }
-            .spanned(raw_path.span())
-        })
+            .spanned(raw_path.span()))
+        }
+    }
+
+    /// Resolves full path without requiring that the type has been registered yet.
+    ///
+    /// Useful to later lookup the type when `EarlySymbols` is no longer available.
+    pub fn resolve_full_path_for_type(&self, path: &Path) -> Result<Spanned<PathKind>> {
+        let path = self.resolve_path(path, ResolveKind::Type)?;
+        Ok(match path.value {
+            PathKind::Direct(path) => {
+                if let Some(r) = self.uses.get(path.as_str())
+                    && let Some(ty) = r.ty
+                {
+                    PathKind::Direct(self.ctx.type_registry().key_type(ty).meta.path.clone())
+                } else {
+                    PathKind::Direct(path)
+                }
+            }
+            p @ PathKind::Indirect(_, _) => p,
+        }
+        .spanned(path.span))
     }
 
     /// Note, if an asset isn't registered in `BaubleContext` yet, its type will be unknown.
     pub fn resolve_asset(&self, path: &Path) -> Result<(Option<TypeId>, TypePath)> {
-        let item = self.resolve_item(path, ResolveKind::Asset)?.into_owned();
+        let (item, resolved_path) = self.resolve_item(path, ResolveKind::Asset)?;
+        let item = item.into_owned();
 
-        if let Some((ty, path, _kind)) = item.asset {
+        if let Some((mut ty, path, _kind)) = item.asset {
+            // Once an asset is registered with its type, the path reference stored in `uses` will
+            // be outdated since it won't include the type (an up-to-date value isn't essential but
+            // will lead to fewer assets to process in resolve_delayed).
+            if ty.is_none() {
+                ty = self
+                    .ctx
+                    .get_ref(path.borrow())
+                    .and_then(|r| r.asset)
+                    .expect("This asset is in uses, so it will exist in ctx.")
+                    .0;
+            }
             Ok((ty, path))
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
-                path: self.resolve_path(path, ResolveKind::Asset)?.value,
+                path: resolved_path,
                 path_ref: item,
                 kind: RefKind::Asset,
             }))
@@ -693,14 +780,14 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
     }
 
     pub fn resolve_type(&self, path: &Path) -> Result<TypeId> {
-        let item = self.resolve_item(path, ResolveKind::Type)?;
+        let (item, resolved_path) = self.resolve_item(path, ResolveKind::Type)?;
 
         if let Some(ty) = item.ty {
             Ok(ty)
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
-                path: self.resolve_path(path, ResolveKind::Type)?.value,
+                path: resolved_path,
                 path_ref: item.into_owned(),
                 kind: RefKind::Type,
             }))

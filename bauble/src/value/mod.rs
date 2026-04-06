@@ -559,18 +559,12 @@ impl std::fmt::Display for PathKind {
     }
 }
 
-impl PathKind {
-    fn could_be(&self, path: TypePath<&str>) -> bool {
-        match self {
-            PathKind::Direct(p) => p.borrow() == path,
-            PathKind::Indirect(leading, ident) => {
-                path.starts_with(leading.borrow())
-                    && path.ends_with(*ident.borrow())
-                    // If `leading` ends with `ident` we could have false positives if we didn't include this check.
-                    && path.byte_len() > leading.byte_len() + ident.byte_len()
-            }
-        }
-    }
+#[derive(Clone, Debug)]
+pub enum ObjectPath {
+    /// Top-level object or external asset. There is at most one per file.
+    Top(TypePath),
+    /// Local object. Can only be referenced from other objects in the same file.
+    Local(TypePath),
 }
 
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
@@ -892,7 +886,7 @@ pub(crate) fn register_assets(
                 let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
                     // Resolving to a full path won't fail even if the reference type is not yet
                     // registered.
-                    match symbols.resolve_path(expected_ty_path, symbols::ResolveKind::Type) {
+                    match symbols.resolve_full_path_for_type(expected_ty_path) {
                         Ok(s) => Some(s),
                         Err(e) => {
                             errors.push(e);
