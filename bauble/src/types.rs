@@ -18,7 +18,10 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{AdditionalUnspannedObjects, Bauble, BaubleAllocator, value::UnspannedVal};
+use crate::{
+    AdditionalUnspannedObjects, Bauble, BaubleAllocator, object_path::ObjectPath,
+    value::UnspannedVal,
+};
 
 #[allow(missing_docs)]
 pub type Extra = IndexMap<String, String>;
@@ -202,8 +205,8 @@ pub enum TypeSystemError<'a> {
     InstantiableErrors,
     ConstructInequality(String, UnspannedVal, UnspannedVal),
     MissingObjects {
-        instantiated_missing: Vec<TypePath>,
-        loaded_unknown: Vec<TypePath>,
+        instantiated_missing: Vec<ObjectPath>,
+        loaded_unknown: Vec<ObjectPath>,
     },
 }
 
@@ -559,6 +562,8 @@ impl TypeRegistry {
         }
         let file = TypePath::new("validate").unwrap();
 
+        // TODO: add dummy top level object
+
         if assert_instanciable {
             let mut objects = Vec::new();
             for (i, ty_id) in self
@@ -579,7 +584,7 @@ impl TypeRegistry {
                 let object_path = path_end.strip_generic().append(&format!("_{i}")).unwrap();
                 let object_name = object_path.get_end().unwrap().1;
 
-                let object_path = file.join(&object_name);
+                let object_path = ObjectPath::Local(file.join(&object_name));
 
                 let mut additonal = AdditionalUnspannedObjects::new(file, object_name.borrow());
 
@@ -590,19 +595,14 @@ impl TypeRegistry {
                     });
                 };
 
-                for (name, value) in additonal.into_objects() {
+                for (path, value) in additonal.into_objects() {
                     objects.push(crate::Object {
-                        object_path: file.join(&name),
-                        top_level: false,
+                        object_path: path,
                         value,
                     })
                 }
 
-                objects.push(crate::Object {
-                    object_path,
-                    top_level: false,
-                    value,
-                })
+                objects.push(crate::Object { object_path, value })
             }
 
             // Check that instantiated objects match after being serialized to bauble text and

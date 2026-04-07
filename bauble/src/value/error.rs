@@ -6,16 +6,22 @@ use crate::{
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
     types::{self, TypeId},
-    value::early_context::CombinedPathReference,
 };
 
 use super::{Ident, PathKind};
 
 #[derive(Clone, Debug)]
+pub struct ErrorPathReference {
+    pub(super) ty: bool,
+    pub(super) asset: bool,
+    pub(super) module: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct RefError {
     pub(super) uses: Option<HashSet<TypePathElem>>,
     pub(super) path: PathKind,
-    pub(super) path_ref: CombinedPathReference,
+    pub(super) path_ref: Option<ErrorPathReference>,
     pub(super) kind: RefKind,
 }
 
@@ -541,20 +547,20 @@ impl BaubleError for Spanned<ConversionError> {
                 return errors;
             }
             ConversionError::RefError(ref_err) => {
-                let inner = match (
-                    &ref_err.path_ref.module,
-                    &ref_err.path_ref.asset,
-                    &ref_err.path_ref.ty,
-                ) {
-                    (None, None, None) => "",
-                    (None, None, Some(_)) => ", but it refers to a type",
-                    (None, Some(_), None) => ", but it refers to an asset",
-                    (None, Some(_), Some(_)) => ", but it refers to an asset and a type",
-                    (Some(_), None, None) => ", but it refers to a module",
-                    (Some(_), None, Some(_)) => ", but it refers to a module and a type",
-                    (Some(_), Some(_), None) => ", but it refers to a module and an asset",
-                    (Some(_), Some(_), Some(_)) => "",
-                };
+                let inner =
+                    ref_err
+                        .path_ref
+                        .as_ref()
+                        .map_or("", |r| match (r.module, r.asset, r.ty) {
+                            (false, false, false) => "",
+                            (false, false, true) => ", but it refers to a type",
+                            (false, true, false) => ", but it refers to an asset",
+                            (false, true, true) => ", but it refers to an asset and a type",
+                            (true, false, false) => ", but it refers to a module",
+                            (true, false, true) => ", but it refers to a module and a type",
+                            (true, true, false) => ", but it refers to a module and an asset",
+                            (true, true, true) => "",
+                        });
                 let mut errs = vec![(
                     Spanned::new(
                         self.span,

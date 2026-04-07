@@ -1,27 +1,8 @@
-use crate::context::{AssetKind, BaubleContext, PathReference};
+use crate::context::{BaubleContext, PathReference};
 use crate::path::{TypePath, TypePathElem};
 use crate::types::TypeId;
 use crate::value::AmbiguousWithIdent;
 use indexmap::IndexMap;
-
-fn try_reduce_option<T>(
-    a: Option<T>,
-    b: Option<T>,
-    f: impl FnOnce(T, T) -> Result<T, ()>,
-) -> Result<Option<T>, ()> {
-    match (a, b) {
-        (Some(a), Some(b)) => f(a, b).map(Some),
-        (Some(t), None) | (None, Some(t)) => Ok(Some(t)),
-        (None, None) => Ok(None),
-    }
-}
-
-/// - Returns `None` if both are `Some`.
-/// - Returns `Some(None)` if both are `None`.
-/// - Returns `Some(Some(_))` when only one of the provided options is `Some`.
-fn xor_option<T>(a: Option<T>, b: Option<T>) -> Option<Option<T>> {
-    try_reduce_option(a, b, |_, _| Err(())).ok()
-}
 
 /// A type containing multiple references generally derived from a path.
 ///
@@ -29,11 +10,11 @@ fn xor_option<T>(a: Option<T>, b: Option<T>) -> Option<Option<T>> {
 ///
 /// Unlike [`PathReference`] the type for an asset may not yet be known.
 #[derive(Default, Clone, Debug)]
-pub(crate) struct CombinedPathReference {
+pub(super) struct CombinedPathReference {
     /// The type referenced by a path.
     pub ty: Option<TypeId>,
     /// The asset (and its path) referenced by the path.
-    pub asset: Option<(Option<TypeId>, TypePath, AssetKind)>,
+    pub asset: Option<(Option<TypeId>, TypePath)>,
     /// If the reference references a module.
     pub module: Option<TypePath>,
 }
@@ -58,9 +39,8 @@ impl CombinedPathReference {
             module: other_module,
         } = other;
 
-        if let (Some((other_path, other_kind)), Some((_this_ty, this_path, this_kind))) =
-            (&other_asset, &self.asset)
-            && (this_path, this_kind) != (other_path, other_kind)
+        if let (Some(other_path), Some((_this_ty, this_path))) = (&other_asset, &self.asset)
+            && this_path != other_path
         {
             return Err(());
         }
@@ -71,38 +51,13 @@ impl CombinedPathReference {
         }
         // Only mutate after checking that no conflicts exist.
         if self.asset.is_none() {
-            self.asset = other_asset.map(|(other_path, other_kind)| (None, other_path, other_kind));
+            self.asset = other_asset.map(|other_path| (None, other_path));
         }
         if self.module.is_none() {
             self.module = other_module;
         }
 
         Ok(())
-    }
-
-    /// Take the exclusive properties of `self` and `other`, essentially "xor"ing them together by producing
-    /// the combined result where each field where both are `Some` are `None`.
-    ///
-    /// Returns `None` if there is a collision (i.e. matching fields are `Some`).
-    pub(super) fn combined(self, other: Self) -> Option<Self> {
-        Some(Self {
-            ty: xor_option(self.ty, other.ty)?,
-            asset: xor_option(self.asset, other.asset)?,
-            module: xor_option(self.module, other.module)?,
-        })
-    }
-
-    /// Overrides references of `self` with references of `other`.
-    pub(super) fn combine_override(&mut self, other: Self) {
-        if other.ty.is_some() {
-            self.ty = other.ty;
-        }
-        if other.asset.is_some() {
-            self.asset = other.asset;
-        }
-        if other.module.is_some() {
-            self.module = other.module;
-        }
     }
 }
 
@@ -116,7 +71,7 @@ impl CombinedPathReference {
 #[derive(Default, Clone, Debug)]
 struct EarlyPathReference {
     /// The asset (and its path) referenced by the path.
-    pub asset: Option<(TypePath, AssetKind)>,
+    pub asset: Option<TypePath>,
     /// If the reference references a module.
     pub module: Option<TypePath>,
 }
@@ -146,7 +101,7 @@ impl From<EarlyPathReference> for CombinedPathReference {
     fn from(reference: EarlyPathReference) -> Self {
         Self {
             ty: None,
-            asset: reference.asset.map(|(path, kind)| (None, path, kind)),
+            asset: reference.asset.map(|path| (None, path)),
             module: reference.module,
         }
     }
@@ -156,9 +111,7 @@ impl From<PathReference> for CombinedPathReference {
     fn from(reference: PathReference) -> Self {
         Self {
             ty: reference.ty,
-            asset: reference
-                .asset
-                .map(|(ty, path, kind)| (Some(ty), path, kind)),
+            asset: reference.asset.map(|(ty, path)| (Some(ty), path)),
             module: reference.module,
         }
     }
@@ -173,11 +126,10 @@ struct CtxNode {
     ///
     /// This is the path to reach this node from the root.
     path: TypePath,
-    /// This name can potentially reference:
+    /// The path to this node can potentially reference:
     /// * An asset
     /// * A module (not represented here but via the `Self::children` field).
-    // TODO: stage 2: only hold top level assets here, local assets should not need to exist here
-    asset: Option<AssetKind>,
+    asset: bool,
     children: IndexMap<TypePathElem, CtxNode>,
 }
 
@@ -185,14 +137,14 @@ impl CtxNode {
     fn new(path: TypePath) -> Self {
         Self {
             path,
-            asset: None,
+            asset: false,
             children: IndexMap::<_, _>::default(),
         }
     }
 
     fn reference(&self) -> EarlyPathReference {
         EarlyPathReference {
-            asset: self.asset.map(|kind| (self.path.clone(), kind)),
+            asset: self.asset.then(|| self.path.clone()),
             module: (!self.children.is_empty()).then(|| self.path.clone()),
         }
     }
@@ -250,14 +202,13 @@ impl CtxNode {
             .or_insert_with(|| CtxNode::new(self.path.join(&child)))
     }
 
-    fn build_asset(&mut self, path: TypePath<&str>, kind: AssetKind) -> Result<(), ()> {
+    fn build_asset(&mut self, path: TypePath<&str>) -> Result<(), ()> {
         let node = self.build_nodes(path);
-        if node.asset.is_some() {
+        if node.asset {
             // Multiple assets with the same path
             return Err(());
         }
-
-        node.asset = Some(kind);
+        node.asset = true;
         Ok(())
     }
 }
@@ -284,50 +235,36 @@ impl<'a> EarlyContext<'a> {
         Self { ctx, root_node }
     }
 
-    /// Registers an asset. This is done automatically for any objects in a file that gets registered.
+    /// Pre-registers an asset before its type is known.
     ///
-    /// With this method you can expose assets that aren't in bauble.
+    /// This allows `use` based paths to the asset to be resolved properly
+    /// before the types are fully resolved.
     ///
-    /// Returns ID of internal Ref type for `ty`.
-    ///
-    /// Returns an error if an asset was already registered at this path. This can occur due to
-    /// simplification of the top level asset path to match the current file. E.g. the top-level
-    /// asset in `a::1` will conflict with the path of object `1` in file `a`.
-    //
-    // TODO: in stage 2 we might be able to adjust this so that local object paths are
-    // distinguished from top level objects, such that they don't clash.
-    pub fn register_asset(
-        &mut self,
-        path: TypePath<&str>,
-        kind: AssetKind,
-    ) -> Result<(), crate::CustomError> {
+    /// # Panics
+    /// Panics if an asset was already registered at this path.
+    pub(super) fn register_asset(&mut self, path: TypePath<&str>) {
+        // An error should produced during parsing when identifiers overlap, and it isn't
+        // possible to have overlapping paths from different files. Caller expected to clear
+        // old objects from the context when reloading a file.
+        //
         // Make sure asset doesn't already exist in `BaubleContext`.
-        if self.ctx.get_ref(path).is_some_and(|r| r.asset.is_some()) {
-            // TODO: this error should no longer be possible?
-            return Err(crate::CustomError::new(format!(
-                "'{path}' refers to an existing asset in another file. This can be \n\
-                caused by special cased path simplification for the first object in a \n\
-                file.",
-            )));
-        }
+        assert!(
+            self.ctx.get_ref(path).is_none_or(|r| r.asset.is_none()),
+            "Multiple assets with the same path"
+        );
 
         self.root_node
-            .build_asset(path, kind)
-            // TODO: this error should no longer be possible?
-            .map_err(|()| {
-                crate::CustomError::new(format!(
-                    "'{path}' refers to an existing asset in another file. This can be \n\
-                caused by special cased path simplification for the first object in a \n\
-                file.",
-                ))
-            })
+            .build_asset(path)
+            // An error should produced during parsing when identifiers overlap, and it isn't
+            // possible to have overlapping paths from different files.
+            .expect("Multiple assets with the same path");
     }
 
     /// Takes a path in bauble, and if the path is valid, return meta information about the
     /// bauble item(s) at that path.
     ///
     /// Looks up from both pending items and items already registered in [`BaubleContext`].
-    pub fn get_ref(&self, path: TypePath<&str>) -> Option<CombinedPathReference> {
+    pub(super) fn get_ref(&self, path: TypePath<&str>) -> Option<CombinedPathReference> {
         let a = self.ctx.get_ref(path).map(CombinedPathReference::from);
         let b = self.root_node.node_at(path).map(|node| node.reference());
 
@@ -350,7 +287,7 @@ impl<'a> EarlyContext<'a> {
     /// namespace.
     ///
     /// Looks up from both pending items and items already registered in [`BaubleContext`].
-    pub fn ref_with_ident(
+    pub(super) fn ref_with_ident(
         &self,
         path: TypePath<&str>,
         ident: TypePathElem<&str>,
@@ -399,7 +336,7 @@ impl<'a> EarlyContext<'a> {
     ///
     /// Note, the order of returned items won't match after these pending items are registered into
     /// [`BaubleContext`].
-    pub fn all_in(
+    pub(super) fn all_in(
         &self,
         path: TypePath<&str>,
     ) -> Option<Vec<(TypePathElem, CombinedPathReference)>> {

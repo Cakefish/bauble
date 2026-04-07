@@ -9,8 +9,11 @@ use indexmap::IndexMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathEnd {
-    // TODO: document how this syntax works?
     /// path::*::ident
+    ///
+    /// This refers to an item with the identifier `ident` in some path that starts with
+    /// `path`. If multiple such paths exist within the same item namespace, an error will be
+    /// generated.
     WithIdent(Ident),
     /// path::ident
     Ident(Ident),
@@ -188,13 +191,9 @@ pub enum BindingIdent {
 }
 
 impl BindingIdent {
-    /// Special cased identifier that is required and only allowed for the first asset in a file
-    /// (i.e. the top level asset that is named after the file).
-    pub const TOP_LEVEL_IDENTIFIER: &str = "0";
-
     pub fn as_str(&self) -> &str {
         match self {
-            Self::TopLevel(_) => Self::TOP_LEVEL_IDENTIFIER,
+            Self::TopLevel(_) => crate::object_path::TOP_LEVEL_IDENTIFIER,
             Self::Local(ident) => ident,
         }
     }
@@ -204,10 +203,6 @@ impl BindingIdent {
             Self::TopLevel(span) => span.span,
             Self::Local(ident) => ident.span,
         }
-    }
-
-    pub fn is_top_level(&self) -> bool {
-        matches!(self, Self::TopLevel(_))
     }
 }
 

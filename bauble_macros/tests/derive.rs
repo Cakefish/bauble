@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, Ref, SpannedValue, bauble_test, path::TypePath};
+use bauble::{Bauble, Ref, SpannedValue, bauble_test, object_path::ObjectPath, path::TypePath};
 
 #[test]
 fn test_struct() {
@@ -368,6 +368,14 @@ fn test_trait() {
     );
 }
 
+fn top_ref<T>(path: &str) -> Ref<T> {
+    Ref::from_path(ObjectPath::Top(TypePath::new(path).unwrap().to_owned()))
+}
+
+fn local_ref<T>(path: &str) -> Ref<T> {
+    Ref::from_path(ObjectPath::Local(TypePath::new(path).unwrap().to_owned()))
+}
+
 #[test]
 fn test_generic() {
     #[derive(Bauble, Debug, PartialEq, Eq)]
@@ -385,15 +393,15 @@ fn test_generic() {
         use derive::{Foo, Bar, Str};
 
         0: Foo<Bar> = Foo(Bar(24))
-        b: Ref<Foo<Str>> = $test::c
+        b: Ref<Foo<Str>> = $c
         c: Foo<Str> = Foo(Str("test"))
         d: Ref<Foo<Bar>> = $0
         "#
         [
             Foo(Bar(24)),
-            Ref::<Foo<Str>>::from_path(TypePath::new("test::c").unwrap().to_owned()),
+            local_ref::<Foo<Str>>("test::c"),
             Foo(Str(String::from("test"))),
-            Ref::<Foo<Bar>>::from_path(TypePath::new("test").unwrap().to_owned()),
+            top_ref::<Foo<Bar>>("test"),
         ]
     );
 }

@@ -1,53 +1,42 @@
 use crate::context::BaubleContext;
-use crate::path::{TypePath, TypePathElem};
+use crate::path::TypePath;
 use crate::types::TypeId;
 use indexmap::IndexMap;
 
-/// Assets are only referencable from other assets in the same file.
-pub(crate) struct LocalAsset {
-    /// Type of a Ref to this asset.
-    ty: TypeId,
-    // TODO: might not be necessary?
-    /// Full path to this asset.
-    ///
-    /// This is the path to reach this node from the root.
-    path: TypePath,
-}
-
-pub(crate) struct LocalAssets {
-    assets: IndexMap<TypePathElem, LocalAsset>,
-}
-
-/// Transient context that is built and used when loading a file.
+/// Transient context that is built and used when loading file(s).
 ///
-/// Contains registery of local assets.
-pub(crate) struct LocalContext<'a> {
-    local: IndexMap<TypePath, LocalAssets>,
-    ctx: &'a mut BaubleContext,
+/// Contains registery of local objects. These are objects that are only referencable by other
+/// objects in the same file.
+pub(crate) struct LocalContext {
+    /// Map of local object paths to type ID of a Ref type to each object.
+    objects: IndexMap<TypePath, TypeId>,
 }
 
-impl LocalContext<'_> {
-    /// Returns ID of internal Ref type for `ty`.
-    pub fn register_asset(&mut self, path: TypePath, ty: TypeId) -> TypeId {
-        let ref_ty = self.ctx.register_asset_ref_ty(ty);
-        let asset = LocalAsset { ty: ref_ty, path };
-        let (file, ident) = asset
-            .path
-            .get_end()
-            .expect("Register asset with empty path");
-        let assets = &mut self
-            .local
-            .entry(file.to_owned())
-            .or_insert_with(|| LocalAssets {
-                assets: IndexMap::new(),
-            })
-            .assets;
-        if assets.contains_key(ident.as_str()) {
-            panic!("{} refers to an existing asset", asset.path);
-        } else {
-            assets.insert(ident.to_owned(), asset);
+impl LocalContext {
+    /// Creates a new local context.
+    pub fn new() -> Self {
+        Self {
+            objects: IndexMap::new(),
         }
+    }
 
-        ref_ty
+    /// Registers a local object.
+    ///
+    /// `BaubleContext` parameter is used to retrieve/register `Ref<T>` type for this object.
+    ///
+    /// # Panics
+    /// Panics if an object was already registered at this path.
+    pub fn register(&mut self, path: TypePath, ty: TypeId, ctx: &mut BaubleContext) {
+        let ref_ty = ctx.register_asset_ref_ty(ty);
+        if self.objects.contains_key(path.as_str()) {
+            panic!("{} refers to an existing object", path);
+        } else {
+            self.objects.insert(path, ref_ty);
+        }
+    }
+
+    /// Returns type of local bauble object at this path (if one exists).
+    pub fn get(&self, path: TypePath<&str>) -> Option<TypeId> {
+        self.objects.get(&path).copied()
     }
 }

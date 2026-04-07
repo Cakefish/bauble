@@ -11,12 +11,13 @@ mod spanned;
 mod traits;
 mod value;
 
+pub mod object_path;
 pub mod types;
 
 pub use bauble_macros::Bauble;
 
 pub use builtin::Ref;
-pub use context::{AssetKind, BaubleContext, BaubleContextBuilder, FileId, PathReference, Source};
+pub use context::{BaubleContext, BaubleContextBuilder, FileId, PathReference, Source};
 pub use error::{BaubleError, BaubleErrors, CustomError, Level};
 pub use spanned::{Span, SpanExt, Spanned};
 pub use traits::{

@@ -7,8 +7,8 @@ use crate::{
     spanned::{SpanExt, Spanned},
     types::{self, TypeId, TypeRegistry},
     value::{
-        Attributes, Fields, Ident, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
-        ValueTrait, error::Result, symbols::SymbolsCommon,
+        Attributes, Fields, Ident, ObjectPath, SpannedValue, Symbols, UnspannedVal, Val, Value,
+        ValueContainer, ValueTrait, error::Result, symbols::SymbolsCommon,
     },
 };
 
@@ -234,11 +234,11 @@ pub enum AnyVal<'a> {
 pub struct ConvertMeta<'a> {
     pub symbols: &'a Symbols<'a>,
     pub additional_objects: &'a mut AdditionalObjects,
-    // TODO: in stage 2 (of asset per file impl) this probably needs to be `0` rather than anything
-    // that could conflict with the name of a local asset. Because this is used to name inline
-    // objects uniquely.
-    //
     /// Used as a prefix to uniquely name inline objects.
+    ///
+    /// Note, for top level objects we specifically use `0` and not the file name. If we used the
+    /// file name inline object names could collide with inline objects of a local object in
+    /// another file.
     pub object_name: TypePathElem<&'a str>,
     pub default_span: Span,
 }
@@ -296,15 +296,11 @@ impl AdditionalObjects {
             .or_insert(0);
         let name = TypePathElem::new(format!("{name}@{idx}"))
             .expect("idx is just a number, and we know name is a valid path elem.");
+        let path = ObjectPath::Inline(self.file_path.join(&name));
+        self.objects
+            .push(super::create_object(path.clone(), val, types)?);
 
-        self.objects.push(super::create_object(
-            self.file_path.join(&name),
-            false,
-            val,
-            types,
-        )?);
-
-        Ok(Value::Ref(self.file_path.join(&name)))
+        Ok(Value::Ref(path))
     }
 
     pub(super) fn into_objects(self) -> Vec<super::Object> {
@@ -326,13 +322,9 @@ impl AdditionalObjects {
 
         let res = f(&mut unspanned);
 
-        for (name, value) in unspanned.into_objects() {
-            self.objects.push(super::create_object(
-                self.file_path.join(&name),
-                false,
-                value.into_spanned(span),
-                types,
-            )?);
+        for (path, value) in unspanned.into_objects() {
+            self.objects
+                .push(super::create_object(path, value.into_spanned(span), types)?);
         }
 
         Ok(res)
@@ -343,7 +335,8 @@ impl AdditionalObjects {
 enum NameAllocs<'a> {
     Owned(HashMap<TypePathElem, u64>),
     Borrowed(&'a mut HashMap<TypePathElem, u64>),
-    Custom(&'a mut dyn FnMut(TypePathElem<&str>) -> TypePathElem),
+    // Parameters: (file, parent_object_name)
+    Custom(&'a mut dyn FnMut(TypePath<&str>, TypePathElem<&str>) -> ObjectPath),
 }
 
 impl NameAllocs<'_> {
@@ -355,21 +348,26 @@ impl NameAllocs<'_> {
         }
     }
 
-    /// Allocate a new name for an object that will be referenced by the parent object
+    /// Allocate a new path for an object that will be referenced by the parent object
     /// `object_name`.
-    fn allocate_name(&mut self, object_name: TypePathElem<&str>) -> TypePathElem {
+    fn allocate_path(
+        &mut self,
+        file: TypePath<&str>,
+        object_name: TypePathElem<&str>,
+    ) -> ObjectPath {
         let from_map = |m: &mut HashMap<TypePathElem, u64>| {
             let idx = *m
                 .entry(object_name.to_owned())
                 .and_modify(|i| *i += 1u64)
                 .or_insert(0);
-            TypePathElem::new(format!("{}@{idx}", object_name))
-                .expect("idx is just a number, and we know name is a valid path elem.")
+            let name = TypePathElem::new(format!("{}@{idx}", object_name))
+                .expect("idx is just a number, and we know name is a valid path elem.");
+            ObjectPath::Inline(file.join(&name))
         };
         match self {
             Self::Owned(m) => from_map(m),
             Self::Borrowed(m) => from_map(m),
-            Self::Custom(f) => f(object_name),
+            Self::Custom(f) => f(file, object_name),
         }
     }
 }
@@ -378,7 +376,7 @@ impl NameAllocs<'_> {
 pub struct AdditionalUnspannedObjects<'a> {
     file_path: TypePath<&'a str>,
     object_name: TypePathElem<&'a str>,
-    objects: Vec<(TypePathElem, UnspannedVal)>,
+    objects: Vec<(ObjectPath, UnspannedVal)>,
     name_allocs: NameAllocs<'a>,
 }
 
@@ -412,13 +410,14 @@ impl<'a> AdditionalUnspannedObjects<'a> {
     /// This allows creating the additional objects as objects that aren't sub-objects (aka inline
     /// objects).
     ///
-    /// The closure is passed the name of the parent object and can optionally use that in its
-    /// naming logic. Note, a number representing the type id of the current subobject may be
-    /// appended to the parent object name.
+    /// The closure is passed the file path and the name of the parent object. The generated name
+    /// should be joined to the provided file path. The parent object name can optionally use that
+    /// in its naming logic. Note, a number representing the type id of the current subobject may
+    /// be appended to the parent object name.
     pub fn new_with_custom_namer(
         file_path: TypePath<&'a str>,
         object_name: TypePathElem<&'a str>,
-        namer: &'a mut impl FnMut(TypePathElem<&str>) -> TypePathElem,
+        namer: &'a mut impl FnMut(TypePath<&str>, TypePathElem<&str>) -> ObjectPath,
     ) -> Self {
         Self {
             file_path,
@@ -453,16 +452,16 @@ impl<'a> AdditionalUnspannedObjects<'a> {
 
     /// Add an additional object, and get a reference to it.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
-        let name = self.name_allocs.allocate_name(self.object_name);
-        let res = Value::Ref(self.file_path.join(&name));
-        self.objects.push((name, val));
+        let path = self
+            .name_allocs
+            .allocate_path(self.file_path, self.object_name);
+        let res = Value::Ref(path.clone());
+        self.objects.push((path, val));
         res
     }
 
     /// Get the additional objects.
-    pub fn into_objects(
-        self,
-    ) -> impl ExactSizeIterator<Item = (TypePathElem, UnspannedVal)> + use<> {
+    pub fn into_objects(self) -> impl ExactSizeIterator<Item = (ObjectPath, UnspannedVal)> + use<> {
         self.objects.into_iter()
     }
 }
@@ -477,7 +476,7 @@ where
 
     fn get_variant(ident: &Self::Variant, symbols: &Symbols) -> Result<TypePathElem>;
 
-    fn get_asset(ident: &Self::Ref, symbols: &Symbols) -> Result<TypePath>;
+    fn get_asset(ident: &Self::Ref, symbols: &Symbols) -> Result<ObjectPath>;
 
     fn convert_inner<'a, C: ConvertValue>(
         value: Spanned<&Value<Self>>,
@@ -1235,7 +1234,7 @@ impl ConvertValueInner for UnspannedVal {
         Ok(ident.clone())
     }
 
-    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
+    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<ObjectPath> {
         Ok(asset.clone())
     }
 
@@ -1272,7 +1271,7 @@ impl ConvertValueInner for Val {
         Ok(ident.value.clone())
     }
 
-    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
+    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<ObjectPath> {
         Ok(asset.clone())
     }
 
@@ -1372,7 +1371,7 @@ impl ConvertValueInner for ParseVal {
             .to_owned())
     }
 
-    fn get_asset(asset: &Self::Ref, symbols: &Symbols) -> Result<TypePath> {
+    fn get_asset(asset: &Self::Ref, symbols: &Symbols) -> Result<ObjectPath> {
         symbols.resolve_asset(asset).map(|(_, p)| p)
     }
 

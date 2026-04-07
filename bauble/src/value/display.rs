@@ -8,11 +8,13 @@ use std::{borrow::Borrow, collections::HashMap};
 use crate::{
     Spanned,
     parse::{ParseVal, ParseValues, PathTreeEnd, PathTreeNode, allowed_in_raw_literal},
-    path::TypePath,
-    types::{TypeKind, TypeRegistry},
+    types::{TypeKind, TypeRegistry, path::TypePath},
 };
 
-use super::{Attributes, FieldsKind, Object, UnspannedVal, Val, Value, ValueContainer, ValueTrait};
+use super::{
+    Attributes, FieldsKind, Object, ObjectPath, UnspannedVal, Val, Value, ValueContainer,
+    ValueTrait,
+};
 /// Config to be used when formatting bauble.
 pub struct DisplayConfig {
     /// String inserted for tabs.
@@ -69,6 +71,7 @@ mod formatter {
         pub fn is_typed(&self) -> bool {
             self.0.is_typed()
         }
+
         pub fn write(&mut self, s: &str) {
             self.0.string.push_str(s)
         }
@@ -253,21 +256,25 @@ fn slice_display<CTX, T: IndentedDisplay<CTX>>(slice: &[T], mut w: LineWriter<CT
 
 impl<CTX: ValueCtx<V>, V: ValueTrait> IndentedDisplay<CTX> for Value<V>
 where
-    V::Ref: std::fmt::Display,
+    V::Ref: std::fmt::Debug,
     V::Variant: std::fmt::Display,
     V::Field: std::fmt::Display,
     V::Inner: IndentedDisplay<CTX> + ValueContainer<ContainerField: std::fmt::Display>,
 {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
         match self {
-            Value::Ref(r) => {
-                if let Some(inline) = w.ctx().inline(r) {
-                    inline.indented_display(w);
-                } else {
+            Value::Ref(r) => match w.ctx().display_ref(r) {
+                Some(DisplayRef::Inline(inline)) => inline.indented_display(w),
+                Some(DisplayRef::Path(path)) => {
                     w.write("$");
-                    w.fmt(r);
+                    w.fmt(path);
                 }
-            }
+                None => {
+                    // TODO: this is an error (empty path or missing inline object), but
+                    // IndentedDisplay has no path for reporting errors.
+                    w.write("ERROR {r:?} is empty or points to missing inline object");
+                }
+            },
             Value::Tuple(items) => {
                 w.write("(");
                 slice_display(items, w.reborrow());
@@ -575,13 +582,8 @@ impl<CTX: ValueCtx<ParseVal>> IndentedDisplay<CTX> for ParseVal {
 
 impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX> for Object<V> {
     fn indented_display(&self, mut w: LineWriter<CTX>) {
-        let ident = if self.top_level {
-            crate::value::BindingIdent::TOP_LEVEL_IDENTIFIER
-        } else {
-            let Some((_, end)) = self.object_path.get_end() else {
-                return;
-            };
-            end.into_str()
+        let Some(ident) = self.object_path.ident() else {
+            return;
         };
 
         w.write(ident);
@@ -626,15 +628,32 @@ struct ValueDisplayCtx<'a, V: ValueTrait> {
     types: &'a TypeRegistry,
 }
 
+enum DisplayRef<'a, R: ?Sized, P: ?Sized> {
+    Inline(&'a R),
+    Path(&'a P),
+}
+
 trait ValueCtx<V: ValueTrait> {
-    fn inline(&self, path: &V::Ref) -> Option<&V::Inner>;
+    type RefPath: std::fmt::Display + ?Sized;
+
+    /// Returns `None` if the referenced path is an empty local path or if it refers to an inline
+    /// object that can't be found.
+    fn display_ref<'a>(
+        &'a self,
+        path: &'a V::Ref,
+    ) -> Option<DisplayRef<'a, V::Inner, Self::RefPath>>;
 
     fn type_registry(&self) -> Option<&TypeRegistry>;
 }
 
 impl ValueCtx<ParseVal> for () {
-    fn inline(&self, _path: &crate::parse::Path) -> Option<&ParseVal> {
-        None
+    type RefPath = crate::parse::Path;
+
+    fn display_ref<'a>(
+        &'a self,
+        path: &'a crate::parse::Path,
+    ) -> Option<DisplayRef<'a, ParseVal, crate::parse::Path>> {
+        Some(DisplayRef::Path(path))
     }
 
     fn type_registry(&self) -> Option<&TypeRegistry> {
@@ -643,8 +662,18 @@ impl ValueCtx<ParseVal> for () {
 }
 
 impl ValueCtx<Val> for ValueDisplayCtx<'_, Val> {
-    fn inline(&self, path: &TypePath) -> Option<&Val> {
-        self.inlined_refs.get(path.as_str()).copied()
+    type RefPath = str;
+
+    fn display_ref<'a>(&'a self, path: &'a ObjectPath) -> Option<DisplayRef<'a, Val, str>> {
+        Some(match path {
+            ObjectPath::Top(path) => DisplayRef::Path(path.as_str()),
+            // Only use identifier for local object, full path is never necessary since it can only
+            // be referenced from the same file.
+            ObjectPath::Local(path) => DisplayRef::Path(path.get_end()?.1.into_str()),
+            ObjectPath::Inline(path) => {
+                DisplayRef::Inline(self.inlined_refs.get(&path.borrow()).copied()?)
+            }
+        })
     }
 
     fn type_registry(&self) -> Option<&TypeRegistry> {
@@ -653,8 +682,21 @@ impl ValueCtx<Val> for ValueDisplayCtx<'_, Val> {
 }
 
 impl ValueCtx<UnspannedVal> for ValueDisplayCtx<'_, UnspannedVal> {
-    fn inline(&self, path: &TypePath) -> Option<&UnspannedVal> {
-        self.inlined_refs.get(path.as_str()).copied()
+    type RefPath = str;
+
+    fn display_ref<'a>(
+        &'a self,
+        path: &'a ObjectPath,
+    ) -> Option<DisplayRef<'a, UnspannedVal, str>> {
+        Some(match path {
+            ObjectPath::Top(path) => DisplayRef::Path(path.as_str()),
+            // Only use identifier for local object, full path is never necessary since it can only
+            // be referenced from the same file.
+            ObjectPath::Local(path) => DisplayRef::Path(path.get_end()?.1.into_str()),
+            ObjectPath::Inline(path) => {
+                DisplayRef::Inline(self.inlined_refs.get(&path.borrow()).copied()?)
+            }
+        })
     }
 
     fn type_registry(&self) -> Option<&TypeRegistry> {
@@ -673,8 +715,8 @@ where
         let mut inlined_refs = HashMap::new();
         let objects = w.ctx().1;
         for object in objects.iter() {
-            if object.object_path.is_subobject() {
-                inlined_refs.insert(object.object_path.borrow(), &object.value);
+            if let ObjectPath::Inline(path) = &object.object_path {
+                inlined_refs.insert(path.borrow(), &object.value);
             }
         }
         let ctx = ValueDisplayCtx::<'_, V> {
@@ -695,10 +737,10 @@ where
         let mut inlined_refs = HashMap::new();
         let mut written = Vec::new();
         for object in self.iter() {
-            if !object.object_path.is_subobject() {
-                written.push(object);
+            if let ObjectPath::Inline(path) = &object.object_path {
+                inlined_refs.insert(path.borrow(), &object.value);
             } else {
-                inlined_refs.insert(object.object_path.borrow(), &object.value);
+                written.push(object);
             }
         }
         let ctx = ValueDisplayCtx {

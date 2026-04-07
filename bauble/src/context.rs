@@ -12,27 +12,13 @@ pub type Source = ariadne::Source<String>;
 #[derive(Clone, Default)]
 struct DefaultUses(IndexMap<TypePathElem, TypePath>);
 
-/// Assets can be either top level or local.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum AssetKind {
-    // TODO: update this in stage 2
-    /// The first asset in a file, if it has the same as the file.
-    ///
-    /// These assets share the same path as the file and are generally intended to be globally
-    /// visible and referencable.
-    TopLevel,
-    /// All assets that aren't considered top level. These are generally intended to only be
-    /// referenced from the same file (although this isn't enforced yet).
-    Local,
-}
-
 /// A type containing multiple references generally derived from a path.
 #[derive(Default, Clone, Debug)]
 pub struct PathReference {
     /// The type referenced by a path.
     pub ty: Option<TypeId>,
     /// The asset (and its path) referenced by the path.
-    pub asset: Option<(TypeId, TypePath, AssetKind)>,
+    pub asset: Option<(TypeId, TypePath)>,
     /// If the reference references a module.
     pub module: Option<TypePath>,
 }
@@ -48,10 +34,10 @@ impl PathReference {
     }
 
     /// Constructs a path reference referencing the 'any' type.
-    pub fn any(path: TypePath, kind: AssetKind) -> Self {
+    pub fn any(path: TypePath) -> Self {
         Self {
             ty: Some(TypeRegistry::any_type()),
-            asset: Some((TypeRegistry::any_type(), path.clone(), kind)),
+            asset: Some((TypeRegistry::any_type(), path.clone())),
             module: Some(path.clone()),
         }
     }
@@ -211,7 +197,7 @@ impl BaubleContextBuilder {
 #[derive(Default, Clone, Debug)]
 struct InnerReference {
     ty: Option<TypeId>,
-    asset: Option<(TypeId, AssetKind)>,
+    asset: Option<TypeId>,
     redirect: Option<TypePath>,
 }
 
@@ -252,10 +238,7 @@ impl CtxNode {
     fn reference(&self, root: &Self) -> PathReference {
         let mut this = PathReference {
             ty: self.reference.ty,
-            asset: self
-                .reference
-                .asset
-                .map(|(ty, kind)| (ty, self.path.clone(), kind)),
+            asset: self.reference.asset.map(|ty| (ty, self.path.clone())),
             module: (!self.children.is_empty()).then(|| self.path.clone()),
         };
 
@@ -398,11 +381,6 @@ impl CtxNode {
     /// that feature is added).
     fn clear_file_assets(&mut self) {
         self.children.retain(|_, node| {
-            // `AssetKind::TopLevel` will be from other files and we don't want to clear those.
-            node.reference
-                .asset
-                .take_if(|(_, kind)| matches!(kind, AssetKind::Local));
-
             // Avoid clearing assets from other files, but recurse into inline submodules (if that
             // feature is added).
             if node.source.is_none() {
@@ -412,11 +390,9 @@ impl CtxNode {
             !node.is_empty()
         });
 
-        // Top level assets match the path of their file so this will be from this file if it is
-        // top level.
-        self.reference
-            .asset
-            .take_if(|(_, kind)| matches!(kind, AssetKind::TopLevel));
+        // Top level assets match the path of their file (and all assets registered in
+        // BaubleContext are top level).
+        self.reference.asset.take();
     }
 
     /// Builds all path elements as modules
@@ -448,14 +424,14 @@ impl CtxNode {
         node.reference.ty = Some(id);
     }
 
-    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId, kind: AssetKind) -> Result<(), ()> {
+    fn build_asset(&mut self, path: TypePath<&str>, ty: TypeId) -> Result<(), ()> {
         let node = self.build_nodes(path);
         if node.reference.asset.is_some() {
             // Multiple assets with the same path
             return Err(());
         }
 
-        node.reference.asset = Some((ty, kind));
+        node.reference.asset = Some(ty);
         Ok(())
     }
 }
@@ -529,34 +505,18 @@ impl BaubleContext {
 
     /// Registers an asset. This is done automatically for any objects in a file that gets registered.
     ///
-    /// With this method you can expose assets that aren't in bauble.
+    /// With this method you can expose assets that aren't in bauble. Externally registered assets
+    /// are expected to never collide with paths of bauble objects from loaded files.
     ///
-    /// Returns ID of internal Ref type for `ty`.
-    ///
-    /// Returns an error if an asset was already registered at this path. This can occur due to
-    /// simplification of the top level asset path to match the current file. E.g. the top-level
-    /// asset in `a::1` will conflict with the path of object `1` in file `a`.
-    //
-    // TODO: in stage 2 we might be able to adjust this so that local object paths are
-    // distinguished from top level objects, such that they don't clash.
-    pub fn register_asset(
-        &mut self,
-        path: TypePath<&str>,
-        ty: TypeId,
-        kind: AssetKind,
-    ) -> Result<TypeId, crate::CustomError> {
+    /// # Panics
+    /// Panics if an asset was already registered at this path.
+    pub fn register_asset(&mut self, path: TypePath<&str>, ty: TypeId) {
         let ref_ty = self.register_asset_ref_ty(ty);
         self.root_node
-            .build_asset(path, ref_ty, kind)
-            // TODO: this error should no longer be possible?
-            .map_err(|()| {
-                crate::CustomError::new(format!(
-                    "'{path}' refers to an existing asset in another file. This can be \n\
-                caused by special cased path simplification for the first object in a \n\
-                file.",
-                ))
-            })?;
-        Ok(ref_ty)
+            .build_asset(path, ref_ty)
+            // An error should produced during parsing when identifiers overlap, and it isn't
+            // possible to have overlapping paths from different files.
+            .expect("Multiple assets with the same path");
     }
 
     fn file(&self, file: FileId) -> (TypePath<&str>, &Source) {
@@ -643,7 +603,6 @@ impl BaubleContext {
             }
         }
 
-        let mut skip = Vec::new();
         let mut early_ctx = crate::value::EarlyContext::new(self);
 
         // Register assets paths from each successfully parsed file into the early context (before
@@ -652,8 +611,29 @@ impl BaubleContext {
             // Need a partial borrow here.
             let (path, _) = early_ctx.ctx.file(*file);
             let path = path.to_owned();
-            match crate::value::pre_register_assets(&mut early_ctx, path.borrow(), values) {
-                Ok(()) => {}
+            crate::value::pre_register_assets(&mut early_ctx, path.borrow(), values);
+        }
+
+        let mut local_ctx = crate::local_context::LocalContext::new();
+
+        let mut delayed = Vec::new();
+        let mut skip = Vec::new();
+
+        // Then, register assets from each successfully parsed file into the context (while
+        // resolving types).
+        for (file, values) in file_values.iter() {
+            // Need a partial borrow here.
+            let (path, _) = early_ctx.ctx.file(*file);
+            let path = path.to_owned();
+            match crate::value::register_assets(
+                &mut early_ctx,
+                &mut local_ctx,
+                path.borrow(),
+                values,
+            ) {
+                Ok(d) => {
+                    delayed.extend(d);
+                }
                 Err(e) => {
                     // Skip files that errored on registering.
                     skip.push(*file);
@@ -662,35 +642,8 @@ impl BaubleContext {
             }
         }
 
-        let mut delayed = Vec::new();
-        let mut skip_iter = skip.iter().copied().peekable();
-        let mut skip_more = Vec::new();
-
-        // Then, register assets from each successfully parsed file into the context (while
-        // resolving types).
-        for (file, values) in file_values
-            .iter()
-            // Skip files with errors
-            .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
-        {
-            // Need a partial borrow here.
-            let (path, _) = early_ctx.ctx.file(*file);
-            let path = path.to_owned();
-            match crate::value::register_assets(&mut early_ctx, path.borrow(), values) {
-                Ok(d) => {
-                    delayed.extend(d);
-                }
-                Err(e) => {
-                    // Skip files that errored on registering.
-                    skip_more.push(*file);
-                    errors.extend(BaubleErrors::from(e));
-                }
-            }
-        }
-        skip.extend(skip_more);
-
         // TODO: Less hacky way to get which files errored here?
-        if let Err(e) = crate::value::resolve_delayed(delayed, self) {
+        if let Err(e) = crate::value::resolve_delayed(delayed, self, &mut local_ctx) {
             // We want to skip any files that had errors.
             for e in e {
                 skip.push(e.span.file());
@@ -713,7 +666,7 @@ impl BaubleContext {
             // Skip files with errors
             .filter(|(file, _)| skip_iter.next_if_eq(file).is_none())
         {
-            match crate::value::convert_values(file, values, self) {
+            match crate::value::convert_values(file, values, self, &local_ctx) {
                 Ok(o) => objects.extend(o),
                 Err(e) => errors.extend(e),
             }
@@ -827,7 +780,7 @@ impl BaubleContext {
         &self,
         path: TypePath<&str>,
         max_depth: Option<usize>,
-    ) -> impl Iterator<Item = (TypePath<&str>, AssetKind)> {
+    ) -> impl Iterator<Item = TypePath<&str>> {
         self.root_node
             .node_at(path)
             .map(|node| node.iter_all_children(max_depth))
@@ -836,7 +789,7 @@ impl BaubleContext {
             .filter_map(|node| {
                 node.reference(&self.root_node)
                     .asset
-                    .map(|(_, _, kind)| (node.path.borrow(), kind))
+                    .map(|(_, _)| node.path.borrow())
             })
     }
 

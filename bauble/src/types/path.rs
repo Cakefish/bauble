@@ -487,6 +487,7 @@ impl<S: AsRef<str>> TypePath<S> {
             })
     }
 
+    // TODO: can this method be phased out now that `ObjectPath` exists?
     /// Determines if a path referencing an object is a path to a sub-object.
     /// The path is assumed to be valid.
     ///

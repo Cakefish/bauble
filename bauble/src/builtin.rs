@@ -1,6 +1,6 @@
 use crate::{
     Bauble, BaubleAllocator, ToRustErrorKind, Val, Value,
-    path::TypePath,
+    object_path::ObjectPath,
     types::{Type, TypeRegistry},
 };
 use std::{cell::UnsafeCell, fmt::Debug, marker::PhantomData};
@@ -25,14 +25,14 @@ use std::{cell::UnsafeCell, fmt::Debug, marker::PhantomData};
 /// `S` is the inner representation used for `TypePath`.
 pub struct Ref<T, S = String> {
     /// The path to the referenced asset.
-    pub path: TypePath<S>,
+    pub path: ObjectPath<S>,
     /// Invariant over `T`.
     _mark: PhantomData<UnsafeCell<T>>,
 }
 
 impl<T, S> Ref<T, S> {
     /// Create a reference from the specified path. The path must not be valid.
-    pub fn from_path(path: TypePath<S>) -> Self {
+    pub fn from_path(path: ObjectPath<S>) -> Self {
         Self {
             path,
             _mark: PhantomData,
@@ -40,12 +40,12 @@ impl<T, S> Ref<T, S> {
     }
 }
 
-impl<T, S: PartialEq> PartialEq for Ref<T, S> {
+impl<T, S: AsRef<str>> PartialEq for Ref<T, S> {
     fn eq(&self, other: &Self) -> bool {
         self.path == other.path
     }
 }
-impl<T, S: Eq> Eq for Ref<T, S> {}
+impl<T, S: AsRef<str>> Eq for Ref<T, S> {}
 
 impl<T, S: Debug> Debug for Ref<T, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -53,7 +53,7 @@ impl<T, S: Debug> Debug for Ref<T, S> {
     }
 }
 
-impl<'b, A: BaubleAllocator<'b>, T: Bauble<'b, A>> Bauble<'b, A> for Ref<T, A::TypePathInner> {
+impl<'b, A: BaubleAllocator<'b>, T: Bauble<'b, A>> Bauble<'b, A> for Ref<T, A::PathInner> {
     fn builtin(registry: &mut TypeRegistry) -> Option<crate::types::TypeId> {
         let inner = registry.get_or_register_type::<T, A>();
         Some(registry.get_or_register_asset_ref(inner))
@@ -69,7 +69,7 @@ impl<'b, A: BaubleAllocator<'b>, T: Bauble<'b, A>> Bauble<'b, A> for Ref<T, A::T
     ) -> Result<<A as BaubleAllocator<'b>>::Out<Self>, crate::ToRustError> {
         match val.value.value {
             Value::Ref(r) => Ok({
-                let path = allocator.wrap_type_path(r);
+                let path = allocator.wrap_object_path(r);
                 let value = Self {
                     // SAFETY: path was derived from `allocator`.
                     path: unsafe { allocator.validate(path)? },

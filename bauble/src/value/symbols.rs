@@ -3,6 +3,7 @@ use std::{borrow::Cow, collections::HashMap};
 use crate::{
     BaubleContext, CustomError,
     context::PathReference,
+    local_context::LocalContext,
     parse::{Path, PathEnd, PathTreeEnd, PathTreeNode},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
@@ -10,7 +11,10 @@ use crate::{
 };
 
 use super::early_context::CombinedPathReference;
-use super::{ConversionError, EarlyContext, PathKind, RefError, RefKind, Result};
+use super::{
+    ConversionError, EarlyContext, ObjectPath, PathKind, RefError, RefKind, Result,
+    error::ErrorPathReference,
+};
 
 /// Indicates kind of item being resolved by [`Symbols::resolve_path`] or
 /// [`EarlySymbols::resolve_path`].
@@ -41,15 +45,125 @@ fn generic_param_using_with_ident(span: crate::Span) -> Spanned<ConversionError>
     .spanned(span)
 }
 
+/// `PathReference` for `Symbols` `uses`. Distinguishes between local and top level objects.
+#[derive(Default, Clone)]
+struct UseReference {
+    ty: Option<TypeId>,
+    asset: Option<(TypeId, ObjectPath)>,
+    module: Option<TypePath>,
+}
+
+impl UseReference {
+    /// Take the exclusive properties of `self` and `other`, essentially "xor"ing them together by producing
+    /// the combined result where each field where both are `Some` are `None`.
+    pub fn combined(self, other: Self) -> Option<Self> {
+        Some(Self {
+            ty: xor_option(self.ty, other.ty)?,
+            asset: xor_option(self.asset, other.asset)?,
+            module: xor_option(self.module, other.module)?,
+        })
+    }
+
+    /// Overrides references of `self` with references of `other`.
+    pub fn combine_override(&mut self, other: Self) {
+        if other.ty.is_some() {
+            self.ty = other.ty;
+        }
+        if other.asset.is_some() {
+            self.asset = other.asset;
+        }
+        if other.module.is_some() {
+            self.module = other.module;
+        }
+    }
+}
+
+/// `CombinedPathReference` for `EarlySymbols` `uses`. Distinguishes between local and top level objects.
+#[derive(Default, Clone, Debug)]
+struct EarlyUseReference {
+    ty: Option<TypeId>,
+    asset: Option<(Option<TypeId>, ObjectPath)>,
+    module: Option<TypePath>,
+}
+
+impl EarlyUseReference {
+    /// Take the exclusive properties of `self` and `other`, essentially "xor"ing them together by producing
+    /// the combined result where each field where both are `Some` are `None`.
+    pub fn combined(self, other: Self) -> Option<Self> {
+        Some(Self {
+            ty: xor_option(self.ty, other.ty)?,
+            asset: xor_option(self.asset, other.asset)?,
+            module: xor_option(self.module, other.module)?,
+        })
+    }
+
+    /// Overrides references of `self` with references of `other`.
+    pub fn combine_override(&mut self, other: Self) {
+        if other.ty.is_some() {
+            self.ty = other.ty;
+        }
+        if other.asset.is_some() {
+            self.asset = other.asset;
+        }
+        if other.module.is_some() {
+            self.module = other.module;
+        }
+    }
+}
+
+impl From<PathReference> for UseReference {
+    fn from(reference: PathReference) -> Self {
+        Self {
+            ty: reference.ty,
+            asset: reference
+                .asset
+                .map(|(ty, path)| (ty, ObjectPath::Top(path))),
+            module: reference.module,
+        }
+    }
+}
+
+impl From<CombinedPathReference> for EarlyUseReference {
+    fn from(reference: CombinedPathReference) -> Self {
+        Self {
+            ty: reference.ty,
+            asset: reference
+                .asset
+                .map(|(ty, path)| (ty, ObjectPath::Top(path))),
+            module: reference.module,
+        }
+    }
+}
+
+impl From<UseReference> for ErrorPathReference {
+    fn from(reference: UseReference) -> Self {
+        Self {
+            ty: reference.ty.is_some(),
+            asset: reference.asset.is_some(),
+            module: reference.module.is_some(),
+        }
+    }
+}
+
+impl From<EarlyUseReference> for ErrorPathReference {
+    fn from(reference: EarlyUseReference) -> Self {
+        Self {
+            ty: reference.ty.is_some(),
+            asset: reference.asset.is_some(),
+            module: reference.module.is_some(),
+        }
+    }
+}
+
 /// Representation of item names available in the current module.
 ///
 /// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
-#[derive(Clone)]
+//#[derive(Clone)]
 pub(crate) struct Symbols<'a> {
     /// Context for looking up things referenced by full path.
     pub(super) ctx: &'a BaubleContext,
     /// Map of identifiers to path references.
-    pub(super) uses: HashMap<TypePathElem, PathReference>,
+    uses: HashMap<TypePathElem, UseReference>,
 }
 
 impl<'a> Symbols<'a> {
@@ -60,19 +174,42 @@ impl<'a> Symbols<'a> {
         }
     }
 
-    pub fn add_ref(
+    fn add_ref(
         &mut self,
         ident: TypePathElem,
-        reference: PathReference,
+        reference: impl Into<UseReference>,
     ) -> std::result::Result<(), ConversionError> {
         let r = self.uses.entry(ident.clone()).or_default();
 
         *r = r
             .clone()
-            .combined(reference)
+            .combined(reference.into())
             .ok_or(ConversionError::AmbiguousUse { ident })?;
 
         Ok(())
+    }
+
+    /// Note, this can also add the top level object of the current file under its local
+    /// identifier.
+    pub fn add_local_object(
+        &mut self,
+        ident: TypePathElem,
+        ty: TypeId,
+        full_path: TypePath,
+    ) -> std::result::Result<(), ConversionError> {
+        let path = if ident.as_str() == crate::object_path::TOP_LEVEL_IDENTIFIER {
+            ObjectPath::Top(full_path)
+        } else {
+            ObjectPath::Local(full_path)
+        };
+        self.add_ref(
+            ident,
+            UseReference {
+                ty: None,
+                asset: Some((ty, path)),
+                module: None,
+            },
+        )
     }
 
     pub fn add_use(&mut self, use_path: &Spanned<PathTreeNode>) -> Result<()> {
@@ -91,7 +228,7 @@ impl<'a> Symbols<'a> {
                                 return Err(ConversionError::RefError(Box::new(RefError {
                                     uses: None,
                                     path: PathKind::Direct(leading),
-                                    path_ref: PathReference::empty().into(),
+                                    path_ref: None,
                                     kind: RefKind::Module,
                                 }))
                                 .spanned(s.span));
@@ -110,7 +247,7 @@ impl<'a> Symbols<'a> {
                         return Err(ConversionError::RefError(Box::new(RefError {
                             uses: None,
                             path: PathKind::Direct(leading),
-                            path_ref: PathReference::empty().into(),
+                            path_ref: None,
                             kind: RefKind::Module,
                         }))
                         .spanned(end.span));
@@ -127,7 +264,7 @@ impl<'a> Symbols<'a> {
                         return Err(ConversionError::RefError(Box::new(RefError {
                             uses: None,
                             path: PathKind::Direct(path),
-                            path_ref: PathReference::empty().into(),
+                            path_ref: None,
                             kind: RefKind::Any,
                         }))
                         .spanned(end.span));
@@ -147,7 +284,7 @@ impl<'a> Symbols<'a> {
                         return Err(ConversionError::RefError(Box::new(RefError {
                             uses: None,
                             path: PathKind::Indirect(leading, path_end.to_owned()),
-                            path_ref: PathReference::empty().into(),
+                            path_ref: None,
                             kind: RefKind::Any,
                         }))
                         .spanned(end.span));
@@ -171,7 +308,7 @@ impl<'a> Symbols<'a> {
                 return Err(ConversionError::RefError(Box::new(RefError {
                     uses: None,
                     path: PathKind::Direct(leading),
-                    path_ref: PathReference::empty().into(),
+                    path_ref: None,
                     kind: RefKind::Module,
                 }))
                 .spanned(l.span));
@@ -201,7 +338,7 @@ impl<'a> Symbols<'a> {
                 return Err(ConversionError::RefError(Box::new(RefError {
                     uses: None,
                     path: PathKind::Direct(leading),
-                    path_ref: PathReference::empty().into(),
+                    path_ref: None,
                     kind: RefKind::Module,
                 }))
                 .spanned(first.span));
@@ -216,7 +353,7 @@ impl<'a> Symbols<'a> {
                     return Err(ConversionError::RefError(Box::new(RefError {
                         uses: None,
                         path: PathKind::Direct(leading),
-                        path_ref: PathReference::empty().into(),
+                        path_ref: None,
                         kind: RefKind::Module,
                     }))
                     .spanned(ident.span));
@@ -313,13 +450,13 @@ impl<'a> Symbols<'a> {
         &self,
         raw_path: &Path,
         kind: ResolveKind,
-    ) -> Result<(Cow<'_, PathReference>, PathKind)> {
+    ) -> Result<(Cow<'_, UseReference>, PathKind)> {
         let path = self.resolve_path(raw_path, kind)?;
 
         let reference = match &path.value {
             PathKind::Direct(path) => {
                 let r_uses = self.uses.get(path.as_str());
-                let r_ctx = self.ctx.get_ref(path.borrow());
+                let r_ctx = self.ctx.get_ref(path.borrow()).map(UseReference::from);
                 // There can be overlap between items that are children of the root of ctx and the
                 // uses here. Items from uses take priority and collisions aren't errors.
                 if let Some(r_uses) = r_uses {
@@ -337,6 +474,7 @@ impl<'a> Symbols<'a> {
                 .ctx
                 .ref_with_ident(path.borrow(), ident.borrow())
                 .map_err(|e| e.spanned(raw_path.span()))?
+                .map(UseReference::from)
                 .map(Cow::Owned),
         };
 
@@ -359,7 +497,7 @@ impl<'a> Symbols<'a> {
                 ConversionError::RefError(Box::new(RefError {
                     uses: Some(self.uses.keys().cloned().collect()),
                     path: path.value.clone(),
-                    path_ref: PathReference::empty().into(),
+                    path_ref: None,
                     kind: kind.into(),
                 }))
             }
@@ -367,17 +505,17 @@ impl<'a> Symbols<'a> {
         }
     }
 
-    pub fn resolve_asset(&self, path: &Path) -> Result<(TypeId, TypePath)> {
+    pub fn resolve_asset(&self, path: &Path) -> Result<(TypeId, ObjectPath)> {
         let (item, resolved_path) = self.resolve_item(path, ResolveKind::Asset)?;
         let item = item.into_owned();
 
-        if let Some((ty, path, _kind)) = item.asset {
+        if let Some((ty, path)) = item.asset {
             Ok((ty, path))
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
                 path: resolved_path,
-                path_ref: item.into(),
+                path_ref: Some(item.into()),
                 kind: RefKind::Asset,
             }))
             .spanned(path.span()))
@@ -393,7 +531,7 @@ impl<'a> Symbols<'a> {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
                 path: resolved_path,
-                path_ref: item.into_owned().into(),
+                path_ref: Some(item.into_owned().into()),
                 kind: RefKind::Type,
             }))
             .spanned(path.span()))
@@ -412,35 +550,62 @@ pub(crate) struct EarlySymbols<'a, 'b> {
     /// This does not need mutable access but the user of `EarlySymbols` needs to mutate
     /// `BaubleContext`, so it is convenient to hold a mutable reference here.
     pub(super) ctx: &'a mut EarlyContext<'b>,
+    /// Context for local objects.
+    local_ctx: &'a mut LocalContext,
     /// Map of identifiers to path references.
-    pub(super) uses: HashMap<TypePathElem, CombinedPathReference>,
+    uses: HashMap<TypePathElem, EarlyUseReference>,
 }
 
 impl<'a, 'b> EarlySymbols<'a, 'b> {
-    pub fn new(ctx: &'a mut EarlyContext<'b>) -> Self {
+    pub fn new(ctx: &'a mut EarlyContext<'b>, local_ctx: &'a mut LocalContext) -> Self {
         Self {
             ctx,
+            local_ctx,
             uses: HashMap::default(),
         }
     }
 
-    pub fn bauble_ctx(&mut self) -> &mut BaubleContext {
-        self.ctx.ctx
+    /// Get contexts for registering new assets.
+    pub fn ctx_for_register(&mut self) -> (&mut BaubleContext, &mut LocalContext) {
+        (self.ctx.ctx, self.local_ctx)
     }
 
-    pub fn add_ref(
+    fn add_ref(
         &mut self,
         ident: TypePathElem,
-        reference: CombinedPathReference,
+        reference: impl Into<EarlyUseReference>,
     ) -> std::result::Result<(), ConversionError> {
         let r = self.uses.entry(ident.clone()).or_default();
 
         *r = r
             .clone()
-            .combined(reference)
+            .combined(reference.into())
             .ok_or(ConversionError::AmbiguousUse { ident })?;
 
         Ok(())
+    }
+
+    /// Note, this can also add the top level object of the current file under its local
+    /// identifier.
+    pub fn add_local_object(
+        &mut self,
+        ident: TypePathElem,
+        ty: Option<TypeId>,
+        full_path: TypePath,
+    ) -> std::result::Result<(), ConversionError> {
+        let path = if ident.as_str() == crate::object_path::TOP_LEVEL_IDENTIFIER {
+            ObjectPath::Top(full_path)
+        } else {
+            ObjectPath::Local(full_path)
+        };
+        self.add_ref(
+            ident,
+            EarlyUseReference {
+                ty: None,
+                asset: Some((ty, path)),
+                module: None,
+            },
+        )
     }
 
     pub fn add_use(&mut self, use_path: &Spanned<PathTreeNode>) -> Result<()> {
@@ -459,7 +624,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                                 return Err(ConversionError::RefError(Box::new(RefError {
                                     uses: None,
                                     path: PathKind::Direct(leading),
-                                    path_ref: PathReference::empty().into(),
+                                    path_ref: None,
                                     kind: RefKind::Module,
                                 }))
                                 .spanned(s.span));
@@ -478,7 +643,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                         return Err(ConversionError::RefError(Box::new(RefError {
                             uses: None,
                             path: PathKind::Direct(leading),
-                            path_ref: PathReference::empty().into(),
+                            path_ref: None,
                             kind: RefKind::Module,
                         }))
                         .spanned(end.span));
@@ -495,7 +660,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                         return Err(ConversionError::RefError(Box::new(RefError {
                             uses: None,
                             path: PathKind::Direct(path),
-                            path_ref: PathReference::empty().into(),
+                            path_ref: None,
                             kind: RefKind::Any,
                         }))
                         .spanned(end.span));
@@ -515,7 +680,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                         return Err(ConversionError::RefError(Box::new(RefError {
                             uses: None,
                             path: PathKind::Indirect(leading, path_end.to_owned()),
-                            path_ref: PathReference::empty().into(),
+                            path_ref: None,
                             kind: RefKind::Any,
                         }))
                         .spanned(end.span));
@@ -539,7 +704,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                 return Err(ConversionError::RefError(Box::new(RefError {
                     uses: None,
                     path: PathKind::Direct(leading),
-                    path_ref: PathReference::empty().into(),
+                    path_ref: None,
                     kind: RefKind::Module,
                 }))
                 .spanned(l.span));
@@ -569,7 +734,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                 return Err(ConversionError::RefError(Box::new(RefError {
                     uses: None,
                     path: PathKind::Direct(leading),
-                    path_ref: PathReference::empty().into(),
+                    path_ref: None,
                     kind: RefKind::Module,
                 }))
                 .spanned(first.span));
@@ -584,7 +749,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                     return Err(ConversionError::RefError(Box::new(RefError {
                         uses: None,
                         path: PathKind::Direct(leading),
-                        path_ref: PathReference::empty().into(),
+                        path_ref: None,
                         kind: RefKind::Module,
                     }))
                     .spanned(ident.span));
@@ -676,13 +841,13 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
         &self,
         raw_path: &Path,
         kind: ResolveKind,
-    ) -> Result<(Cow<'_, CombinedPathReference>, PathKind)> {
+    ) -> Result<(Cow<'_, EarlyUseReference>, PathKind)> {
         let path = self.resolve_path(raw_path, kind)?;
 
         let reference = match &path.value {
             PathKind::Direct(path) => {
                 let r_uses = self.uses.get(path.as_str());
-                let r_ctx = self.ctx.get_ref(path.borrow());
+                let r_ctx = self.ctx.get_ref(path.borrow()).map(EarlyUseReference::from);
                 // There can be overlap between items that are children of the root of ctx and the
                 // uses here. Items from uses take priority and collisions aren't errors.
                 if let Some(r_uses) = r_uses {
@@ -700,6 +865,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                 .ctx
                 .ref_with_ident(path.borrow(), ident.borrow())
                 .map_err(|e| e.spanned(raw_path.span()))?
+                .map(EarlyUseReference::from)
                 .map(Cow::Owned),
         };
 
@@ -722,7 +888,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
                 ConversionError::RefError(Box::new(RefError {
                     uses: Some(self.uses.keys().cloned().collect()),
                     path: path.value.clone(),
-                    path_ref: PathReference::empty().into(),
+                    path_ref: None,
                     kind: kind.into(),
                 }))
             }
@@ -751,28 +917,39 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
     }
 
     /// Note, if an asset isn't registered in `BaubleContext` yet, its type will be unknown.
-    pub fn resolve_asset(&self, path: &Path) -> Result<(Option<TypeId>, TypePath)> {
+    pub fn resolve_asset(&self, path: &Path) -> Result<(Option<TypeId>, ObjectPath)> {
         let (item, resolved_path) = self.resolve_item(path, ResolveKind::Asset)?;
         let item = item.into_owned();
 
-        if let Some((mut ty, path, _kind)) = item.asset {
+        if let Some((mut ty, path)) = item.asset {
             // Once an asset is registered with its type, the path reference stored in `uses` will
             // be outdated since it won't include the type (an up-to-date value isn't essential but
             // will lead to fewer assets to process in resolve_delayed).
             if ty.is_none() {
-                ty = self
-                    .ctx
-                    .get_ref(path.borrow())
-                    .and_then(|r| r.asset)
-                    .expect("This asset is in uses, so it will exist in ctx.")
-                    .0;
+                match &path {
+                    ObjectPath::Top(path) => {
+                        ty = self
+                            .ctx
+                            .get_ref(path.borrow())
+                            .and_then(|r| r.asset)
+                            .expect("This asset is in uses, so it will exist in ctx.")
+                            .0;
+                    }
+                    ObjectPath::Local(path) => {
+                        ty = self.local_ctx.get(path.borrow());
+                    }
+                    ObjectPath::Inline(_) => {
+                        #[cfg(debug_assertions)]
+                        unreachable!();
+                    }
+                }
             }
             Ok((ty, path))
         } else {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
                 path: resolved_path,
-                path_ref: item,
+                path_ref: Some(item.into()),
                 kind: RefKind::Asset,
             }))
             .spanned(path.span()))
@@ -788,7 +965,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
             Err(ConversionError::RefError(Box::new(RefError {
                 uses: Some(self.uses.keys().cloned().collect()),
                 path: resolved_path,
-                path_ref: item.into_owned(),
+                path_ref: Some(item.into_owned().into()),
                 kind: RefKind::Type,
             }))
             .spanned(path.span()))
@@ -828,5 +1005,13 @@ impl SymbolsCommon for EarlySymbols<'_, '_> {
 
     fn type_registry(&self) -> &TypeRegistry {
         self.ctx.type_registry()
+    }
+}
+
+fn xor_option<T>(a: Option<T>, b: Option<T>) -> Option<Option<T>> {
+    match (a, b) {
+        (Some(_), Some(_)) => None,
+        (Some(t), None) | (None, Some(t)) => Some(Some(t)),
+        (None, None) => Some(None),
     }
 }

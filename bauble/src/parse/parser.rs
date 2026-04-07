@@ -689,7 +689,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             },
             |mut values, (i, (ident, type_path, value))| {
                 let is_first = i == 0;
-                let has_top_level_ident = *ident == BindingIdent::TOP_LEVEL_IDENTIFIER;
+                let has_top_level_ident = *ident == crate::object_path::TOP_LEVEL_IDENTIFIER;
 
                 let error_emitted = match (is_first, has_top_level_ident) {
                     (true, true) | (false, false) => false,
@@ -698,7 +698,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                             ident.span,
                             format!(
                                 "The first item must have '{}' as the identifier",
-                                BindingIdent::TOP_LEVEL_IDENTIFIER
+                                crate::object_path::TOP_LEVEL_IDENTIFIER
                             ),
                         ));
                         true
@@ -708,7 +708,7 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                             ident.span,
                             format!(
                                 "Identifier '{}' is only allowed for the first item",
-                                BindingIdent::TOP_LEVEL_IDENTIFIER
+                                crate::object_path::TOP_LEVEL_IDENTIFIER
                             ),
                         ));
                         true
