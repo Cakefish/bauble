@@ -137,16 +137,16 @@ impl<'a, S: AsRef<str> + 'a> std::borrow::Borrow<dyn ObjectPathKey + 'a> for Obj
     }
 }
 
-impl Hash for dyn ObjectPathKey {
+impl Hash for dyn ObjectPathKey + '_ {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.key().hash(state)
     }
 }
 
-impl PartialEq for dyn ObjectPathKey {
+impl PartialEq for dyn ObjectPathKey + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.key() == other.key()
     }
 }
 
-impl Eq for dyn ObjectPathKey {}
+impl Eq for dyn ObjectPathKey + '_ {}
