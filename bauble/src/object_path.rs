@@ -53,6 +53,11 @@ impl<S: AsRef<str>> ObjectPath<S> {
         }
     }
 
+    /// Get the file path that this object belongs to.
+    pub fn file_path(&self) -> TypePath<&str> {
+        self.borrow().into_file_path()
+    }
+
     /// Gets a borrowed version of the path.
     pub fn borrow(&self) -> ObjectPath<&str> {
         match self {
@@ -62,12 +67,36 @@ impl<S: AsRef<str>> ObjectPath<S> {
         }
     }
 
+    /// Convert this into an owned path.
+    pub fn to_owned(&self) -> ObjectPath {
+        match self {
+            Self::Top(path) => ObjectPath::Top(path.to_owned()),
+            Self::Local(path) => ObjectPath::Local(path.to_owned()),
+            Self::Inline(path) => ObjectPath::Inline(path.to_owned()),
+        }
+    }
+
     /// Casts reference to trait object that `ObjectPath` implements `Borrow` for.
     ///
     /// This useful to mix owned and borrowed paths when using `ObjectPath` as a key type in a map
     /// that requires the `Borrow` trait.
     pub fn as_key(&self) -> &dyn ObjectPathKey {
         self
+    }
+}
+
+impl<'a> ObjectPath<&'a str> {
+    /// Get the file path that this object belongs to.
+    pub fn into_file_path(&self) -> TypePath<&'a str> {
+        match *self {
+            Self::Top(path) => path,
+            Self::Local(path) => path
+                .split_end()
+                .map_or(TypePath::empty(), |(prefix, _)| prefix),
+            Self::Inline(path) => path
+                .split_end()
+                .map_or(TypePath::empty(), |(prefix, _)| prefix),
+        }
     }
 }
 
