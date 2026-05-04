@@ -562,10 +562,9 @@ impl TypeRegistry {
         }
         let file = TypePath::new("validate").unwrap();
 
-        // TODO: add dummy top level object
-
         if assert_instanciable {
             let mut objects = Vec::new();
+
             for (i, ty_id) in self
                 .iter_type_set(self.key_trait(Self::any_trait()))
                 .enumerate()
@@ -611,7 +610,9 @@ impl TypeRegistry {
             // Changes in sub-asset paths are specifically ignored, only the content of the
             // sub-assets must match.
 
-            let source = crate::display_formatted(
+            // dummy top level object
+            let mut source = "0 = ()\n".to_string();
+            source += &crate::display_formatted(
                 objects.as_slice(),
                 self,
                 &crate::DisplayConfig {
@@ -637,8 +638,13 @@ impl TypeRegistry {
                 mismatched,
                 missing,
                 new,
-            }) = crate::compare_object_sets(objects.into_iter(), loaded_objects.into_iter())
-            {
+            }) = crate::compare_object_sets(
+                objects.into_iter(),
+                loaded_objects.into_iter().filter(|obj| {
+                    // skip dummy top level object
+                    obj.object_path.borrow() != ObjectPath::Top(TypePath::new("validate").unwrap())
+                }),
+            ) {
                 return Err(
                     if let Some((_, span, original, new)) = mismatched.into_iter().next() {
                         let src = source
