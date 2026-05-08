@@ -807,7 +807,7 @@ pub(crate) fn register_assets(
         };
         let ty = None;
 
-        if let Err(e) = symbols.add_local_object(ident.to_owned(), ty, path) {
+        if let Err(e) = symbols.add_current_file_object(ident.to_owned(), ty, path) {
             errors.push(e.spanned(span));
         }
     }
@@ -961,7 +961,7 @@ pub(crate) fn convert_values(
             continue;
         };
 
-        if let Err(e) = symbols.add_local_object(ident.to_owned(), ty, path) {
+        if let Err(e) = symbols.add_current_file_object(ident.to_owned(), ty, path) {
             errors.push(e.spanned(span));
         }
     }

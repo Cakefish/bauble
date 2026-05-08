@@ -188,9 +188,9 @@ impl<'a> Symbols<'a> {
         Ok(())
     }
 
-    /// Note, this can also add the top level object of the current file under its local
-    /// identifier.
-    pub fn add_local_object(
+    /// Note, in addition to local objects, this is also used to add the top level object of the
+    /// current file under its local identifier.
+    pub fn add_current_file_object(
         &mut self,
         ident: TypePathElem,
         ty: TypeId,
@@ -584,9 +584,9 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
         Ok(())
     }
 
-    /// Note, this can also add the top level object of the current file under its local
-    /// identifier.
-    pub fn add_local_object(
+    /// Note, in addition to local objects, this is also used to add the top level object of the
+    /// current file under its local identifier.
+    pub fn add_current_file_object(
         &mut self,
         ident: TypePathElem,
         ty: Option<TypeId>,
