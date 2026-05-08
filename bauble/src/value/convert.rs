@@ -5,10 +5,10 @@ use crate::{
     parse::ParseVal,
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
-    types::{self, TypeId},
+    types::{self, TypeId, TypeRegistry},
     value::{
-        Attributes, Fields, Ident, SpannedValue, Symbols, UnspannedVal, Val, Value, ValueContainer,
-        ValueTrait, error::Result,
+        Attributes, Fields, Ident, ObjectPath, SpannedValue, Symbols, UnspannedVal, Val, Value,
+        ValueContainer, ValueTrait, error::Result, symbols::SymbolsCommon,
     },
 };
 
@@ -52,17 +52,16 @@ fn set_attributes<C: ConvertValue>(
 }
 
 fn resolve_type(
-    symbols: &Symbols,
+    types: &TypeRegistry,
     expected_type: TypeId,
     val_type: &mut Option<Spanned<TypeId>>,
     primitive_type: Option<types::Primitive>,
     span: crate::Span,
 ) -> Result<Spanned<TypeId>> {
-    let types = symbols.ctx.type_registry();
     let ty = if types.key_type(expected_type).kind.instanciable() {
         expected_type.spanned(val_type.map(|s| s.span).unwrap_or(span))
     } else {
-        match default_value_type(symbols, primitive_type, *val_type) {
+        match default_value_type(types, primitive_type, *val_type) {
             Some(ty) => {
                 let ty = ty.spanned(val_type.map_or(span, |s| s.span));
                 *val_type = Some(ty);
@@ -92,15 +91,28 @@ fn resolve_type(
     Ok(ty)
 }
 
-pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<Spanned<TypeId>>> {
-    let types = symbols.ctx.type_registry();
+/// Returns type if it can be determined from the provided `ParseVal` without further context
+/// (other than resolving types and looking at the type of referenced objects).
+pub(super) fn value_type<S: SymbolsCommon>(
+    value: &ParseVal,
+    symbols: &S,
+) -> Result<Option<Spanned<TypeId>>> {
+    let types = symbols.type_registry();
 
+    // Type was specified via a prefixed "<type>" or this is value where the type is explicit like a struct value.
     if let Some(ty) = &value.ty {
         return Ok(Some(symbols.resolve_type(ty)?.spanned(ty.span())));
     };
 
     let ty = match &*value.value {
-        Value::Ref(path) => Some(symbols.resolve_asset(path)?.0.spanned(path.span())),
+        // Determine referenced value type by looking up referenced path.
+        Value::Ref(path) => Some(
+            symbols
+                .resolve_asset_type(path)?
+                // This happens if the asset exists but its type has not been resolved yet.
+                .ok_or_else(|| ConversionError::UnresolvedType.spanned(path.span()))?
+                .spanned(path.span()),
+        ),
         Value::Or(paths) => {
             let mut ty = None;
             for path in paths {
@@ -115,8 +127,8 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
                     types::TypeKind::Generic(type_set) => {
                         if let Some(instance) = types.iter_type_set(type_set).next()
                             && let types::TypeKind::EnumVariant {
-                                fields: types::Fields::Unit,
                                 enum_type,
+                                fields: types::Fields::Unit,
                                 ..
                             } = &types.key_type(instance).kind
                         {
@@ -182,11 +194,10 @@ pub(super) fn value_type(value: &ParseVal, symbols: &Symbols) -> Result<Option<S
     Ok(ty)
 }
 pub(super) fn default_value_type(
-    symbols: &Symbols,
+    types: &TypeRegistry,
     primitive: Option<types::Primitive>,
     value_type: Option<Spanned<TypeId>>,
 ) -> Option<TypeId> {
-    let types = symbols.ctx.type_registry();
     if let Some(value_type) = value_type {
         let enum_type = match &types.key_type(value_type.value).kind {
             types::TypeKind::EnumVariant { enum_type, .. } => *enum_type,
@@ -223,11 +234,11 @@ pub enum AnyVal<'a> {
 pub struct ConvertMeta<'a> {
     pub symbols: &'a Symbols<'a>,
     pub additional_objects: &'a mut AdditionalObjects,
-    // TODO: in stage 2 (of asset per file impl) this probably needs to be `0` rather than anything
-    // that could conflict with the name of a local asset. Because this is used to name inline
-    // objects uniquely.
-    //
     /// Used as a prefix to uniquely name inline objects.
+    ///
+    /// Note, for top level objects we specifically use `0` and not the file name. If we used the
+    /// file name, inline object names could collide with inline objects of a local object in
+    /// another file.
     pub object_name: TypePathElem<&'a str>,
     pub default_span: Span,
 }
@@ -276,7 +287,7 @@ impl AdditionalObjects {
         &mut self,
         name: TypePathElem<&str>,
         val: Val,
-        symbols: &Symbols,
+        types: &TypeRegistry,
     ) -> Result<Value> {
         let idx = *self
             .name_allocs
@@ -285,15 +296,11 @@ impl AdditionalObjects {
             .or_insert(0);
         let name = TypePathElem::new(format!("{name}@{idx}"))
             .expect("idx is just a number, and we know name is a valid path elem.");
+        let path = ObjectPath::Inline(self.file_path.join(&name));
+        self.objects
+            .push(super::create_object(path.clone(), val, types)?);
 
-        self.objects.push(super::create_object(
-            self.file_path.join(&name),
-            false,
-            val,
-            symbols,
-        )?);
-
-        Ok(Value::Ref(self.file_path.join(&name)))
+        Ok(Value::Ref(path))
     }
 
     pub(super) fn into_objects(self) -> Vec<super::Object> {
@@ -304,7 +311,7 @@ impl AdditionalObjects {
         &mut self,
         span: Span,
         object_name: TypePathElem<&str>,
-        symbols: &Symbols,
+        types: &TypeRegistry,
         f: impl FnOnce(&mut AdditionalUnspannedObjects) -> R,
     ) -> Result<R> {
         let mut unspanned = AdditionalUnspannedObjects::new_with_name_allocs(
@@ -315,13 +322,9 @@ impl AdditionalObjects {
 
         let res = f(&mut unspanned);
 
-        for (name, value) in unspanned.into_objects() {
-            self.objects.push(super::create_object(
-                self.file_path.join(&name),
-                false,
-                value.into_spanned(span),
-                symbols,
-            )?);
+        for (path, value) in unspanned.into_objects() {
+            self.objects
+                .push(super::create_object(path, value.into_spanned(span), types)?);
         }
 
         Ok(res)
@@ -332,7 +335,8 @@ impl AdditionalObjects {
 enum NameAllocs<'a> {
     Owned(HashMap<TypePathElem, u64>),
     Borrowed(&'a mut HashMap<TypePathElem, u64>),
-    Custom(&'a mut dyn FnMut(TypePathElem<&str>) -> TypePathElem),
+    // Parameters: (file, parent_object_name)
+    Custom(&'a mut dyn FnMut(TypePath<&str>, TypePathElem<&str>) -> ObjectPath),
 }
 
 impl NameAllocs<'_> {
@@ -344,21 +348,26 @@ impl NameAllocs<'_> {
         }
     }
 
-    /// Allocate a new name for an object that will be referenced by the parent object
+    /// Allocate a new path for an object that will be referenced by the parent object
     /// `object_name`.
-    fn allocate_name(&mut self, object_name: TypePathElem<&str>) -> TypePathElem {
+    fn allocate_path(
+        &mut self,
+        file: TypePath<&str>,
+        object_name: TypePathElem<&str>,
+    ) -> ObjectPath {
         let from_map = |m: &mut HashMap<TypePathElem, u64>| {
             let idx = *m
                 .entry(object_name.to_owned())
                 .and_modify(|i| *i += 1u64)
                 .or_insert(0);
-            TypePathElem::new(format!("{}@{idx}", object_name))
-                .expect("idx is just a number, and we know name is a valid path elem.")
+            let name = TypePathElem::new(format!("{}@{idx}", object_name))
+                .expect("idx is just a number, and we know name is a valid path elem.");
+            ObjectPath::Inline(file.join(&name))
         };
         match self {
             Self::Owned(m) => from_map(m),
             Self::Borrowed(m) => from_map(m),
-            Self::Custom(f) => f(object_name),
+            Self::Custom(f) => f(file, object_name),
         }
     }
 }
@@ -367,7 +376,7 @@ impl NameAllocs<'_> {
 pub struct AdditionalUnspannedObjects<'a> {
     file_path: TypePath<&'a str>,
     object_name: TypePathElem<&'a str>,
-    objects: Vec<(TypePathElem, UnspannedVal)>,
+    objects: Vec<(ObjectPath, UnspannedVal)>,
     name_allocs: NameAllocs<'a>,
 }
 
@@ -401,13 +410,14 @@ impl<'a> AdditionalUnspannedObjects<'a> {
     /// This allows creating the additional objects as objects that aren't sub-objects (aka inline
     /// objects).
     ///
-    /// The closure is passed the name of the parent object and can optionally use that in its
-    /// naming logic. Note, a number representing the type id of the current subobject may be
-    /// appended to the parent object name.
+    /// The closure is passed the file path and the name of the parent object. The generated name
+    /// should be joined to the provided file path. The parent object name can optionally use that
+    /// in its naming logic. Note, a number representing the type id of the current subobject may
+    /// be appended to the parent object name.
     pub fn new_with_custom_namer(
         file_path: TypePath<&'a str>,
         object_name: TypePathElem<&'a str>,
-        namer: &'a mut impl FnMut(TypePathElem<&str>) -> TypePathElem,
+        namer: &'a mut impl FnMut(TypePath<&str>, TypePathElem<&str>) -> ObjectPath,
     ) -> Self {
         Self {
             file_path,
@@ -442,16 +452,16 @@ impl<'a> AdditionalUnspannedObjects<'a> {
 
     /// Add an additional object, and get a reference to it.
     pub fn add_object(&mut self, val: UnspannedVal) -> Value<UnspannedVal> {
-        let name = self.name_allocs.allocate_name(self.object_name);
-        let res = Value::Ref(self.file_path.join(&name));
-        self.objects.push((name, val));
+        let path = self
+            .name_allocs
+            .allocate_path(self.file_path, self.object_name);
+        let res = Value::Ref(path.clone());
+        self.objects.push((path, val));
         res
     }
 
     /// Get the additional objects.
-    pub fn into_objects(
-        self,
-    ) -> impl ExactSizeIterator<Item = (TypePathElem, UnspannedVal)> + use<> {
+    pub fn into_objects(self) -> impl ExactSizeIterator<Item = (ObjectPath, UnspannedVal)> + use<> {
         self.objects.into_iter()
     }
 }
@@ -466,7 +476,7 @@ where
 
     fn get_variant(ident: &Self::Variant, symbols: &Symbols) -> Result<TypePathElem>;
 
-    fn get_asset(ident: &Self::Ref, symbols: &Symbols) -> Result<TypePath>;
+    fn get_asset(ident: &Self::Ref, symbols: &Symbols) -> Result<ObjectPath>;
 
     fn convert_inner<'a, C: ConvertValue>(
         value: Spanned<&Value<Self>>,
@@ -483,15 +493,15 @@ where
         )
         .then_some(expected_type.spanned(value.span)));
 
+        let types = meta.symbols.ctx.type_registry();
         let ty_id = resolve_type(
-            meta.symbols,
+            types,
             expected_type,
             &mut val_ty,
             value.value.primitive_type(),
             value.span,
         )?;
 
-        let types = meta.symbols.ctx.type_registry();
         let ty = types.key_type(ty_id.value);
 
         let span = value.span;
@@ -821,7 +831,7 @@ where
                     let mut v = meta.additional_objects.with_additional_unspanned(
                         span,
                         meta.object_name,
-                        meta.symbols,
+                        meta.symbols.ctx.type_registry(),
                         |additional| {
                             ty.meta
                                 .default
@@ -1071,8 +1081,9 @@ where
                         *ty,
                     )?;
 
+                    let types = meta.symbols.ctx.type_registry();
                     meta.additional_objects
-                        .add_object(object_name.borrow(), val, meta.symbols)?
+                        .add_object(object_name.borrow(), val, types)?
                 }
                 (types::TypeKind::Primitive(primitive), Value::Primitive(value))
                     if !matches!(value, PrimitiveValue::Default) =>
@@ -1136,10 +1147,11 @@ where
                     )?;
                 }
                 (_, Value::Primitive(PrimitiveValue::Default)) => {
+                    let types = meta.symbols.ctx.type_registry();
                     let mut v = meta.additional_objects.with_additional_unspanned(
                         span,
                         meta.object_name,
-                        meta.symbols,
+                        types,
                         |additional| -> Result<_> {
                             Ok(types
                                 .instantiate(*ty_id, additional)
@@ -1222,7 +1234,7 @@ impl ConvertValueInner for UnspannedVal {
         Ok(ident.clone())
     }
 
-    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
+    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<ObjectPath> {
         Ok(asset.clone())
     }
 
@@ -1259,7 +1271,7 @@ impl ConvertValueInner for Val {
         Ok(ident.value.clone())
     }
 
-    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<TypePath> {
+    fn get_asset(asset: &Self::Ref, _symbols: &Symbols) -> Result<ObjectPath> {
         Ok(asset.clone())
     }
 
@@ -1359,7 +1371,7 @@ impl ConvertValueInner for ParseVal {
             .to_owned())
     }
 
-    fn get_asset(asset: &Self::Ref, symbols: &Symbols) -> Result<TypePath> {
+    fn get_asset(asset: &Self::Ref, symbols: &Symbols) -> Result<ObjectPath> {
         symbols.resolve_asset(asset).map(|(_, p)| p)
     }
 

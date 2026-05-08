@@ -7,7 +7,7 @@ use crate::{
     Attributes, BaubleContext, FieldsKind, PrimitiveValue, Value,
     context::FileId,
     parse::{
-        Binding, ParseVal,
+        Binding, BindingIdent, ParseVal,
         value::{ParseValues, Path, PathEnd, PathTreeEnd, PathTreeNode},
     },
     spanned::{SpanExt, Spanned},
@@ -516,13 +516,13 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
 
             let path_p = path.clone().padded_by(comments).padded();
 
-            // Parser for tuple structs
-            let unnamed_struct = path_p
+            // Parser for tuple structs (unnamed fields).
+            let tuple_struct = path_p
                 .clone()
                 .then(tuple.clone())
                 .map(|(name, fields)| (Some(name), Value::Struct(FieldsKind::Unnamed(fields))));
 
-            // Parser for structs
+            // Parser for structs with named fields
             let named_struct = path_p
                 .clone()
                 .then(structure.clone())
@@ -567,7 +567,8 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                     .map(|p| p.into_iter().collect()))
                 .map(Value::Or);
 
-            let path_value = path
+            // Parser for unit structs (no fields).
+            let unit_struct = path
                 .clone()
                 .map(|path: Path| (Some(path), Value::Struct(FieldsKind::Unit)));
 
@@ -603,10 +604,10 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 array.map(no_type),
                 tuple.map(no_type),
                 map.map(no_type),
-                unnamed_struct,
+                tuple_struct,
                 named_struct,
                 path_or.map(no_type),
-                path_value,
+                unit_struct,
                 raw.map(no_type),
                 literal.map(no_type),
             ))
@@ -688,20 +689,49 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
             },
             |mut values, (i, (ident, type_path, value))| {
                 let is_first = i == 0;
+                let has_top_level_ident = *ident == crate::object_path::TOP_LEVEL_IDENTIFIER;
 
-                let binding = Binding {
-                    type_path,
-                    value,
-                    is_first,
+                let error_emitted = match (is_first, has_top_level_ident) {
+                    (true, true) | (false, false) => false,
+                    (true, false) => {
+                        emitter.emit(Rich::custom(
+                            ident.span,
+                            format!(
+                                "The first item must have '{}' as the identifier",
+                                crate::object_path::TOP_LEVEL_IDENTIFIER
+                            ),
+                        ));
+                        true
+                    }
+                    (false, true) => {
+                        emitter.emit(Rich::custom(
+                            ident.span,
+                            format!(
+                                "Identifier '{}' is only allowed for the first item",
+                                crate::object_path::TOP_LEVEL_IDENTIFIER
+                            ),
+                        ));
+                        true
+                    }
                 };
 
-                if values.values.contains_key(&ident) {
+                let binding_ident = if has_top_level_ident {
+                    BindingIdent::TopLevel(ident.map(|_| ()))
+                } else {
+                    BindingIdent::Local(ident)
+                };
+
+                let binding = Binding { type_path, value };
+
+                // Note, we don't emit this if a more specific error about the identifier was
+                // already emitted above.
+                if values.values.contains_key(&binding_ident) && !error_emitted {
                     emitter.emit(Rich::custom(
-                        ident.span,
+                        binding_ident.span(),
                         "This identifier was already used".to_string(),
                     ));
                 }
-                values.values.insert(ident, binding);
+                values.values.insert(binding_ident, binding);
                 values
             },
         )

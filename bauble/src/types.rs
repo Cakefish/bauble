@@ -18,7 +18,10 @@ pub mod path;
 use indexmap::IndexMap;
 use path::{TypePath, TypePathElem};
 
-use crate::{AdditionalUnspannedObjects, Bauble, BaubleAllocator, value::UnspannedVal};
+use crate::{
+    AdditionalUnspannedObjects, Bauble, BaubleAllocator, object_path::ObjectPath,
+    value::UnspannedVal,
+};
 
 #[allow(missing_docs)]
 pub type Extra = IndexMap<String, String>;
@@ -202,8 +205,8 @@ pub enum TypeSystemError<'a> {
     InstantiableErrors,
     ConstructInequality(String, UnspannedVal, UnspannedVal),
     MissingObjects {
-        instantiated_missing: Vec<TypePath>,
-        loaded_unknown: Vec<TypePath>,
+        instantiated_missing: Vec<ObjectPath>,
+        loaded_unknown: Vec<ObjectPath>,
     },
 }
 
@@ -561,6 +564,7 @@ impl TypeRegistry {
 
         if assert_instanciable {
             let mut objects = Vec::new();
+
             for (i, ty_id) in self
                 .iter_type_set(self.key_trait(Self::any_trait()))
                 .enumerate()
@@ -579,7 +583,7 @@ impl TypeRegistry {
                 let object_path = path_end.strip_generic().append(&format!("_{i}")).unwrap();
                 let object_name = object_path.get_end().unwrap().1;
 
-                let object_path = file.join(&object_name);
+                let object_path = ObjectPath::Local(file.join(&object_name));
 
                 let mut additonal = AdditionalUnspannedObjects::new(file, object_name.borrow());
 
@@ -590,19 +594,14 @@ impl TypeRegistry {
                     });
                 };
 
-                for (name, value) in additonal.into_objects() {
+                for (path, value) in additonal.into_objects() {
                     objects.push(crate::Object {
-                        object_path: file.join(&name),
-                        top_level: false,
+                        object_path: path,
                         value,
                     })
                 }
 
-                objects.push(crate::Object {
-                    object_path,
-                    top_level: false,
-                    value,
-                })
+                objects.push(crate::Object { object_path, value })
             }
 
             // Check that instantiated objects match after being serialized to bauble text and
@@ -611,7 +610,9 @@ impl TypeRegistry {
             // Changes in sub-asset paths are specifically ignored, only the content of the
             // sub-assets must match.
 
-            let source = crate::display_formatted(
+            // dummy top level object
+            let mut source = "0 = ()\n".to_string();
+            source += &crate::display_formatted(
                 objects.as_slice(),
                 self,
                 &crate::DisplayConfig {
@@ -637,8 +638,13 @@ impl TypeRegistry {
                 mismatched,
                 missing,
                 new,
-            }) = crate::compare_object_sets(objects.into_iter(), loaded_objects.into_iter())
-            {
+            }) = crate::compare_object_sets(
+                objects.into_iter(),
+                loaded_objects.into_iter().filter(|obj| {
+                    // skip dummy top level object
+                    obj.object_path.borrow() != ObjectPath::Top(TypePath::new("validate").unwrap())
+                }),
+            ) {
                 return Err(
                     if let Some((_, span, original, new)) = mismatched.into_iter().next() {
                         let src = source

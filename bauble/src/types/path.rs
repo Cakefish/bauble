@@ -189,13 +189,6 @@ pub type Result<T> = std::result::Result<T, PathError>;
 ///
 /// Returns None if this isn't a valid path.
 fn path_len(path: &str) -> Result<usize> {
-    if path.is_empty() {
-        return Ok(0);
-    }
-    let mut count = 1;
-    let mut current_path_delim = PATH_SEPERATOR.chars();
-    let mut path_iter = path.char_indices();
-
     fn end_delim(path_iter: &mut std::str::CharIndices<'_>, end: char, index: usize) -> Result<()> {
         while let Some((i, c)) = path_iter.next() {
             if c == end {
@@ -222,6 +215,13 @@ fn path_len(path: &str) -> Result<usize> {
         }
     }
 
+    if path.is_empty() {
+        return Ok(0);
+    }
+
+    let mut count = 1;
+    let mut current_path_delim = PATH_SEPERATOR.chars();
+    let mut path_iter = path.char_indices();
     let mut is_empty = true;
 
     while let Some((i, c)) = path_iter.next() {
@@ -487,15 +487,6 @@ impl<S: AsRef<str>> TypePath<S> {
             })
     }
 
-    /// Determines if a path referencing an object is a path to a sub-object.
-    /// The path is assumed to be valid.
-    ///
-    /// This means that:
-    /// - The path contains the special '@' sub-object character.
-    pub fn is_subobject(&self) -> bool {
-        self.iter().any(|part| part.as_str().contains('@'))
-    }
-
     /// Appends `end` onto `self`.
     ///
     /// Appending is different from `join` in that it will not insert a separator,
@@ -665,6 +656,10 @@ impl<'a> TypePath<&'a str> {
         } else {
             Some((TypePath(""), TypePathElem(*self)))
         }
+    }
+
+    pub fn into_str(self) -> &'a str {
+        self.0
     }
 }
 

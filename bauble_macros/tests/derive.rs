@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bauble::{Bauble, SpannedValue, bauble_test};
+use bauble::{Bauble, Ref, SpannedValue, bauble_test, object_path::ObjectPath, path::TypePath};
 
 #[test]
 fn test_struct() {
@@ -14,7 +14,7 @@ fn test_struct() {
     bauble_test!(
         [Test]
         r#"
-        a = derive::Test { x: -5, y: 5, z: Some(true) }
+        0 = derive::Test { x: -5, y: 5, z: Some(true) }
         "#
         [Test {
             x: -5,
@@ -31,7 +31,7 @@ fn test_tuple() {
 
     bauble_test!(
         [Test]
-        "a = derive::Test(-5, 5)"
+        "0 = derive::Test(-5, 5)"
         [Test(-5, 5)]
     );
 }
@@ -50,7 +50,7 @@ fn test_enum() {
         r#"
         use derive::Test;
 
-        a = Test::Foo(-10, 2)
+        0 = Test::Foo(-10, 2)
         b = Test::Bar { x: -5, y: 5 }
         c = Test::Baz
         "#
@@ -84,7 +84,7 @@ fn test_flattened() {
         r#"
         use derive::{Test, Test2};
 
-        a: Test = -10
+        0: Test = -10
         b: Test = true
         c: Test2 = #[count = 10] "foo"
         d: Test2 = "bar"
@@ -116,7 +116,7 @@ fn test_std_types() {
     bauble_test!(
         [Test]
         r#"
-        a = derive::Test {
+        0 = derive::Test {
             a: [(2, 0), (1, -1), (5, 10)],
             b: {
                 "🔑": [true, true, false],
@@ -159,7 +159,7 @@ fn test_complex_flatten() {
     bauble_test!(
         [Transparent]
         r#"
-        a: derive::Transparent = #[a = 1, b = 2] 3
+        0: derive::Transparent = #[a = 1, b = 2] 3
         "#
         [
             Transparent(Inner(3, 0, 2), 1),
@@ -199,7 +199,7 @@ fn test_from() {
     bauble_test!(
         [NumberRepr, TestEnum]
         r#"
-        a: derive::NumberRepr = 1553  
+        0: derive::NumberRepr = 1553
 
         b: derive::TestEnum = 555
         c: derive::TestEnum = 1333
@@ -222,7 +222,7 @@ fn test_default() {
         r#"
         use derive::{Foo, Bar};
 
-        a: Foo = default
+        0: Foo = default
         b: Bar = default
         c: Foo = #[foo = 2] default
         d: Bar = #[test = 10] default
@@ -360,12 +360,20 @@ fn test_trait() {
         [r#"
             use derive::{Trans, Foo, Bar};
 
-            a: Trans = Foo(32)
+            0: Trans = Foo(32)
 
             b: Trans = <Bar> "meow"
         "#]
         [Trans(Box::new(Foo(32))), Trans(Box::new(Bar("meow".to_string())))]
     );
+}
+
+fn top_ref<T>(path: &str) -> Ref<T> {
+    Ref::from_path(ObjectPath::Top(TypePath::new(path).unwrap().to_owned()))
+}
+
+fn local_ref<T>(path: &str) -> Ref<T> {
+    Ref::from_path(ObjectPath::Local(TypePath::new(path).unwrap().to_owned()))
 }
 
 #[test]
@@ -384,12 +392,16 @@ fn test_generic() {
         r#"
         use derive::{Foo, Bar, Str};
 
-        a: Foo<Bar> = Foo(Bar(24))
-        b: Foo<Str> = Foo(Str("test"))
+        0: Foo<Bar> = Foo(Bar(24))
+        b: Ref<Foo<Str>> = $c
+        c: Foo<Str> = Foo(Str("test"))
+        d: Ref<Foo<Bar>> = $0
         "#
         [
             Foo(Bar(24)),
+            local_ref::<Foo<Str>>("test::c"),
             Foo(Str(String::from("test"))),
+            top_ref::<Foo<Bar>>("test"),
         ]
     );
 }

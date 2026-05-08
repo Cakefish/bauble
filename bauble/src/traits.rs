@@ -4,6 +4,7 @@ use crate::{
     CustomError, SpannedValue, UnspannedVal, Val, Value,
     context::BaubleContext,
     error::{BaubleError, ErrorMsg, Level},
+    object_path::ObjectPath,
     path::{TypePath, TypePathElem},
     spanned::{Span, Spanned},
     types::{self, Extra, FieldType, TypeId},
@@ -243,8 +244,8 @@ pub trait BaubleAllocator<'a> {
     where
         Self: 'a;
 
-    /// The inner representation of a type path created by this allocator.
-    type TypePathInner: 'static;
+    /// The inner representation of an object path created by this allocator.
+    type PathInner: 'static;
 
     /// # Safety
     /// Allocations in `value` have to be allocated with this allocator
@@ -253,8 +254,8 @@ pub trait BaubleAllocator<'a> {
     /// If validated an item must be placed within the same allocator.
     unsafe fn validate<T>(&self, value: Self::Out<T>) -> Result<T, ToRustError>;
 
-    /// Create a type path from this allocator.
-    fn wrap_type_path(&self, path: TypePath) -> Self::Out<TypePath<Self::TypePathInner>>;
+    /// Create a object path from this allocator.
+    fn wrap_object_path(&self, path: ObjectPath) -> Self::Out<ObjectPath<Self::PathInner>>;
 }
 
 /// The standard Rust allocator when used by Bauble.
@@ -262,7 +263,7 @@ pub struct DefaultAllocator;
 
 impl BaubleAllocator<'_> for DefaultAllocator {
     type Out<T> = T;
-    type TypePathInner = String;
+    type PathInner = String;
 
     unsafe fn wrap<T>(&self, value: T) -> Self::Out<T> {
         value
@@ -272,7 +273,7 @@ impl BaubleAllocator<'_> for DefaultAllocator {
         Ok(value)
     }
 
-    fn wrap_type_path(&self, path: TypePath) -> TypePath<Self::TypePathInner> {
+    fn wrap_object_path(&self, path: ObjectPath) -> ObjectPath<Self::PathInner> {
         path
     }
 }

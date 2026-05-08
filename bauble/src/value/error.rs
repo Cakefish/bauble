@@ -1,8 +1,7 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{borrow::Cow, collections::HashSet};
 
 use crate::{
     BaubleContext, BaubleError, CustomError,
-    context::PathReference,
     error::Level,
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
@@ -12,17 +11,25 @@ use crate::{
 use super::{Ident, PathKind};
 
 #[derive(Clone, Debug)]
+pub struct ErrorPathReference {
+    pub(super) ty: bool,
+    pub(super) asset: bool,
+    pub(super) module: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct RefError {
-    pub(super) uses: Option<HashMap<TypePathElem, PathReference>>,
+    pub(super) uses: Option<HashSet<TypePathElem>>,
     pub(super) path: PathKind,
-    pub(super) path_ref: PathReference,
+    pub(super) path_ref: Option<ErrorPathReference>,
     pub(super) kind: RefKind,
 }
 
-impl From<crate::path::PathError> for ConversionError {
-    fn from(value: crate::path::PathError) -> Self {
-        Self::PathError(value)
-    }
+/// `path::*::ident` refers to multiple items in the same namespace.
+#[derive(Clone, Debug)]
+pub struct AmbiguousWithIdent {
+    pub(crate) path: TypePath,
+    pub(crate) ident: TypePathElem,
 }
 
 /// An error type for conversions that happen inside of Bauble.
@@ -38,6 +45,7 @@ pub enum ConversionError {
     AmbiguousUse {
         ident: TypePathElem,
     },
+    AmbiguousWithIdent(AmbiguousWithIdent),
     ExpectedBitfield {
         got: TypeId,
     },
@@ -105,6 +113,7 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::Cycle(_) => Cow::Borrowed("A cycle was found"),
             ConversionError::PathError(_) => Cow::Borrowed("Path error"),
             ConversionError::AmbiguousUse { .. } => Cow::Borrowed("Ambiguous use"),
+            ConversionError::AmbiguousWithIdent(_) => Cow::Borrowed("Ambiguous with ident path"),
             ConversionError::ExpectedBitfield { .. } => Cow::Borrowed("Expected bitfield"),
             ConversionError::UnresolvedType => Cow::Borrowed("Unresolved type"),
             ConversionError::WrongLength { ty, .. } => Cow::Owned(format!(
@@ -340,6 +349,9 @@ impl BaubleError for Spanned<ConversionError> {
             ConversionError::AmbiguousUse { ident } => Cow::Owned(format!(
                 "The identifier `{ident}` has been imported multiple times"
             )),
+            ConversionError::AmbiguousWithIdent(AmbiguousWithIdent { path, ident }) => Cow::Owned(
+                format!("`{path}::*::{ident}` refers to multiple items in the same namespace"),
+            ),
             ConversionError::ExpectedBitfield { got } => Cow::Owned(format!(
                 "But got the type `{}` which is {}",
                 types.key_type(*got).meta.path,
@@ -535,20 +547,20 @@ impl BaubleError for Spanned<ConversionError> {
                 return errors;
             }
             ConversionError::RefError(ref_err) => {
-                let inner = match (
-                    &ref_err.path_ref.module,
-                    &ref_err.path_ref.asset,
-                    &ref_err.path_ref.ty,
-                ) {
-                    (None, None, None) => "",
-                    (None, None, Some(_)) => ", but it refers to a type",
-                    (None, Some(_), None) => ", but it refers to an asset",
-                    (None, Some(_), Some(_)) => ", but it refers to an asset and a type",
-                    (Some(_), None, None) => ", but it refers to a module",
-                    (Some(_), None, Some(_)) => ", but it refers to a module and a type",
-                    (Some(_), Some(_), None) => ", but it refers to a module and an asset",
-                    (Some(_), Some(_), Some(_)) => "",
-                };
+                let inner =
+                    ref_err
+                        .path_ref
+                        .as_ref()
+                        .map_or("", |r| match (r.module, r.asset, r.ty) {
+                            (false, false, false) => "",
+                            (false, false, true) => ", but it refers to a type",
+                            (false, true, false) => ", but it refers to an asset",
+                            (false, true, true) => ", but it refers to an asset and a type",
+                            (true, false, false) => ", but it refers to a module",
+                            (true, false, true) => ", but it refers to a module and a type",
+                            (true, true, false) => ", but it refers to a module and an asset",
+                            (true, true, true) => "",
+                        });
                 let mut errs = vec![(
                     Spanned::new(
                         self.span,
@@ -572,8 +584,10 @@ impl BaubleError for Spanned<ConversionError> {
                         if path.len() == 1
                             && let Some(uses) = &ref_err.uses
                         {
+                            // TODO: suggestions from `uses` could be improved by filtering by the
+                            // desired `kind`.
                             if let Some(suggestions) = get_suggestions(
-                                uses.keys().map(|ident| ident.as_str()).chain(options),
+                                uses.iter().map(|ident| ident.as_str()).chain(options),
                                 path.as_str(),
                             ) {
                                 errs.push((
@@ -639,6 +653,9 @@ impl BaubleError for Spanned<ConversionError> {
     }
 
     fn help(&self, ctx: &BaubleContext) -> Option<Cow<'static, str>> {
+        // The case where the user has some use statements (or local assets), but the `ident` they
+        // are using wasn't available in `uses`. This suggests potential items with a matching
+        // ident at the end of their path that could be brought into scope with a `use`.
         if let ConversionError::RefError(ref_err) = &self.value
             && ref_err.uses.is_some()
             && let PathKind::Direct(ident) = &ref_err.path
@@ -664,10 +681,28 @@ impl BaubleError for Spanned<ConversionError> {
     }
 }
 
+impl From<crate::path::PathError> for ConversionError {
+    fn from(value: crate::path::PathError) -> Self {
+        Self::PathError(value)
+    }
+}
+
+impl From<AmbiguousWithIdent> for ConversionError {
+    fn from(value: AmbiguousWithIdent) -> Self {
+        Self::AmbiguousWithIdent(value)
+    }
+}
+
 pub(super) type Result<T> = std::result::Result<T, Spanned<ConversionError>>;
 
 impl From<Spanned<crate::path::PathError>> for Spanned<ConversionError> {
     fn from(value: Spanned<crate::path::PathError>) -> Self {
         value.map(ConversionError::PathError)
+    }
+}
+
+impl From<Spanned<AmbiguousWithIdent>> for Spanned<ConversionError> {
+    fn from(value: Spanned<AmbiguousWithIdent>) -> Self {
+        value.map(ConversionError::AmbiguousWithIdent)
     }
 }

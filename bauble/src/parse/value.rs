@@ -2,15 +2,18 @@ use core::fmt;
 
 use crate::{
     SpanExt,
-    spanned::Spanned,
+    spanned::{Span, Spanned},
     value::{AnyVal, Ident, SpannedValue, ValueTrait},
 };
 use indexmap::IndexMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PathEnd {
-    // TODO: document how this syntax works?
     /// path::*::ident
+    ///
+    /// This refers to an item with the identifier `ident` in some path that starts with
+    /// `path`. If multiple such paths exist within the same item namespace, an error will be
+    /// generated.
     WithIdent(Ident),
     /// path::ident
     Ident(Ident),
@@ -116,6 +119,8 @@ pub struct PathTreeNode {
 
 #[derive(Debug, Clone)]
 pub struct ParseVal {
+    /// Type known from the value (i.e. for struct types) or explicitly specified by prefixing the
+    /// value with `<type>`.
     pub ty: Option<Path>,
     pub attributes: Spanned<crate::Attributes<ParseVal>>,
     pub value: Spanned<crate::Value<ParseVal>>,
@@ -166,13 +171,43 @@ impl SpannedValue for ParseVal {
 
 #[derive(Debug, Clone)]
 pub struct Binding {
+    /// Type explicitly specified in the binding definition. This is the syntax where `: type`
+    /// appears after the identifier before `=`.
     pub type_path: Option<Path>,
     pub value: ParseVal,
-    pub is_first: bool,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum BindingIdent {
+    /// This is the top level asset in a parsed file.
+    ///
+    /// It has the special cased identifier `0` and appears as the first item in the file.
+    ///
+    /// This holds no identifier string because it will have the same path as the file containing
+    /// it.
+    TopLevel(Spanned<()>),
+    /// This is a local asset. I.e. any additional assets in a parsed file.
+    Local(Ident),
+}
+
+impl BindingIdent {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::TopLevel(_) => crate::object_path::TOP_LEVEL_IDENTIFIER,
+            Self::Local(ident) => ident,
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        match self {
+            Self::TopLevel(span) => span.span,
+            Self::Local(ident) => ident.span,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct ParseValues {
     pub uses: Vec<Spanned<PathTreeNode>>,
-    pub values: IndexMap<Ident, Binding>,
+    pub values: IndexMap<BindingIdent, Binding>,
 }

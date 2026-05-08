@@ -1,3 +1,9 @@
+mod convert;
+mod display;
+mod early_context;
+mod error;
+mod symbols;
+
 use std::{collections::HashMap, hash::Hash};
 
 use indexmap::IndexMap;
@@ -5,24 +11,21 @@ use rust_decimal::Decimal;
 
 use crate::{
     BaubleErrors, FileId, VariantKind,
-    context::PathReference,
-    parse::{ParseVal, ParseValues, Path, PathEnd},
+    object_path::ObjectPath,
+    parse::{BindingIdent, ParseVal, ParseValues, Path, PathEnd},
     path::{TypePath, TypePathElem},
     spanned::{SpanExt, Spanned},
-    types::{self, TypeId},
+    types::{self, TypeId, TypeRegistry},
 };
-
-mod convert;
-mod display;
-mod error;
-mod symbols;
 
 pub use convert::AdditionalUnspannedObjects;
 pub(crate) use convert::AnyVal;
-use convert::{AdditionalObjects, ConvertMeta, ConvertValue, no_attr, value_type};
+use convert::{AdditionalObjects, ConvertMeta, ConvertValue};
 pub use display::{DisplayConfig, IndentedDisplay, display_formatted};
+pub(crate) use early_context::EarlyContext;
 use error::Result;
-pub use error::{ConversionError, RefError, RefKind};
+pub use error::{AmbiguousWithIdent, ConversionError, RefError, RefKind};
+use symbols::EarlySymbols;
 pub(crate) use symbols::Symbols;
 
 // TODO(@docs)
@@ -224,7 +227,7 @@ pub struct Val {
 impl ValueTrait for Val {
     type Inner = Self;
 
-    type Ref = TypePath;
+    type Ref = ObjectPath;
 
     type Variant = Spanned<TypePathElem>;
 
@@ -324,7 +327,7 @@ pub struct UnspannedVal {
 impl ValueTrait for UnspannedVal {
     type Inner = Self;
 
-    type Ref = TypePath;
+    type Ref = ObjectPath;
 
     type Variant = TypePathElem;
 
@@ -520,11 +523,7 @@ impl<T: ValueTrait> Value<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Object<Inner = Val> {
     /// Path that refers to this object.
-    pub object_path: TypePath,
-    // TODO: update doc in stage 2
-    /// `true` when this object appears at the top of a file and its name matches the file. The
-    /// object's path will be reduced to just the path of the file.
-    pub top_level: bool,
+    pub object_path: ObjectPath,
     pub value: Inner,
 }
 
@@ -533,7 +532,6 @@ impl Object<Val> {
     pub fn into_unspanned(self) -> Object<UnspannedVal> {
         Object {
             object_path: self.object_path,
-            top_level: self.top_level,
             value: self.value.into_unspanned(),
         }
     }
@@ -555,27 +553,16 @@ impl std::fmt::Display for PathKind {
     }
 }
 
-impl PathKind {
-    fn could_be(&self, path: TypePath<&str>) -> bool {
-        match self {
-            PathKind::Direct(p) => p.borrow() == path,
-            PathKind::Indirect(leading, ident) => {
-                path.starts_with(leading.borrow())
-                    && path.ends_with(*ident.borrow())
-                    // If `leading` ends with `ident` we could have false positives if we didn't include this check.
-                    && path.byte_len() > leading.byte_len() + ident.byte_len()
-            }
-        }
-    }
-}
-
 /// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
 ///
 /// What they are referencing needs to be loaded in order to determine their type.
+#[derive(Debug)]
 pub(crate) struct DelayedRegister {
-    asset: Spanned<TypePath>,
-    asset_kind: crate::AssetKind,
-    reference: Spanned<PathKind>,
+    path: Spanned<ObjectPath>,
+    /// Full path to the referenced asset.
+    reference: ObjectPath,
+    /// Unresolved path to the referenced asset.
+    reference_original: Spanned<Path>,
     /// The type we want a potential reference to resolve into.
     expected_ty_path: Option<Spanned<PathKind>>,
 }
@@ -583,6 +570,7 @@ pub(crate) struct DelayedRegister {
 pub(crate) fn resolve_delayed(
     mut delayed: Vec<DelayedRegister>,
     ctx: &mut crate::context::BaubleContext,
+    local_ctx: &mut crate::local_context::LocalContext,
 ) -> std::result::Result<(), Vec<Spanned<ConversionError>>> {
     loop {
         let mut errors = Vec::new();
@@ -590,15 +578,15 @@ pub(crate) fn resolve_delayed(
 
         // Try to register delayed registers, and remove them as they succeed.
         delayed.retain(|d| {
-            if let Some(r) = match &d.reference.value {
-                PathKind::Direct(path) => ctx.get_ref(path.borrow()),
-                // TODO: what if indirect path becomes ambiguous due to later registered items that
-                // were delayed?
-                PathKind::Indirect(path, ident) => {
-                    ctx.ref_with_ident(path.borrow(), ident.borrow())
-                }
-            } && let Some((ty, _, _)) = &r.asset
-            {
+            let ty = match &d.reference {
+                ObjectPath::Top(path) => ctx
+                    .get_ref(path.borrow())
+                    .and_then(|r| r.asset)
+                    .map(|(ty, _)| ty),
+                ObjectPath::Local(path) => local_ctx.get(path.borrow()),
+                ObjectPath::Inline(_) => unreachable!(),
+            };
+            if let Some(ty) = ty {
                 // TODO: for now, it is assumed all references which explicitly
                 // specify their inner type should have that inner type resolved
                 // by this point. If that is not the case, this should be a
@@ -615,7 +603,13 @@ pub(crate) fn resolve_delayed(
                     let Some(desired_ty) = (match path {
                         PathKind::Direct(path) => ctx.get_ref(path.borrow()),
                         PathKind::Indirect(path, ident) => {
-                            ctx.ref_with_ident(path.borrow(), ident.borrow())
+                            match ctx.ref_with_ident(path.borrow(), ident.borrow()) {
+                                Ok(reference) => reference,
+                                Err(e) => {
+                                    errors.push(e.spanned(span).into());
+                                    return false;
+                                }
+                            }
                         }
                     }) else {
                         errors.push(
@@ -637,19 +631,25 @@ pub(crate) fn resolve_delayed(
                         return false;
                     };
 
-                    if desired_ty != *ty {
+                    if desired_ty != ty {
                         errors.push(
                             ConversionError::ExpectedExactType {
                                 expected: desired_ty,
-                                got: Some(*ty),
+                                got: Some(ty),
                             }
                             .spanned(span),
                         );
                     }
                 }
-                if let Err(e) = ctx.register_asset(d.asset.value.borrow(), *ty, d.asset_kind) {
-                    errors.push(ConversionError::Custom(e).spanned(d.asset.span))
+
+                match &*d.path {
+                    ObjectPath::Top(path) => ctx.register_asset(path.borrow(), ty),
+                    ObjectPath::Local(path) => local_ctx.register(path.clone(), ty, ctx),
+                    ObjectPath::Inline(_) => {
+                        unreachable!("can't be returned from object_ident_path")
+                    }
                 }
+
                 false
             } else {
                 true
@@ -669,55 +669,52 @@ pub(crate) fn resolve_delayed(
             let mut graph = petgraph::graphmap::DiGraphMap::new();
             let mut map = HashMap::new();
             for a in delayed.iter() {
-                let node_a = graph.add_node(a.asset.as_ref().map(|p| p.borrow()));
-                map.insert(node_a, a.reference.as_ref());
+                let node_a = graph.add_node(a.path.as_ref().map(|p| p.borrow()));
+                map.insert(node_a, (&a.reference, &a.reference_original));
 
                 for b in delayed.iter() {
-                    if a.reference.could_be(b.asset.borrow()) {
-                        graph.add_edge(node_a, b.asset.as_ref().map(|p| p.borrow()), ());
+                    if a.reference == *b.path {
+                        graph.add_edge(node_a, b.path.as_ref().map(|p| p.borrow()), ());
                     }
                 }
             }
 
             for scc in petgraph::algo::tarjan_scc(&graph) {
-                if scc.len() == 1 {
-                    if map[&scc[0]].could_be(scc[0].borrow()) {
+                // len == 1
+                if let [referer] = scc.as_slice() {
+                    let (referenced, referenced_original) = map[referer];
+                    if referenced.borrow() == **referer {
                         // Ref refers to itself
                         errors.push(
                             ConversionError::Cycle(vec![(
-                                scc[0].to_string().spanned(scc[0].span),
-                                vec![map[&scc[0]].to_string().spanned(map[&scc[0]].span)],
+                                referer.map(|r| format!("{r:?}")),
+                                vec![referenced_original.as_ref().map(|r| format!("{r:?}"))],
                             )])
-                            .spanned(scc[0].span),
+                            .spanned(referer.span),
                         )
                     } else {
-                        // TODO: Is this path possible? Wouldn't Ref have to refer to itself for
-                        // scc.len() == 1?
+                        // We make sure that the referenced asset exists in the pre-registered
+                        // assets before producing `DelayedRegister`. So this error will only occur
+                        // if the referenced asset's type failed to resolve (such that it wasn't
+                        // registered in resolve_delayed).
                         errors.push(
-                            ConversionError::RefError(Box::new(RefError {
-                                // TODO: Could pass uses here for better suggestions.
-                                uses: None,
-                                path: map[&scc[0]].value.clone(),
-                                path_ref: PathReference::empty(),
-                                kind: RefKind::Asset,
-                            }))
-                            .spanned(map[&scc[0]].span),
-                        )
+                            ConversionError::Custom(crate::CustomError::new(format!(
+                                "{referenced_original} refers to an asset that failed to register",
+                            )))
+                            .spanned(referenced_original.span),
+                        );
                     }
                 } else {
-                    errors.push(
-                        ConversionError::Cycle(
-                            scc.iter()
-                                .map(|s| {
-                                    (
-                                        s.to_string().spanned(s.span),
-                                        vec![map[s].to_string().spanned(map[s].span)],
-                                    )
-                                })
-                                .collect(),
-                        )
-                        .spanned(scc[0].span),
-                    );
+                    let cycle = scc
+                        .iter()
+                        .map(|s| {
+                            (
+                                format!("{s:?}").spanned(s.span),
+                                vec![map[s].1.as_ref().map(|r| format!("{r:?}"))],
+                            )
+                        })
+                        .collect();
+                    errors.push(ConversionError::Cycle(cycle).spanned(scc[0].span));
                 }
             }
 
@@ -726,82 +723,120 @@ pub(crate) fn resolve_delayed(
     }
 }
 
-/// Computes the path of an object.
+/// Returns the identifier and the path of an object.
 ///
-/// Normally, the path is just the files's bauble path joined with the object name.
+/// The top level object in each file will have a path that matches the path of the file containing
+/// it and be wrapped in `ObjectPath::Top`. The identifier for these objects is always "0" and it
+/// can be referred to locally in the same file using this identifier.
 ///
-/// If an object is the first in the file and its name matches the file name, it receives a special
-/// path that is just the file's bauble path.
-fn object_path(
+/// For all other objects with binding are local object. For these, the path is just the file's
+/// bauble path joined with the object identifier and they are wrapped in `ObjectPath::Local`.
+fn object_ident_path<'a>(
     file_path: TypePath<&str>,
-    ident: &TypePathElem<&str>,
-    binding: &crate::parse::Binding,
-) -> TypePath<String> {
-    if binding.is_first && {
-        let file_name = file_path
-            .split_end()
-            .expect("file_path must not be empty")
-            .1;
-        *ident == file_name
-    } {
-        file_path.to_owned()
-    } else {
-        file_path.join(ident)
+    binding_ident: &'a BindingIdent,
+) -> (TypePathElem<&'a str>, ObjectPath) {
+    let ident = TypePathElem::new(binding_ident.as_str()).expect("Invariant");
+    let path = match binding_ident {
+        BindingIdent::TopLevel(_) => ObjectPath::Top(file_path.to_owned()),
+        BindingIdent::Local(_) => ObjectPath::Local(file_path.join(&ident)),
+    };
+    (ident, path)
+}
+
+/// Registers all new top level asset paths into [`EarlyContext`] so they will be known for
+/// resolving full paths from `use`s in [`register_assets`].
+///
+/// We need to know what items brought into scope with `use` are assets rather than types or
+/// modules to properly dertermine the full path (otherwise there could be multiple candidates
+/// because items from different namespaces can have the same name).
+pub(crate) fn pre_register_assets(
+    ctx: &mut EarlyContext<'_>,
+    file_path: TypePath<&str>,
+    values: &ParseValues,
+) {
+    for ident in values.values.keys() {
+        let (_ident, path) = object_ident_path(file_path, ident);
+
+        match path {
+            ObjectPath::Top(path) => ctx.register_asset(path.borrow()),
+            // These don't need to be pre-registered, because we can add their full path directly
+            // to Symbols, and they aren't needed to resolve `use` based paths since they can only
+            // be referenced from the same file..
+            ObjectPath::Local(_) => {}
+            ObjectPath::Inline(_) => unreachable!("can't be returned from object_ident_path"),
+        }
     }
 }
 
 pub(crate) fn register_assets(
+    ctx: &mut EarlyContext<'_>,
+    local_ctx: &mut crate::local_context::LocalContext,
     file_path: TypePath<&str>,
-    ctx: &mut crate::context::BaubleContext,
     values: &ParseValues,
 ) -> std::result::Result<Vec<DelayedRegister>, Vec<Spanned<ConversionError>>> {
     let mut errors = Vec::new();
     let mut delayed = Vec::new();
 
-    let mut symbols = Symbols::new(ctx);
-    // Add `uses` to local `Symbols` instance
+    let mut symbols = EarlySymbols::new(ctx, local_ctx);
+    // Add `uses` to local symbols instance.
     for use_path in &values.uses {
-        // TODO: This will error if the referenced file is yet to be passed register_assets
         if let Err(e) = symbols.add_use(use_path) {
             errors.push(e);
         }
     }
 
-    // Move `uses` in/out of `Symbols` every loop so we have mutable access to `ctx` at certain
-    // points.
-    let Symbols { mut uses, .. } = symbols;
+    // Add assets from this file to Symbols::use.
+    for ident in values.values.keys() {
+        let span = ident.span();
+        let (ident, path) = object_ident_path(file_path, ident);
 
-    // TODO: Register these in a correct order to allow for assets referencing assets.
-    for (ident, binding) in &values.values {
-        let span = ident.span;
-        let ident = &TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = object_path(file_path, ident, binding);
-        let top_level = path.borrow() == file_path;
-        let kind = if top_level {
-            crate::AssetKind::TopLevel
-        } else {
-            crate::AssetKind::Local
+        // Note, we don't need to lookup these in contexts because we know the full paths and that
+        // the types are not known for any of them.
+        let path = match path {
+            ObjectPath::Top(path) => {
+                debug_assert!(
+                    symbols
+                        .ctx
+                        .get_ref(path.borrow())
+                        .is_some_and(|r| r.asset.is_some_and(|(ty, p)| ty.is_none() && p == path))
+                );
+                path
+            }
+            ObjectPath::Local(path) => path,
+            ObjectPath::Inline(_) => unreachable!("can't be returned from object_ident_path"),
         };
-        let symbols = Symbols { ctx: &*ctx, uses };
+        let ty = None;
+
+        if let Err(e) = symbols.add_current_file_object(ident.to_owned(), ty, path) {
+            errors.push(e.spanned(span));
+        }
+    }
+
+    // Resolve asset types and register the assets into `BaubleContext`.
+    //
+    // If the asset is a reference to another asset whose type is yet to be resolved, type
+    // resolution will be delayed by pushing an entry to `delayed`. These are then handled by
+    // `resolve_delayed`.
+    for (ident, binding) in &values.values {
+        let span = ident.span();
+        let (_ident, path) = object_ident_path(file_path, ident);
 
         // To register an asset we need to determine its type.
         let ty = if let Some(ty) = &binding.type_path
-            // If the value is a reference, then an explicit type should
-            // still be delayed. The reason why it should be delayed is
-            // because the type of the reference `Ref<T>`, where `T` is
-            // the type of the referenced object, may not exist at this
-            // point, and as such trying to resolve the type may cause
-            // issues because the type is not known and depends on the
-            // order the reference was created compared to the
-            // referenced object, which is undesired behaviour.
-            && !matches!(binding.value.value.value, Value::Ref(_))
+            // If the value is a reference, resolving an explicit type to a type
+            // ID should be delayed. The type of the reference `Ref<T>` is only
+            // registered when registering an object of type `T`. So the when
+            // the referenced object has yet to be registered, the reference
+            // type may not exist. Thus, trying to resolve the type at this
+            // point can fail.
+            && !matches!(&*binding.value.value, Value::Ref(_))
         {
             symbols.resolve_type(ty)
         } else {
-            let res = value_type(&binding.value, &symbols)
+            let res = convert::value_type(&binding.value, &symbols)
                 .map(|v| {
                     convert::default_value_type(
-                        &symbols,
+                        symbols.ctx.type_registry(),
                         binding.value.value.value.primitive_type(),
                         v,
                     )
@@ -811,7 +846,7 @@ pub(crate) fn register_assets(
                     ConversionError::UnresolvedType.spanned(binding.value.value.span)
                 ))
                 .and_then(|v| {
-                    if ctx.type_registry().key_type(v).kind.instanciable() {
+                    if symbols.ctx.type_registry().key_type(v).kind.instanciable() {
                         Ok(v)
                     } else {
                         Err(ConversionError::UnresolvedType.spanned(binding.value.value.span))
@@ -819,11 +854,25 @@ pub(crate) fn register_assets(
                 });
 
             if res.is_err()
-                && let Value::Ref(reference) = &*binding.value.value
-                && let Ok(reference) = symbols.resolve_path(reference)
+                && let Value::Ref(ref_path) = &*binding.value.value
+                // Note: If this fails, then `value_type()` would have produced the same error
+                // already in `res` from calling `symbols.resolve_asset_type()` which uses
+                // `resolve_path` internally. So there is no extra information from this error.
+                //
+                // We use `resolve_asset` instead of just `resolve_path` because the asset should
+                // exist due to `pre_register_assets` or we will invevitably produce an error
+                // anyway, and the errors produced in register_assets are better than
+                // `resolve_delayed` because `symbols.uses` is available.
+                && let Ok((maybe_ty, reference)) = symbols.resolve_asset(ref_path)
             {
+                debug_assert!(
+                    maybe_ty.is_none(),
+                    "value_type should not produce an error if the referenced type is known"
+                );
                 let expected_ty_path = if let Some(expected_ty_path) = &binding.type_path {
-                    match symbols.resolve_path(expected_ty_path) {
+                    // Resolving to a full path won't fail even if the reference type is not yet
+                    // registered.
+                    match symbols.resolve_full_path_for_type(expected_ty_path) {
                         Ok(s) => Some(s),
                         Err(e) => {
                             errors.push(e);
@@ -835,42 +884,40 @@ pub(crate) fn register_assets(
                 };
 
                 delayed.push(DelayedRegister {
-                    expected_ty_path,
-                    asset_kind: kind,
-                    asset: path.spanned(span),
+                    path: path.spanned(span),
                     reference,
+                    reference_original: ref_path.clone().spanned(binding.value.span()),
+                    expected_ty_path,
                 });
-                Symbols { uses, .. } = symbols;
                 continue;
             }
 
-            res
+            if let Ok(_res) = res
+                // We skipped `resolve_type` above because `Ref<T>` might not be registered, but if we
+                // found referenced asset in `value_type`, then the asset is already registered so
+                // `Ref<T>` will either also be registered or it will be the wrong type.
+                && let Some(ty) = &binding.type_path
+            {
+                // TODO: Unfortunately, the error is "Expected this path to refer to a type" when
+                // the `Ref<T>` isn't registered which is misleading as the actual issue is that it
+                // is the wrong type for `T`. Maybe we should just register the `Ref<T>` when
+                // registering each new type `T`, rather than when encountering an asset of type
+                // `T`. Is there any downside to this approach?
+                symbols.resolve_type(ty)
+            } else {
+                res
+            }
         };
 
-        Symbols { uses, .. } = symbols;
-        let ref_ty = ty.and_then(|ty| {
-            ctx.register_asset(path.borrow(), ty, kind)
-                .map_err(|e| ConversionError::Custom(e).spanned(span))
-        });
-        match ref_ty {
-            Ok(ref_ty) => {
-                let mut symbols = Symbols { ctx: &*ctx, uses };
-                // Add to Symbols::uses so other items in the same file can directly reference this
-                // without full path.
-                if let Err(e) = symbols.add_ref(
-                    ident.to_owned(),
-                    PathReference {
-                        ty: None,
-                        asset: Some((ref_ty, path.clone(), kind)),
-                        module: None,
-                    },
-                ) {
-                    errors.push(e.spanned(binding.value.value.span));
-                }
-                Symbols { uses, .. } = symbols;
-            }
-            Err(err) => errors.push(err),
-        };
+        let (ctx, local_ctx) = symbols.ctx_for_register();
+        match ty {
+            Ok(ty) => match path {
+                ObjectPath::Top(path) => ctx.register_asset(path.borrow(), ty),
+                ObjectPath::Local(path) => local_ctx.register(path.clone(), ty, ctx),
+                ObjectPath::Inline(_) => unreachable!("can't be returned from object_ident_path"),
+            },
+            Err(e) => errors.push(e),
+        }
     }
 
     if errors.is_empty() {
@@ -883,77 +930,69 @@ pub(crate) fn register_assets(
 pub(crate) fn convert_values(
     file: FileId,
     values: ParseValues,
-    default_symbols: &Symbols,
+    ctx: &crate::context::BaubleContext,
+    local_ctx: &crate::local_context::LocalContext,
 ) -> std::result::Result<Vec<Object>, BaubleErrors> {
-    let mut use_symbols = Symbols::new(default_symbols.ctx);
-    let mut use_errors = Vec::new();
+    let mut errors = Vec::new();
+
+    let mut symbols = Symbols::new(ctx);
     for use_path in values.uses {
-        if let Err(e) = use_symbols.add_use(&use_path) {
-            use_errors.push(e);
+        if let Err(e) = symbols.add_use(&use_path) {
+            errors.push(e);
         }
     }
-
-    let mut symbols = default_symbols.clone();
 
     let file_path = symbols.ctx.get_file_path(file);
 
-    // Add asset
-    for (ident, binding) in &values.values {
-        let span = ident.span;
-        let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = object_path(file_path, &ident, binding);
+    // Add assets from this file to Symbols::use.
+    for ident in values.values.keys() {
+        let span = ident.span();
+        let (ident, path) = object_ident_path(file_path, ident);
 
-        if let Some(PathReference {
-            asset: Some(asset), ..
-        }) = symbols.ctx.get_ref(path.borrow())
-        {
-            if let Err(e) = symbols.add_ref(
-                ident.to_owned(),
-                PathReference {
-                    ty: None,
-                    asset: Some(asset),
-                    module: None,
-                },
-            ) {
-                use_errors.push(e.spanned(span));
-            }
-        } else {
-            // Didn't pre-register assets.
-            use_errors.push(ConversionError::UnregisteredAsset.spanned(span));
+        let asset = match path {
+            ObjectPath::Top(path) => symbols.ctx.get_ref(path.borrow()).and_then(|r| r.asset),
+            ObjectPath::Local(path) => local_ctx.get(path.borrow()).map(|ty| (ty, path.clone())),
+            ObjectPath::Inline(_) => unreachable!("can't be returned from object_ident_path"),
+        };
+
+        let Some((ty, path)) = asset else {
+            // Didn't register assets.
+            errors.push(ConversionError::UnregisteredAsset.spanned(span));
+            continue;
+        };
+
+        if let Err(e) = symbols.add_current_file_object(ident.to_owned(), ty, path) {
+            errors.push(e.spanned(span));
         }
     }
 
-    symbols.add(use_symbols);
-
-    let mut additional_objects = AdditionalObjects::new(file_path.to_owned());
-
     let default_span = crate::Span::new(file, 0..0);
+    let mut additional_objects = AdditionalObjects::new(file_path.to_owned());
+    let mut objects = Vec::new();
 
-    let mut ok = Vec::new();
-    let mut err = use_errors;
-
-    for (ident, binding) in values.values.iter() {
+    for (ident, binding) in &values.values {
         let ref_ty = match symbols.resolve_asset(
             &Path {
-                leading: Vec::new().spanned(ident.span.sub_span(0..0)),
-                last: PathEnd::Ident(ident.clone()).spanned(ident.span),
+                leading: Vec::new().spanned(ident.span().sub_span(0..0)),
+                last: PathEnd::Ident(ident.as_str().to_owned().spanned(ident.span()))
+                    .spanned(ident.span()),
             }
-            .spanned(ident.span),
+            .spanned(ident.span()),
         ) {
             Ok((ty, _)) => ty,
             Err(e) => {
-                err.push(e);
+                errors.push(e);
                 continue;
             }
         };
 
-        let ty = match symbols.ctx.type_registry().key_type(ref_ty).kind {
+        let type_registry = symbols.ctx.type_registry();
+        let ty = match type_registry.key_type(ref_ty).kind {
             types::TypeKind::Ref(type_id) => type_id,
-            _ => unreachable!("Invariant"),
+            _ => unreachable!("The type registered with an object is always a reference"),
         };
 
-        let ident = TypePathElem::new(ident.as_str()).expect("Invariant");
-        let path = object_path(file_path, &ident, binding);
+        let (ident, path) = object_ident_path(file_path, ident);
 
         let convert_meta = ConvertMeta {
             symbols: &symbols,
@@ -961,51 +1000,45 @@ pub(crate) fn convert_values(
             object_name: ident,
             default_span,
         };
-        let top_level = path.borrow() == file_path;
-        match convert_object(path, top_level, &binding.value, ty, convert_meta) {
-            Ok(obj) => ok.push(obj),
-            Err(e) => err.push(e),
+        match convert_object(path, &binding.value, ty, convert_meta) {
+            Ok(obj) => objects.push(obj),
+            Err(e) => errors.push(e),
         }
     }
 
-    let mut objects = additional_objects.into_objects();
+    let mut all_objects = additional_objects.into_objects();
 
-    if err.is_empty() {
-        objects.extend(ok);
-        Ok(objects)
+    if errors.is_empty() {
+        all_objects.extend(objects);
+        Ok(all_objects)
     } else {
-        Err(err.into())
+        Err(errors.into())
     }
 }
 
 /// Converts a parsed value to a object value using a conversion context and existing symbols. Also
 /// does some rudimentary checking if the symbols are okay.
 fn convert_object(
-    object_path: TypePath<String>,
-    top_level: bool,
+    object_path: ObjectPath,
     value: &ParseVal,
     expected_type: TypeId,
     mut meta: ConvertMeta,
 ) -> Result<Object> {
-    let value = value.convert(meta.reborrow(), expected_type, no_attr())?;
-    create_object(object_path, top_level, value, meta.symbols)
+    let value = value.convert(meta.reborrow(), expected_type, convert::no_attr())?;
+    let types = meta.symbols.ctx.type_registry();
+    create_object(object_path, value, types)
 }
 
 fn create_object(
-    object_path: TypePath<String>,
-    top_level: bool,
+    object_path: ObjectPath,
     value: Val,
-    symbols: &Symbols,
+    type_registry: &TypeRegistry,
 ) -> Result<Object> {
-    if symbols.ctx.type_registry().impls_top_level_trait(*value.ty) {
-        Ok(Object {
-            object_path,
-            top_level,
-            value,
-        })
+    if type_registry.impls_top_level_trait(*value.ty) {
+        Ok(Object { object_path, value })
     } else {
         Err(ConversionError::MissingRequiredTrait {
-            tr: symbols.ctx.type_registry().top_level_trait(),
+            tr: type_registry.top_level_trait(),
             ty: *value.ty,
         }
         .spanned(value.span()))
@@ -1021,8 +1054,8 @@ fn create_object(
 fn compare_objects(
     original: &UnspannedVal,
     loaded: &UnspannedVal,
-    orig_map: &HashMap<TypePath, UnspannedVal>,
-    loaded_map: &HashMap<TypePath, (crate::Span, UnspannedVal)>,
+    orig_map: &HashMap<ObjectPath, UnspannedVal>,
+    loaded_map: &HashMap<ObjectPath, (crate::Span, UnspannedVal)>,
 ) -> std::result::Result<(), (UnspannedVal, UnspannedVal)> {
     let inquality_err = || (original.clone(), loaded.clone());
 
@@ -1036,11 +1069,13 @@ fn compare_objects(
 
     match (&original.value, &loaded.value) {
         (crate::Value::Ref(a), crate::Value::Ref(b)) => {
-            // Compare the sub assets rather than the paths to them.
+            // Compare the inline object rather than the paths to them.
             //
-            // Note, this means object comparison will pass even when the paths to sub
-            // assets change.
-            if a.is_subobject() {
+            // Note, this means object comparison will pass even when
+            // the paths to inline objects change.
+            if let ObjectPath::Inline(_) = a
+                && let ObjectPath::Inline(_) = b
+            {
                 let a = orig_map.get(a).unwrap();
                 let (_, b) = loaded_map.get(b).unwrap();
                 compare_objects(a, b, orig_map, loaded_map)
@@ -1124,11 +1159,11 @@ fn compare_objects(
 /// Error returned by [`compare_object_sets`].
 pub struct CompareObjectsError {
     /// Objects with the same path but non-equal content.
-    pub mismatched: Vec<(TypePath, crate::Span, UnspannedVal, UnspannedVal)>,
+    pub mismatched: Vec<(ObjectPath, crate::Span, UnspannedVal, UnspannedVal)>,
     /// Objects from the original set that are missing in the new set.
-    pub missing: Vec<(TypePath, UnspannedVal)>,
+    pub missing: Vec<(ObjectPath, UnspannedVal)>,
     /// Objects only found in the new set.
-    pub new: Vec<(TypePath, UnspannedVal)>,
+    pub new: Vec<(ObjectPath, UnspannedVal)>,
 }
 
 /// Compares two sets of objects and returns an error with the list of mismatched, missing, and new
@@ -1157,8 +1192,11 @@ pub fn compare_object_sets(
     let mut mismatched = Vec::new();
 
     for (k, a) in original_object_map.iter() {
-        // Don't compare sub-assets, they will be compared by recursion in `compare_objects`
-        if !k.is_subobject() {
+        // Don't compare inline objects, they will be compared by recursion in `compare_objects`
+        //
+        // Note, this means unreferenced inline objects won't be considered (but those should not
+        // be possible).
+        if !matches!(k, ObjectPath::Inline(_)) {
             if let Some((span, b)) = loaded_object_map.get(k) {
                 if let Err((original, new)) =
                     compare_objects(a, b, &original_object_map, &loaded_object_map)
@@ -1173,9 +1211,11 @@ pub fn compare_object_sets(
 
     let new = loaded_object_map
         .into_iter()
-        // `compare_objects` handles checking for sub-asset so we don't produce
-        // an error if their paths change.
-        .filter(|(k, _)| !original_object_map.contains_key(k) && !k.is_subobject())
+        // `compare_objects` handles checking for inline object equality and we specifically don't
+        // produce an error if their paths change.
+        .filter(|(k, _)| {
+            !original_object_map.contains_key(k) && !matches!(k, ObjectPath::Inline(_))
+        })
         .map(|(k, (_span, b))| (k, b))
         .collect::<Vec<_>>();
 
