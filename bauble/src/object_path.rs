@@ -21,6 +21,21 @@ pub const TOP_LEVEL_IDENTIFIER: &str = "0";
 /// Full path to a bauble object (or external asset).
 ///
 /// Path format documented in [`TypePath`].
+///
+/// ### Example
+///
+/// ```ignore
+/// // in my_file.bbl
+/// 0 = Foo { bar: 1 }
+/// top_ref = $0
+/// my_local_foo = Foo { bar: 2 }
+/// local_ref = $my_local_foo
+/// inline_ref: Ref<Foo> = Foo { bar: 3 }
+/// ```
+///
+/// - `top_ref` will be `ObjectPath::Top("my_file")
+/// - `local_ref` will be `ObjectPath::Local("my_file::my_local_foo")
+/// - `inline_ref` will be `ObjectPath::Inline("my_file::inline_ref&6@0")
 #[derive(Copy, Clone, Debug)]
 pub enum ObjectPath<S = String> {
     /// Top-level object or external asset. There is at most one per file.

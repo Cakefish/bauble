@@ -969,3 +969,43 @@ fn local_asset_suggested() {
         &[a],
     );
 }
+
+#[test]
+fn object_path_examples() {
+    #[derive(bauble::Bauble, Debug, PartialEq)]
+    struct Foo {
+        bar: u8,
+    }
+
+    fn top_ref(path: &str) -> Ref<Foo> {
+        Ref::from_path(ObjectPath::Top(TypePath::new(path).unwrap().to_owned()))
+    }
+
+    fn local_ref(path: &str) -> Ref<Foo> {
+        Ref::from_path(ObjectPath::Local(TypePath::new(path).unwrap().to_owned()))
+    }
+
+    fn inline_ref(path: &str) -> Ref<Foo> {
+        Ref::from_path(ObjectPath::Inline(TypePath::new(path).unwrap().to_owned()))
+    }
+
+    bauble::bauble_test!(
+        [Foo]
+        r#"
+        0 = integration::Foo { bar: 1 }
+        top_ref = $0
+        my_local_foo = integration::Foo { bar: 2 }
+        local_ref = $my_local_foo
+        inline_ref: Ref<integration::Foo> = integration::Foo { bar: 3 }
+        "#
+        // NOTE: Update `ObjectPath` docs if this test needs changes!
+        [
+            Foo { bar: 3 },
+            Foo { bar: 1 },
+            top_ref("test"),
+            Foo { bar: 2 },
+            local_ref("test::my_local_foo"),
+            inline_ref("test::inline_ref&6@0"),
+        ]
+    );
+}
