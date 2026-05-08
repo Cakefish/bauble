@@ -181,7 +181,7 @@ pub struct Binding {
 pub enum BindingIdent {
     /// This is the top level asset in a parsed file.
     ///
-    /// It has the special cased identifier `0` and appears as the first item in the file..
+    /// It has the special cased identifier `0` and appears as the first item in the file.
     ///
     /// This holds no identifier string because it will have the same path as the file containing
     /// it.

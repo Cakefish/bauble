@@ -726,11 +726,11 @@ pub(crate) fn resolve_delayed(
 /// Returns the identifier and the path of an object.
 ///
 /// The top level object in each file will have a path that matches the path of the file containing
-/// it. The identifier for these objects is always "0" and it can be referred to locally in the
-/// same file using this identifier.
+/// it and be wrapped in `ObjectPath::Top`. The identifier for these objects is always "0" and it
+/// can be referred to locally in the same file using this identifier.
 ///
-/// TODO: make sure this is updated
-/// For other objects, the path is just the files's bauble path joined with the object identifier.
+/// For all other objects with binding are local object. For these, the path is just the file's
+/// bauble path joined with the object identifier and they are wrapped in `ObjectPath::Local`.
 fn object_ident_path<'a>(
     file_path: TypePath<&str>,
     binding_ident: &'a BindingIdent,

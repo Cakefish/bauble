@@ -158,7 +158,6 @@ impl From<EarlyUseReference> for ErrorPathReference {
 /// Representation of item names available in the current module.
 ///
 /// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
-//#[derive(Clone)]
 pub(crate) struct Symbols<'a> {
     /// Context for looking up things referenced by full path.
     pub(super) ctx: &'a BaubleContext,

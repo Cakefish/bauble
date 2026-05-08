@@ -237,7 +237,7 @@ pub struct ConvertMeta<'a> {
     /// Used as a prefix to uniquely name inline objects.
     ///
     /// Note, for top level objects we specifically use `0` and not the file name. If we used the
-    /// file name inline object names could collide with inline objects of a local object in
+    /// file name, inline object names could collide with inline objects of a local object in
     /// another file.
     pub object_name: TypePathElem<&'a str>,
     pub default_span: Span,

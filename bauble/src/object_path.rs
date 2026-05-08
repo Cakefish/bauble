@@ -18,7 +18,8 @@ use std::hash::{Hash, Hasher};
 /// (i.e. the top level asset that is named after the file).
 pub const TOP_LEVEL_IDENTIFIER: &str = "0";
 
-/// Full path to a bauble object (or external asset).
+/// Full path to a bauble object (or external asset). See [the module level documentation](self)
+/// for more.
 ///
 /// Path format documented in [`TypePath`].
 ///
