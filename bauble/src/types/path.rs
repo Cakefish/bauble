@@ -487,16 +487,6 @@ impl<S: AsRef<str>> TypePath<S> {
             })
     }
 
-    // TODO: can this method be phased out now that `ObjectPath` exists?
-    /// Determines if a path referencing an object is a path to a sub-object.
-    /// The path is assumed to be valid.
-    ///
-    /// This means that:
-    /// - The path contains the special '@' sub-object character.
-    pub fn is_subobject(&self) -> bool {
-        self.iter().any(|part| part.as_str().contains('@'))
-    }
-
     /// Appends `end` onto `self`.
     ///
     /// Appending is different from `join` in that it will not insert a separator,
