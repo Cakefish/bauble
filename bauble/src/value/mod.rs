@@ -1034,11 +1034,11 @@ fn create_object(
     value: Val,
     type_registry: &TypeRegistry,
 ) -> Result<Object> {
-    if type_registry.impls_top_level_trait(*value.ty) {
+    if type_registry.impls_object_trait(*value.ty) {
         Ok(Object { object_path, value })
     } else {
         Err(ConversionError::MissingRequiredTrait {
-            tr: type_registry.top_level_trait(),
+            tr: type_registry.object_trait(),
             ty: *value.ty,
         }
         .spanned(value.span()))

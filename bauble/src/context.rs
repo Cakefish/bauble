@@ -133,9 +133,9 @@ impl BaubleContextBuilder {
     }
 
     #[allow(missing_docs)]
-    pub fn set_top_level_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) -> &mut Self {
+    pub fn set_object_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
-        self.registry.set_top_level_trait_dependency(tr);
+        self.registry.set_object_trait_dependency(tr);
 
         self
     }
