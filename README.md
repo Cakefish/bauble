@@ -11,7 +11,7 @@ Bauble has three steps in parsing.
 
 ## Examples of bauble
 ```rust
-// bauble has the capability to use different types. Which are resolved by the `AssetCtx`
+// bauble has the capability to use different types. Which are resolved by the `BaubleContext`
 use rpg::{Enemy, DamageType};
 
 slime = Enemy {

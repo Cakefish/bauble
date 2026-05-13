@@ -36,7 +36,7 @@ pub struct AmbiguousWithIdent {
 #[allow(missing_docs)]
 #[derive(Clone, Debug)]
 pub enum ConversionError {
-    UnregisteredAsset,
+    UnregisteredObject,
     UnresolvedType,
     MissingRequiredTrait {
         tr: types::TraitId,
@@ -157,7 +157,7 @@ impl BaubleError for Spanned<ConversionError> {
                 "Expected the type `{}`",
                 types.key_type(*expected).meta.path
             )),
-            ConversionError::UnregisteredAsset => Cow::Borrowed("Unregistered asset"),
+            ConversionError::UnregisteredObject => Cow::Borrowed("Unregistered object"),
             ConversionError::NotInstantiable { ty } => Cow::Owned(format!(
                 "Can't construct a default value of the type {}",
                 types.key_type(*ty).meta.path
@@ -640,8 +640,8 @@ impl BaubleError for Spanned<ConversionError> {
 
                 Cow::Owned(s)
             }
-            ConversionError::UnregisteredAsset => Cow::Borrowed(
-                "This asset hasn't been registered with `BaubleContext::register_asset`",
+            ConversionError::UnregisteredObject => Cow::Borrowed(
+                "This object hasn't been registered with `BaubleContext::register_asset`",
             ),
             ConversionError::NotInstantiable { .. } => {
                 Cow::Borrowed("Consider specifying this value manually")

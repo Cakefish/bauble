@@ -591,7 +591,7 @@ pub fn ref_explicit_type_incorrect_multiple_files_ref_already_registered() {
     );
 }
 
-/// Test that local assets can not be referenced outside of the current file.
+/// Test that local objects can not be referenced outside of the current file.
 #[test]
 #[should_panic = "Expected this path to refer to an asset"]
 pub fn ref_local_from_another_file() {
@@ -783,7 +783,7 @@ fn name_matching_file_is_simplified() {
     );
 }
 
-// Note, this doesn't panic because local and top level asset paths can no longer collide.
+// Note, this doesn't panic because local and top level object paths can no longer collide.
 #[test]
 fn duplicate_name_after_simplification() {
     let a = &TestFile::new(
@@ -939,7 +939,7 @@ fn amiguous_ref_with_ident_multilayer() {
         &|ctx| {
             ctx.register_type::<Test, _>();
         },
-        // a and a_c_test will be delayed (they reference assets that aren't registered when they
+        // a and a_c_test will be delayed (they reference objects that aren't registered when they
         // are processed)
         // then a will be processed first (before a_c_test is registered)
         // we want to ensure an error is still produced in this case
@@ -948,10 +948,10 @@ fn amiguous_ref_with_ident_multilayer() {
     );
 }
 
-/// Test for error message suggesting local asset.
+/// Test for error message suggesting local object.
 #[test]
 #[should_panic = " Did you mean `test`?"]
-fn local_asset_suggested() {
+fn local_object_suggested() {
     let a = &test_file!(
         "a",
         "\n\

@@ -36,11 +36,11 @@ impl Default for DisplayConfig {
 ///
 /// # Main ways to call this
 ///
-/// * `CTX` is [`TypeRegistry`] and `V` is `[[Object](Object)]`. Sub-objects in this slice will
-///   only be displayed if they appear inline in other objects in the slice.
+/// * `CTX` is [`TypeRegistry`] and `V` is `[[Object](Object)]`. Inline objects in this slice will
+///   only be displayed if they are referenced in other objects in the slice.
 /// * `CTX` is `(&TypeRegistry, &[Object])` and `V` implements `IndentedDisplay<ValueDisplayCtx<'_,
-///   V>>` (e.g. [`UnspannedVal`]). The provided slice of objects is necessary to display sub-objects
-///   inline if `V` contains any.
+///   V>>` (e.g. [`UnspannedVal`]). The provided slice of objects is necessary to display inline
+///   objects if `V` contains any.
 pub fn display_formatted<CTX, V: IndentedDisplay<CTX> + ?Sized>(
     v: &V,
     ctx: &CTX,
@@ -705,7 +705,7 @@ impl ValueCtx<UnspannedVal> for ValueDisplayCtx<'_, UnspannedVal> {
 }
 
 /// IndentedDisplay impl where context includes slice of objects that contain any needed
-/// sub-objects.
+/// inline objects.
 impl<'b, V: ValueTrait<Inner = V> + for<'a> IndentedDisplay<ValueDisplayCtx<'a, V>>>
     IndentedDisplay<(&'b TypeRegistry, &'b [Object<V>])> for V
 where

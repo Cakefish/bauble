@@ -118,15 +118,28 @@ use [`add_trait_dependency`](types::TypeRegistry::add_trait_dependency)
 
 ## Modules
 
-Every registered source file in Bauble is a module, similar to Rust. Every module contains various assets. The notion of sub-modules are not really present in Bauble.
+Every registered source file in Bauble is a module, similar to Rust. Every module contains various objects. The notion of sub-modules are not really present in Bauble.
 
 ## Paths
 
-Every asset, module, reference and registered type/trait in Bauble has a corresponding unique path. In Bauble this is known as [`path::TypePath`], and is the association to that particular element in the [`BaubleContext`].
-A path consists of various elements. Similar to Rust, most elements are seperated by `::`, so `a::b` means element `b` which is a child of element `a`.
-An element here can be a module, type or object.
-There are things known as sub-objects which may be appended to the path of a regular object, which are effectively children of the current object.
-A sub-object's path is denoted by `<path to parent>&$ty@$idx` where `$ty` is the index of the type of the sub-object and `$idx` is the index of the sub-object to the parent (the first sub-oject being 0, the second 1, the third 2, etc).
+Every asset, module, reference and registered type/trait in Bauble has a corresponding unique path.
+In Bauble this is known as [`path::TypePath`], and is the association to that particular element in
+the [`BaubleContext`].
+A path consists of various elements. Similar to Rust, most elements are seperated by `::`, so
+`a::b` means element `b` which is a child of element `a`.
+An element here can be a module, type, object, or external asset.
+
+References to Objects use [`object_path::ObjectPath`] which is an enum that augments
+[`path::TypePath`] with information about the kind of object. Note, local and inline objects are
+not known to the `BaubleContext` so referring to top objects in the `BaubleContext` just uses
+`TypePath`.
+
+There are objects known as inline objects which are effectively children of the current object.
+Their paths are constructed by appending to the name of a regular object to create a new object
+path with a different name that shares the same path prefix. 
+An inline object's path is denoted by `<path to parent>&$ty@$num` where `$ty` ID of the type of the
+inline object and `$num` is an aribtrary number that distinguishes different inline objects with
+the same parent (usually starting at 0).
 
 ## References
 

@@ -607,8 +607,8 @@ impl TypeRegistry {
             // Check that instantiated objects match after being serialized to bauble text and
             // parsed.
             //
-            // Changes in sub-asset paths are specifically ignored, only the content of the
-            // sub-assets must match.
+            // Changes in inline object paths are specifically ignored, only the content of the
+            // inline objects must match.
 
             // dummy top level object
             let mut source = "0 = ()\n".to_string();
@@ -772,6 +772,7 @@ impl TypeRegistry {
         }
     }
 
+    // TODO: does this just apply to bauble objects or also external assets?
     /// Sets the trait all top-level assets are expected to have. By default this is the any trait.
     pub fn set_top_level_trait_dependency(&mut self, tr: TraitId) {
         self.top_level_trait_dependency = tr;
@@ -1039,8 +1040,9 @@ pub type ValidationFunction =
 
 /// Function that creates a instance of the default value. Stored in [`TypeMeta`].
 ///
-/// * `&mut AdditionalUnspannedObjects` allows creating sub-assets if the new value needs to
-///   reference sub-assets.
+/// * `&mut AdditionalUnspannedObjects` allows creating objects if the new value needs to
+///   reference additional objects (depending on configuration of the `AdditionalUnspannedObjects`
+///   these can be created as inline objects or as new local objects).
 /// * `&TypeRegistry` allows calling [`TypeRegistry::instantiate`] to create new default instances
 ///   of contained types and is used to get type information of contained types.
 /// * `TypeId` is the ID of the type. This allows the function to retrieve information about the

@@ -265,7 +265,7 @@ impl ConvertMeta<'_> {
 
 /// Represents additional objects added when parsing other objects.
 ///
-/// Also known as sub-objects/sub-assets.
+/// Also known as inline objects (previously known as sub-objects).
 pub(super) struct AdditionalObjects {
     objects: Vec<super::Object>,
     name_allocs: HashMap<TypePathElem, u64>,
@@ -407,13 +407,13 @@ impl<'a> AdditionalUnspannedObjects<'a> {
 
     /// Create a new instance with a custom closure to create unique names.
     ///
-    /// This allows creating the additional objects as objects that aren't sub-objects (aka inline
-    /// objects).
+    /// This allows creating the additional objects as objects that aren't inline objects (previously
+    /// known as sub-objects)
     ///
     /// The closure is passed the file path and the name of the parent object. The generated name
     /// should be joined to the provided file path. The parent object name can optionally use that
-    /// in its naming logic. Note, a number representing the type id of the current subobject may
-    /// be appended to the parent object name.
+    /// in its naming logic. Note, a number representing the type id of the object being named may
+    /// be appended to the provided parent object name.
     pub fn new_with_custom_namer(
         file_path: TypePath<&'a str>,
         object_name: TypePathElem<&'a str>,
@@ -428,7 +428,7 @@ impl<'a> AdditionalUnspannedObjects<'a> {
     }
 
     /// Add the type id to the parent object name this keeps track of, for better unique names for
-    /// sub-objects.
+    /// inline objects.
     pub fn in_type<R>(
         &mut self,
         ty: TypeId,

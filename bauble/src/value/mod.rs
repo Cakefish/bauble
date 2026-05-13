@@ -553,7 +553,7 @@ impl std::fmt::Display for PathKind {
     }
 }
 
-/// We can delay registering `Ref` assets if what they're referencing hasn't been loaded yet.
+/// We delay registering `Ref` objects if what they're referencing hasn't been loaded yet.
 ///
 /// What they are referencing needs to be loaded in order to determine their type.
 #[derive(Debug)]
@@ -695,11 +695,11 @@ pub(crate) fn resolve_delayed(
                     } else {
                         // We make sure that the referenced asset exists in the pre-registered
                         // assets before producing `DelayedRegister`. So this error will only occur
-                        // if the referenced asset's type failed to resolve (such that it wasn't
+                        // if the referenced object's type failed to resolve (such that it wasn't
                         // registered in resolve_delayed).
                         errors.push(
                             ConversionError::Custom(crate::CustomError::new(format!(
-                                "{referenced_original} refers to an asset that failed to register",
+                                "{referenced_original} refers to an object that failed to register",
                             )))
                             .spanned(referenced_original.span),
                         );
@@ -743,13 +743,13 @@ fn object_ident_path<'a>(
     (ident, path)
 }
 
-/// Registers all new top level asset paths into [`EarlyContext`] so they will be known for
-/// resolving full paths from `use`s in [`register_assets`].
+/// Registers all new top level object paths into [`EarlyContext`] so they will be known for
+/// resolving full paths from `use`s in [`register_objects`].
 ///
 /// We need to know what items brought into scope with `use` are assets rather than types or
-/// modules to properly dertermine the full path (otherwise there could be multiple candidates
+/// modules to properly determine the full path (otherwise there could be multiple candidates
 /// because items from different namespaces can have the same name).
-pub(crate) fn pre_register_assets(
+pub(crate) fn pre_register_objects(
     ctx: &mut EarlyContext<'_>,
     file_path: TypePath<&str>,
     values: &ParseValues,
@@ -768,7 +768,7 @@ pub(crate) fn pre_register_assets(
     }
 }
 
-pub(crate) fn register_assets(
+pub(crate) fn register_objects(
     ctx: &mut EarlyContext<'_>,
     local_ctx: &mut crate::local_context::LocalContext,
     file_path: TypePath<&str>,
@@ -785,7 +785,7 @@ pub(crate) fn register_assets(
         }
     }
 
-    // Add assets from this file to Symbols::use.
+    // Add objects from this file to Symbols::use.
     for ident in values.values.keys() {
         let span = ident.span();
         let (ident, path) = object_ident_path(file_path, ident);
@@ -812,10 +812,10 @@ pub(crate) fn register_assets(
         }
     }
 
-    // Resolve asset types and register the assets into `BaubleContext`.
+    // Resolve object types and register the objects into `BaubleContext`.
     //
-    // If the asset is a reference to another asset whose type is yet to be resolved, type
-    // resolution will be delayed by pushing an entry to `delayed`. These are then handled by
+    // If the object is a reference to an asset whose type is yet to be resolved, type resolution
+    // will be delayed by pushing an entry to `delayed`. These are then handled by
     // `resolve_delayed`.
     for (ident, binding) in &values.values {
         let span = ident.span();
@@ -859,9 +859,9 @@ pub(crate) fn register_assets(
                 // already in `res` from calling `symbols.resolve_asset_type()` which uses
                 // `resolve_path` internally. So there is no extra information from this error.
                 //
-                // We use `resolve_asset` instead of just `resolve_path` because the asset should
-                // exist due to `pre_register_assets` or we will invevitably produce an error
-                // anyway, and the errors produced in register_assets are better than
+                // We use `resolve_asset` instead of just `resolve_path` because the object should
+                // exist due to `pre_register_objects` or we will invevitably produce an error
+                // anyway, and the errors produced in `register_objects` are better than
                 // `resolve_delayed` because `symbols.uses` is available.
                 && let Ok((maybe_ty, reference)) = symbols.resolve_asset(ref_path)
             {
@@ -944,7 +944,7 @@ pub(crate) fn convert_values(
 
     let file_path = symbols.ctx.get_file_path(file);
 
-    // Add assets from this file to Symbols::use.
+    // Add objects from this file to Symbols::use.
     for ident in values.values.keys() {
         let span = ident.span();
         let (ident, path) = object_ident_path(file_path, ident);
@@ -957,7 +957,7 @@ pub(crate) fn convert_values(
 
         let Some((ty, path)) = asset else {
             // Didn't register assets.
-            errors.push(ConversionError::UnregisteredAsset.spanned(span));
+            errors.push(ConversionError::UnregisteredObject.spanned(span));
             continue;
         };
 
@@ -1045,12 +1045,12 @@ fn create_object(
     }
 }
 
-/// Compare two objects and recursively compare their sub-objects (aka sub-assets)
-/// while ignoring differences in the paths that refer to those sub-objects (instead
-/// checking that the values in the sub-objects are indentical).
+/// Compare two objects and recursively compare their inline objects while ignoring differences in
+/// the paths that refer to those inline objects (instead checking that the values in the inline
+/// objects are indentical).
 ///
 /// On error returns (original_val, loaded_val) for the objects that did not match. These may be a
-/// pair of sub-objects rather than the top level objects.
+/// pair of inline objects rather than the top level objects.
 fn compare_objects(
     original: &UnspannedVal,
     loaded: &UnspannedVal,
@@ -1171,7 +1171,7 @@ pub struct CompareObjectsError {
 ///
 /// This is used to test that `Object`s content is preserved in a round-trip through the text format.
 ///
-/// Ignores differences in the paths of sub-assets and only compares their content where they
+/// Ignores differences in the paths of inline objects and only compares their content where they
 /// appear in the parent objects.
 pub fn compare_object_sets(
     original: impl Iterator<Item = Object<UnspannedVal>>,
