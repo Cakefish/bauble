@@ -1,4 +1,4 @@
-//! Bauble objects can either be top-level, local, or inline.
+//! Bauble objects can either be top level, local, or inline.
 //!
 //! For a reference to an object, this is known once the full path to an
 //! object is resolved during value loading. That resolved path is represented using
@@ -14,8 +14,8 @@
 use crate::types::path::TypePath;
 use std::hash::{Hash, Hasher};
 
-/// Special cased identifier that is required and only allowed for the first asset in a file
-/// (i.e. the top level asset that is named after the file).
+/// Special cased identifier that is required and only allowed for the first object in a file
+/// (i.e. the top level object that is named after the file).
 pub const TOP_LEVEL_IDENTIFIER: &str = "0";
 
 /// Full path to a bauble object (or external asset). See [the module level documentation](self)
@@ -39,7 +39,7 @@ pub const TOP_LEVEL_IDENTIFIER: &str = "0";
 /// - `inline_ref` will be `ObjectPath::Inline("my_file::inline_ref&6@0")
 #[derive(Copy, Clone, Debug)]
 pub enum ObjectPath<S = String> {
-    /// Top-level object or external asset. There is at most one per file.
+    /// Top level object or external asset. There is at most one per file.
     ///
     /// This shares the path of the containing file and uses the special identifier
     /// [`TOP_LEVEL_IDENTIFIER`].

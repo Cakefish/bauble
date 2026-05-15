@@ -157,7 +157,8 @@ impl From<EarlyUseReference> for ErrorPathReference {
 
 /// Representation of item names available in the current module.
 ///
-/// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
+/// There are multiple namespaces: types, assets (i.e. objects defined in bauble and external
+/// registered assets), and modules.
 pub(crate) struct Symbols<'a> {
     /// Context for looking up things referenced by full path.
     pub(super) ctx: &'a BaubleContext,
@@ -542,7 +543,8 @@ impl<'a> Symbols<'a> {
 ///
 /// This is used before types of assets are fully resolved. Afterwards, [`Symbols`] can be used.
 ///
-/// There are multiple namespaces: types, assets (i.e. values defined in bauble), and modules.
+/// There are multiple namespaces: types, assets (i.e. objects defined in bauble and external
+/// registered assets), and modules.
 pub(crate) struct EarlySymbols<'a, 'b> {
     /// Context for looking up things referenced by full path.
     ///
@@ -564,7 +566,7 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
         }
     }
 
-    /// Get contexts for registering new assets.
+    /// Get contexts for registering new objects.
     pub fn ctx_for_register(&mut self) -> (&mut BaubleContext, &mut LocalContext) {
         (self.ctx.ctx, self.local_ctx)
     }

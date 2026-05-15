@@ -115,7 +115,7 @@ pub struct TypeRegistry {
     type_from_rust: HashMap<std::any::TypeId, TypeId>,
     to_be_assigned: HashSet<TypeId>,
 
-    top_level_trait_dependency: TraitId,
+    object_trait_dependency: TraitId,
 
     primitive_types: [TypeId; 5],
 }
@@ -269,8 +269,8 @@ impl TypeRegistry {
 
             asset_refs: Default::default(),
 
-            // NOTE: Top level values always have to derive from this trait.
-            top_level_trait_dependency: Self::any_trait(),
+            // NOTE: Top level value in an object must always implement this trait.
+            object_trait_dependency: Self::any_trait(),
 
             to_be_assigned: Default::default(),
 
@@ -304,14 +304,14 @@ impl TypeRegistry {
         this
     }
 
-    /// If a type implements the required top-level trait.
-    pub fn impls_top_level_trait(&self, id: TypeId) -> bool {
-        self.key_trait(self.top_level_trait_dependency).contains(id)
+    /// If a type implements the required trait for all objects.
+    pub fn impls_object_trait(&self, id: TypeId) -> bool {
+        self.key_trait(self.object_trait_dependency).contains(id)
     }
 
-    /// The trait that's expected for all top-level bauble assets to have.
-    pub fn top_level_trait(&self) -> TraitId {
-        self.top_level_trait_dependency
+    /// The trait that's expected for all bauble objects to have.
+    pub fn object_trait(&self) -> TraitId {
+        self.object_trait_dependency
     }
 
     /// This is present in all `TypeRegistry`
@@ -574,7 +574,7 @@ impl TypeRegistry {
                     // If the path is not writable then it cannot be validated
                     // as it cannot be written out as Bauble source.
                     || !ty.meta.path.is_representable_type()
-                    || !ty.meta.traits.contains(&self.top_level_trait_dependency)
+                    || !ty.meta.traits.contains(&self.object_trait_dependency)
                 {
                     continue;
                 }
@@ -607,8 +607,8 @@ impl TypeRegistry {
             // Check that instantiated objects match after being serialized to bauble text and
             // parsed.
             //
-            // Changes in sub-asset paths are specifically ignored, only the content of the
-            // sub-assets must match.
+            // Changes in inline object paths are specifically ignored, only the content of the
+            // inline objects must match.
 
             // dummy top level object
             let mut source = "0 = ()\n".to_string();
@@ -772,9 +772,10 @@ impl TypeRegistry {
         }
     }
 
-    /// Sets the trait all top-level assets are expected to have. By default this is the any trait.
-    pub fn set_top_level_trait_dependency(&mut self, tr: TraitId) {
-        self.top_level_trait_dependency = tr;
+    /// Sets the trait all types used for objects are expected to have. By default this is the any
+    /// trait.
+    pub fn set_object_trait_dependency(&mut self, tr: TraitId) {
+        self.object_trait_dependency = tr;
     }
 
     /// Registers `ty` as implementing `tr`.
@@ -1039,8 +1040,9 @@ pub type ValidationFunction =
 
 /// Function that creates a instance of the default value. Stored in [`TypeMeta`].
 ///
-/// * `&mut AdditionalUnspannedObjects` allows creating sub-assets if the new value needs to
-///   reference sub-assets.
+/// * `&mut AdditionalUnspannedObjects` allows creating objects if the new value needs to
+///   reference additional objects (depending on configuration of the `AdditionalUnspannedObjects`
+///   these can be created as inline objects or as new local objects).
 /// * `&TypeRegistry` allows calling [`TypeRegistry::instantiate`] to create new default instances
 ///   of contained types and is used to get type information of contained types.
 /// * `TypeId` is the ID of the type. This allows the function to retrieve information about the

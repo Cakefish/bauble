@@ -133,9 +133,9 @@ impl BaubleContextBuilder {
     }
 
     #[allow(missing_docs)]
-    pub fn set_top_level_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) -> &mut Self {
+    pub fn set_object_trait_requirement<T: ?Sized + BaubleTrait>(&mut self) -> &mut Self {
         let tr = self.registry.get_or_register_trait::<T>();
-        self.registry.set_top_level_trait_dependency(tr);
+        self.registry.set_object_trait_dependency(tr);
 
         self
     }
@@ -390,7 +390,7 @@ impl CtxNode {
             !node.is_empty()
         });
 
-        // Top level assets match the path of their file (and all assets registered in
+        // Top level objects match the path of their file (and all objects registered in
         // BaubleContext are top level).
         self.reference.asset.take();
     }
@@ -605,13 +605,13 @@ impl BaubleContext {
 
         let mut early_ctx = crate::value::EarlyContext::new(self);
 
-        // Register assets paths from each successfully parsed file into the early context (before
+        // Register object paths from each successfully parsed file into the early context (before
         // types are known).
         for (file, values) in file_values.iter() {
             // Need a partial borrow here.
             let (path, _) = early_ctx.ctx.file(*file);
             let path = path.to_owned();
-            crate::value::pre_register_assets(&mut early_ctx, path.borrow(), values);
+            crate::value::pre_register_objects(&mut early_ctx, path.borrow(), values);
         }
 
         let mut local_ctx = crate::local_context::LocalContext::new();
@@ -619,13 +619,13 @@ impl BaubleContext {
         let mut delayed = Vec::new();
         let mut skip = Vec::new();
 
-        // Then, register assets from each successfully parsed file into the context (while
+        // Then, register objects from each successfully parsed file into the context (while
         // resolving types).
         for (file, values) in file_values.iter() {
             // Need a partial borrow here.
             let (path, _) = early_ctx.ctx.file(*file);
             let path = path.to_owned();
-            match crate::value::register_assets(
+            match crate::value::register_objects(
                 &mut early_ctx,
                 &mut local_ctx,
                 path.borrow(),
@@ -774,8 +774,9 @@ impl BaubleContext {
 
     /// Get all the assets starting from `path`, with an optional maximum depth of `max_depth`.
     ///
-    /// Inline objects are not registered as assets, they are exclusively visible in the list of
-    /// objects returned when loading/reloading files.
+    /// Only top level objects are registered as assets (in addition to external assets that are
+    /// manually registered for referencing by Bauble objects). Local and inline objects are
+    /// exclusively visible in the list of objects returned when loading/reloading files.
     pub fn assets(
         &self,
         path: TypePath<&str>,

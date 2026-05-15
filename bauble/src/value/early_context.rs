@@ -26,9 +26,9 @@ impl CombinedPathReference {
     /// 1. This mutates `self` in-place.
     /// 2. `Some` is allowed in matching fields if the contents are the same.
     ///
-    /// This is used to combine the [`EarlyPathReference`] obtained from pre-registered assets with
+    /// This is used to combine the [`EarlyPathReference`] obtained from pre-registered objects with
     /// the [`PathReference`] for existing items in [`BaubleContext`]. During the type resolution
-    /// process assets/modules will exist in both places as they are registered into
+    /// process objects/modules will exist in both places as they are registered into
     /// [`BaubleContext`].
     ///
     /// Returns an error if there is a collision where matching fields both have `Some(_)` but they

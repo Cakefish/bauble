@@ -179,14 +179,14 @@ pub struct Binding {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum BindingIdent {
-    /// This is the top level asset in a parsed file.
+    /// This is the top level object in a parsed file.
     ///
     /// It has the special cased identifier `0` and appears as the first item in the file.
     ///
     /// This holds no identifier string because it will have the same path as the file containing
     /// it.
     TopLevel(Spanned<()>),
-    /// This is a local asset. I.e. any additional assets in a parsed file.
+    /// This is a local object. I.e. any additional objects in a parsed file.
     Local(Ident),
 }
 
