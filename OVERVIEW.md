@@ -91,10 +91,11 @@ named separately referencable objects themselves. They act as a convenience for 
 defining and referencing a separate object. The paths of these objects are generated based on the
 parent object when loading a Bauble file.
 
-In addition to referencing other Bauble objects, external assets can be referenced. These assets
-are registered via `BaubleContext::register_asset`. When an object references an external asset it
-uses `ObjectPath::Top`. When something can be either a Bauble object or an external asset, we use
-the term "asset".
+In addition to referencing other Bauble objects, external assets can be referenced. These are
+assets that aren't bauble files. For example, an audio or image asset. They can be exposed to be
+referenced by bauble values via `BaubleContext::register_asset`. When an object references an
+external asset it uses `ObjectPath::Top` wrapping the path provided to `register_asset `. When
+something can be either a Bauble object or an external asset, we use the term "asset".
 
 ## Values
 
