@@ -167,10 +167,17 @@ impl<S: AsRef<str>> std::fmt::Display for TypePath<S> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathError {
     /// There was an empty path element, for example `foo::::bar`.
+    ///
+    /// Contains byte index where path element was expected to start, just after the starting '::'
+    /// for that path element. This index may be right after the end of the string.
     EmptyElem(usize),
-    /// A start delimiter, i.e `<`, `(`, `[`, is missing its end equivalent.
+    /// A start delimiter, i.e `<`, `(`, `[`, `{`, is missing its end equivalent.
+    ///
+    /// Contains byte index of start delimiter character.
     MissingDelimiterEnd(usize),
-    /// An end delimiter, i.e `>`, `)`, `]`, is missing its start equivalent.
+    /// An end delimiter, i.e `>`, `)`, `]`, `}`, is missing its start equivalent.
+    ///
+    /// Contains byte index of end delimiter character.
     MissingDelimiterStart(usize),
     /// Too many path elements.
     ///
@@ -219,23 +226,25 @@ fn path_len(path: &str) -> Result<usize> {
         return Ok(0);
     }
 
-    let mut count = 1;
-    let mut current_path_delim = PATH_SEPERATOR.chars();
+    let mut count = 0;
+    // When this iterator is empty, we expect to an encounter a path element, and not
+    // the start of PATH_SEPERATOR. A path must start with a path element, so this starts as an
+    // empty iterator.
+    let mut current_path_delim = "".chars();
     let mut path_iter = path.char_indices();
-    let mut is_empty = true;
 
     while let Some((i, c)) = path_iter.next() {
         match current_path_delim.next() {
             Some(expected) => {
                 if c == expected {
                     continue;
-                } else {
-                    is_empty = false;
                 }
             }
             None => {
+                // `c` is the start of a new path element.
                 count += 1;
-                if PATH_SEPERATOR.starts_with(c) || is_empty {
+                // If `c` matches the start of PATH_SEPERATOR, this path element was empty.
+                if PATH_SEPERATOR.starts_with(c) {
                     return Err(PathError::EmptyElem(i));
                 }
             }
@@ -244,6 +253,7 @@ fn path_len(path: &str) -> Result<usize> {
         skip_delims(&mut path_iter, c, i)?;
     }
 
+    // The path ended with PATH_SEPERATOR and no following element.
     if current_path_delim.next().is_none() {
         return Err(PathError::EmptyElem(path.len()));
     }
@@ -722,8 +732,29 @@ fn test_path_seperating() {
         ),
     );
 
-    let error_path = TypePath::new("root(test<)::test::el]em");
-    assert!(error_path.is_err());
+    let error_paths = [
+        "root(test<)::test::elem",
+        "root(test<)::test::el]em",
+        "root(test)::test::el]em",
+        "::",
+        ":::",
+        "::test",
+        ":test",
+        ":",
+        "root:::elem",
+        "root::::elem",
+        "root:::::elem",
+        "root::test::",
+        "root::test:::",
+        "root::test::::",
+        // Note, these are currently allowed:
+        // "test:ing",
+        // "test:in:g",
+        // "root::test:",
+    ];
+    for path in error_paths {
+        assert!(TypePath::new(path).is_err(), "{}", path);
+    }
 
     let empty_path = TypePath::new("").unwrap();
 
