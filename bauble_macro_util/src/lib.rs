@@ -1258,7 +1258,7 @@ pub fn derive_bauble_derive_input(
         .unwrap_or(quote!(::core::option::Option::None));
 
     let default = match ty_attrs.value_default {
-        Some(e) => quote! { ::core::option::Option::Some(#e) },
+        Some(e) => quote! { ::core::option::Option::Some(::bauble::types::DefaultMaker::new(#e)) },
         None => quote! { ::core::option::Option::None },
     };
 

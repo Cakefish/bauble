@@ -403,7 +403,7 @@ impl TypeRegistry {
                                 attributes: variant.attributes,
                                 extra: variant.extra,
                                 extra_validation: variant.extra_validation,
-                                default: variant.default,
+                                default: variant.default.map(DefaultMaker::new),
                                 ..Default::default()
                             },
                             kind: match variant.kind {
@@ -574,7 +574,6 @@ impl TypeRegistry {
                     // If the path is not writable then it cannot be validated
                     // as it cannot be written out as Bauble source.
                     || !ty.meta.path.is_representable_type()
-                    || !ty.meta.traits.contains(&self.object_trait_dependency)
                 {
                     continue;
                 }
@@ -593,6 +592,15 @@ impl TypeRegistry {
                         ty: ty.meta.path.borrow(),
                     });
                 };
+
+                // Value can't be deserialized to object if it doesn't impl the object trait, so
+                // skip converting these to the bauble text format and back.
+                //
+                // We check this after `instantiate`, so we can test the instantiation code for
+                // more types even if a full serialization roundtrip is not tested).
+                if !self.impls_object_trait(value.ty) {
+                    continue;
+                }
 
                 for (path, value) in additonal.into_objects() {
                     objects.push(crate::Object {
@@ -905,6 +913,11 @@ impl TypeRegistry {
     }
 
     /// Create the default value of this type.
+    ///
+    /// The returned value will be assigned a `TypeId` that is for a type where
+    /// `TypeKind::instanciable` is `true`. In most cases this matches the `ty_id` provided to
+    /// `instantiate`. For trait types this is instead the `ty_id` of the type instiantiated that
+    /// implements the trait.
     pub fn instantiate(
         &self,
         ty_id: TypeId,
@@ -913,7 +926,7 @@ impl TypeRegistry {
         let ty = self.key_type(ty_id);
 
         if let Some(default) = &ty.meta.default {
-            return Some(default(additional_objects, self, ty_id).with_type(ty_id));
+            return Some(default.make_value(additional_objects, self, ty_id));
         }
 
         let construct_unnamed =
@@ -1002,7 +1015,19 @@ impl TypeRegistry {
             TypeKind::Transparent(ty) => {
                 let inner = self.key_type(*ty);
                 crate::Value::Transparent(Box::new(if let TypeKind::Trait(tr) = &inner.kind {
-                    self.iter_type_set(tr)
+                    let mut v: Vec<_> = self
+                        .iter_type_set(tr)
+                        // The transparent type may itself implement the trait, so we need to skip
+                        // it to avoid an infinite loop.
+                        .filter(|ty| *ty != ty_id)
+                        .collect();
+                    v.sort_unstable_by(|a, b| {
+                        self.key_type(*a)
+                            .meta
+                            .path
+                            .cmp(&self.key_type(*b).meta.path)
+                    });
+                    v.into_iter()
                         .find_map(|ty| self.instantiate(ty, additional_objects))?
                 } else {
                     self.instantiate(*ty, additional_objects)?
@@ -1051,6 +1076,32 @@ pub type ValidationFunction =
 pub type DefaultFunction =
     fn(&mut AdditionalUnspannedObjects, &TypeRegistry, TypeId) -> UnspannedVal;
 
+/// Wrapper around `DefaultFunction` that ensures the returned value is properly assigned a
+/// concrete type ID.
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultMaker(DefaultFunction);
+
+impl DefaultMaker {
+    /// Creates a new `DefaultMaker` wrapping the provided `DefaultFunction`.
+    pub fn new(f: DefaultFunction) -> Self {
+        Self(f)
+    }
+
+    /// See [`DefaultFunction`] docs.
+    pub fn make_value(
+        &self,
+        additional: &mut AdditionalUnspannedObjects,
+        types: &TypeRegistry,
+        ty: TypeId,
+    ) -> UnspannedVal {
+        // Default values not allowed for non-instanciable types.
+        debug_assert!(types.key_type(ty).kind.instanciable());
+        let mut value = (self.0)(additional, types, ty);
+        value.ty = ty;
+        value
+    }
+}
+
 /// Meta information on a type registered within a Bauble context.
 #[derive(Default, Clone, Debug)]
 pub struct TypeMeta {
@@ -1061,7 +1112,7 @@ pub struct TypeMeta {
     /// The traits implemented by the type.
     pub traits: Vec<TraitId>,
     /// Optional function to create a default value of the type.
-    pub default: Option<DefaultFunction>,
+    pub default: Option<DefaultMaker>,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.

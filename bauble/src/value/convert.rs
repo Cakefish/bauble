@@ -835,7 +835,7 @@ where
                         |additional| {
                             ty.meta
                                 .default
-                                .map(|v| v(additional, types, *ty_id).into_spanned(span))
+                                .map(|d| d.make_value(additional, types, *ty_id).into_spanned(span))
                                 .expect("We checked that this is some in the match")
                         },
                     )?;

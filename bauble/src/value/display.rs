@@ -589,20 +589,24 @@ impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX
         w.write(ident);
 
         if let Some(registry) = w.ctx().type_registry() {
-            let ty = self.value.ty();
+            let ty_id = self.value.ty();
+            let ty = registry.key_type(ty_id);
+            let is_generic_instance = ty.meta.generic_base_type.is_some();
             // We can skip displaying the type path if the value hints what type it should be. This
             // is the case for non-flattened structs and enums, and primitive types.
-            let can_skip_type = registry.is_primitive_type(ty)
-                || match &registry.key_type(ty).kind {
+            //
+            // The value may not be sufficient for generic enums so those are not skipped. For
+            // example, the value `Option::None` contains no hint at what the generic type
+            // parameter should be.
+            let can_skip_type = registry.is_primitive_type(ty_id)
+                || match &ty.kind {
                     TypeKind::Struct(_) => true,
-                    TypeKind::Enum { variants } => {
+                    TypeKind::Enum { variants } if !is_generic_instance => {
                         if let Value::Enum(variant, _) = self.value.value()
                             && let Some(variant_ty) = variants.get(variant.borrow())
+                            && let TypeKind::EnumVariant { .. } = registry.key_type(variant_ty).kind
                         {
-                            matches!(
-                                registry.key_type(variant_ty).kind,
-                                TypeKind::EnumVariant { .. }
-                            )
+                            true
                         } else {
                             false
                         }
@@ -611,7 +615,7 @@ impl<CTX: ValueCtx<V>, V: IndentedDisplay<CTX> + ValueTrait> IndentedDisplay<CTX
                     _ => false,
                 };
 
-            if !can_skip_type && let Some(path) = registry.get_representable_path(ty) {
+            if !can_skip_type && let Some(path) = registry.get_representable_path(ty_id) {
                 let path = path.to_owned();
                 w.write(": ");
                 w.write(path.as_str());
