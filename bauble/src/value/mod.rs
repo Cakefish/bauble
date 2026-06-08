@@ -42,7 +42,7 @@ pub trait ValueTrait: Clone + std::fmt::Debug {
 
     fn value(&self) -> &Value<Self>;
 
-    fn to_any(&self) -> AnyVal;
+    fn to_any(&self) -> AnyVal<'_>;
 }
 
 /// A helper trait for extracting the spans out of a Bauble value.
@@ -77,7 +77,7 @@ pub trait ValueContainer: Clone + std::fmt::Debug {
 
     fn container_ty(&self) -> TypeId;
 
-    fn container_to_any(&self) -> AnyVal;
+    fn container_to_any(&self) -> AnyVal<'_>;
 }
 
 impl<V: ValueTrait> ValueContainer for V {
@@ -91,7 +91,7 @@ impl<V: ValueTrait> ValueContainer for V {
         ValueTrait::ty(self)
     }
 
-    fn container_to_any(&self) -> AnyVal {
+    fn container_to_any(&self) -> AnyVal<'_> {
         self.to_any()
     }
 }
@@ -115,7 +115,7 @@ impl ValueContainer for AnyVal<'_> {
         }
     }
 
-    fn container_to_any(&self) -> AnyVal {
+    fn container_to_any(&self) -> AnyVal<'_> {
         *self
     }
 }
@@ -245,7 +245,7 @@ impl ValueTrait for Val {
         &self.value
     }
 
-    fn to_any(&self) -> AnyVal {
+    fn to_any(&self) -> AnyVal<'_> {
         AnyVal::Complete(self)
     }
 }
@@ -345,7 +345,7 @@ impl ValueTrait for UnspannedVal {
         &self.value
     }
 
-    fn to_any(&self) -> AnyVal {
+    fn to_any(&self) -> AnyVal<'_> {
         AnyVal::Unspanned(self)
     }
 }

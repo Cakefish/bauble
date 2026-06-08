@@ -244,7 +244,7 @@ pub struct ConvertMeta<'a> {
 }
 
 impl ConvertMeta<'_> {
-    pub fn reborrow(&mut self) -> ConvertMeta {
+    pub fn reborrow(&mut self) -> ConvertMeta<'_> {
         ConvertMeta {
             symbols: self.symbols,
             additional_objects: self.additional_objects,

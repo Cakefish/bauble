@@ -337,7 +337,7 @@ fn parse_fields(
     tuple: bool,
     has_from: bool,
     construct_default: fn(TokenStream) -> TokenStream,
-) -> syn::Result<FieldsInfo> {
+) -> syn::Result<FieldsInfo<'_>> {
     let mut val_count = 0;
     let kind = match fields {
         // Named fields in a type with the `tuple` attribute are treated as a tuple

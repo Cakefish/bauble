@@ -551,7 +551,7 @@ impl TypeRegistry {
     /// Currently this checks:
     /// - Are there any unassigned registered types?
     /// - If `assert_instanciable` is true then if all `instanciable` types have valid bauble representations.
-    pub fn validate(&self, assert_instanciable: bool) -> Result<(), TypeSystemError> {
+    pub fn validate(&self, assert_instanciable: bool) -> Result<(), TypeSystemError<'_>> {
         if !self.to_be_assigned.is_empty() {
             return Err(TypeSystemError::ToBeAssigned(
                 self.to_be_assigned

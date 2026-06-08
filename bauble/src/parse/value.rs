@@ -147,7 +147,7 @@ impl ValueTrait for ParseVal {
         &self.value
     }
 
-    fn to_any(&self) -> AnyVal {
+    fn to_any(&self) -> AnyVal<'_> {
         AnyVal::Parse(self)
     }
 }

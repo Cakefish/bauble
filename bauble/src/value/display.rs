@@ -95,7 +95,7 @@ mod formatter {
             write!(&mut self.0.string, "{v:?}").expect("Shouldn't fail");
         }
 
-        pub fn reborrow(&mut self) -> LineWriter<CTX> {
+        pub fn reborrow(&mut self) -> LineWriter<'_, CTX> {
             LineWriter(self.0.reborrow())
         }
 
@@ -122,11 +122,11 @@ mod formatter {
             LineWriter(self.0.with_ctx(ctx))
         }
 
-        pub fn with_typed_context(&mut self) -> LineWriter<CTX> {
+        pub fn with_typed_context(&mut self) -> LineWriter<'_, CTX> {
             LineWriter(self.0.with_typed_context())
         }
 
-        pub fn with_untyped_context(&mut self) -> LineWriter<CTX> {
+        pub fn with_untyped_context(&mut self) -> LineWriter<'_, CTX> {
             LineWriter(self.0.with_untyped_context())
         }
     }
@@ -146,7 +146,7 @@ mod formatter {
                 typed_context: true,
             }
         }
-        fn reborrow(&mut self) -> Formatter<CTX> {
+        fn reborrow(&mut self) -> Formatter<'_, CTX> {
             Formatter {
                 config: self.config,
                 string: self.string,
@@ -156,7 +156,7 @@ mod formatter {
                 typed_context: self.typed_context,
             }
         }
-        fn bump_indent(&mut self) -> Formatter<CTX> {
+        fn bump_indent(&mut self) -> Formatter<'_, CTX> {
             let mut r = self.reborrow();
             r.indent += 1;
             r

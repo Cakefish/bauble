@@ -394,7 +394,7 @@ impl<S: AsRef<str>> TypePath<S> {
     }
 
     /// Create an iterator for iterating the segments of `self`.
-    pub fn iter(&self) -> PathIter {
+    pub fn iter(&self) -> PathIter<'_> {
         PathIter {
             path: self.borrow(),
         }

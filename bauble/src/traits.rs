@@ -471,7 +471,7 @@ impl Bauble<'_> for String {
     fn from_bauble(
         val: Val,
         _: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
         if let Value::Primitive(PrimitiveValue::Str(str)) = val.value.value {
             Ok(str)
         } else {
@@ -740,7 +740,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
     fn from_bauble(
         val: Val,
         allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
         if let Value::Array(items) = val.value.value {
             items
                 .into_iter()
@@ -775,7 +775,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
     fn from_bauble(
         val: Val,
         allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
         T::from_bauble(val, allocator).map(Box::new)
     }
 }
@@ -809,7 +809,7 @@ macro_rules! impl_map {
             fn from_bauble(
                 val: Val,
                 allocator: &DefaultAllocator,
-            ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+            ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
                 if let Value::Map(map) = val.value.value {
                     map.into_iter()
                         .map(|(k, v)| {
