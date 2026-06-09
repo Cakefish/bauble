@@ -193,6 +193,15 @@ impl Variant {
     }
 }
 
+/// Error details for when the instantiated value of a type is not identical after roundtripping
+/// through the Bauble format.
+#[derive(Debug)]
+pub struct ConstructInequalityError {
+    src: String,
+    original: UnspannedVal,
+    new: UnspannedVal,
+}
+
 /// An error that occured within the Bauble context's type-system during [`TypeRegister::validate`].
 #[allow(missing_docs)]
 #[derive(Debug)]
@@ -203,7 +212,8 @@ pub enum TypeSystemError<'a> {
         ty: TypePath<&'a str>,
     },
     InstantiableErrors,
-    ConstructInequality(String, UnspannedVal, UnspannedVal),
+    // This variant is large, so we box it.
+    ConstructInequality(Box<ConstructInequalityError>),
     MissingObjects {
         instantiated_missing: Vec<ObjectPath>,
         loaded_unknown: Vec<ObjectPath>,
@@ -232,11 +242,12 @@ impl Display for TypeSystemError<'_> {
                 f,
                 "Errors while trying to read default instantiated objects"
             ),
-            TypeSystemError::ConstructInequality(s, a, b) => {
+            TypeSystemError::ConstructInequality(e) => {
+                let ConstructInequalityError { src, original, new } = &**e;
                 write!(
                     f,
                     "The constructed instantiated type, and the value read from the instantiated \
-                    value formatted as text are not equal.\nBauble:\n{s}\n\nInstantiated: {a:#?}\nRead: {b:#?}"
+                    value formatted as text are not equal.\nBauble:\n{src}\n\nInstantiated: {original:#?}\nRead: {new:#?}"
                 )
             }
             TypeSystemError::MissingObjects {
@@ -660,7 +671,11 @@ impl TypeRegistry {
                             .skip(span.start)
                             .take(span.end - span.start)
                             .collect();
-                        TypeSystemError::ConstructInequality(src, original, new)
+                        TypeSystemError::ConstructInequality(Box::new(ConstructInequalityError {
+                            src,
+                            original,
+                            new,
+                        }))
                     } else {
                         TypeSystemError::MissingObjects {
                             instantiated_missing: missing

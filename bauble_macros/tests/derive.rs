@@ -285,7 +285,7 @@ fn test_trait() {
             val: bauble::Val,
             allocator: &bauble::DefaultAllocator,
         ) -> Result<
-            <bauble::DefaultAllocator as bauble::BaubleAllocator>::Out<Self>,
+            <bauble::DefaultAllocator as bauble::BaubleAllocator<'_>>::Out<Self>,
             bauble::ToRustError,
         > {
             let s = val.span();

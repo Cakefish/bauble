@@ -1056,8 +1056,8 @@ fn compare_objects(
     loaded: &UnspannedVal,
     orig_map: &HashMap<ObjectPath, UnspannedVal>,
     loaded_map: &HashMap<ObjectPath, (crate::Span, UnspannedVal)>,
-) -> std::result::Result<(), (UnspannedVal, UnspannedVal)> {
-    let inquality_err = || (original.clone(), loaded.clone());
+) -> std::result::Result<(), Box<(UnspannedVal, UnspannedVal)>> {
+    let inquality_err = || Box::new((original.clone(), loaded.clone()));
 
     original
         .attributes
@@ -1199,7 +1199,7 @@ pub fn compare_object_sets(
         if !matches!(k, ObjectPath::Inline(_)) {
             if let Some((span, b)) = loaded_object_map.get(k) {
                 if let Err((original, new)) =
-                    compare_objects(a, b, &original_object_map, &loaded_object_map)
+                    compare_objects(a, b, &original_object_map, &loaded_object_map).map_err(|e| *e)
                 {
                     mismatched.push((k.to_owned(), *span, original, new));
                 }
