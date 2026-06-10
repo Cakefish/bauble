@@ -1019,6 +1019,8 @@ impl TypeRegistry {
                         .iter_type_set(tr)
                         // The transparent type may itself implement the trait, so we need to skip
                         // it to avoid an infinite loop.
+                        // TODO: are there cases for other type kinds where this may happen? E.g. a
+                        // random struct with a trait (or reference to a trait) as a field?
                         .filter(|ty| *ty != ty_id)
                         .collect();
                     v.sort_unstable_by(|a, b| {
