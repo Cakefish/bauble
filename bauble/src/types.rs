@@ -23,7 +23,7 @@ use crate::{
     value::UnspannedVal,
 };
 
-#[allow(missing_docs)]
+/// Type associated data that can be given to a registered type, variant, or field.
 pub type Extra = IndexMap<String, String>;
 
 /// A trait that can be represented within a bauble context.
