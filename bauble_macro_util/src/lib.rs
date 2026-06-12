@@ -337,7 +337,7 @@ fn parse_fields(
     tuple: bool,
     has_from: bool,
     construct_default: fn(TokenStream) -> TokenStream,
-) -> syn::Result<FieldsInfo> {
+) -> syn::Result<FieldsInfo<'_>> {
     let mut val_count = 0;
     let kind = match fields {
         // Named fields in a type with the `tuple` attribute are treated as a tuple
@@ -1258,7 +1258,7 @@ pub fn derive_bauble_derive_input(
         .unwrap_or(quote!(::core::option::Option::None));
 
     let default = match ty_attrs.value_default {
-        Some(e) => quote! { ::core::option::Option::Some(#e) },
+        Some(e) => quote! { ::core::option::Option::Some(::bauble::types::DefaultMaker::new(#e)) },
         None => quote! { ::core::option::Option::None },
     };
 

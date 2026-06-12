@@ -1,5 +1,5 @@
 #![doc = include_str!("../../OVERVIEW.md")]
-#![feature(iterator_try_collect, let_chains, ptr_metadata)]
+#![feature(iterator_try_collect, ptr_metadata)]
 #![warn(missing_docs)]
 
 mod builtin;

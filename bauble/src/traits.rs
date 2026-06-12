@@ -7,7 +7,7 @@ use crate::{
     object_path::ObjectPath,
     path::{TypePath, TypePathElem},
     spanned::{Span, Spanned},
-    types::{self, Extra, FieldType, TypeId},
+    types::{self, DefaultMaker, Extra, FieldType, TypeId},
     value::{Ident, PrimitiveValue},
 };
 
@@ -312,7 +312,9 @@ impl<'a, A: BaubleAllocator<'a>> Bauble<'a, A> for Val {
             meta: types::TypeMeta {
                 path: TypePath::new("bauble::Val").unwrap().to_owned(),
                 attributes: types::NamedFields::any(),
-                default: Some(|_, _, _| UnspannedVal::new(Value::default())),
+                default: Some(DefaultMaker::new(|_, _, _| {
+                    UnspannedVal::new(Value::default())
+                })),
                 ..Default::default()
             },
             kind: types::TypeKind::Primitive(types::Primitive::Any),
@@ -469,7 +471,7 @@ impl Bauble<'_> for String {
     fn from_bauble(
         val: Val,
         _: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
         if let Value::Primitive(PrimitiveValue::Str(str)) = val.value.value {
             Ok(str)
         } else {
@@ -650,7 +652,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                 ))
                 .unwrap(),
                 generic_base_type: Some(generic),
-                default: Some(|a, registry, ty| {
+                default: Some(DefaultMaker::new(|a, registry, ty| {
                     let none = match &registry.key_type(ty).kind {
                         types::TypeKind::Enum { variants } => variants
                             .get("None")
@@ -667,7 +669,7 @@ impl<'a, A: BaubleAllocator<'a>, T: Bauble<'a, A>> Bauble<'a, A> for Option<T> {
                                 .expect("We should be able to instantiate unit fields"),
                         ),
                     ))
-                }),
+                })),
                 ..Default::default()
             },
             kind: types::TypeKind::Enum { variants },
@@ -738,7 +740,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Vec<T> {
     fn from_bauble(
         val: Val,
         allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
         if let Value::Array(items) = val.value.value {
             items
                 .into_iter()
@@ -773,7 +775,7 @@ impl<'a, T: Bauble<'a>> Bauble<'a> for Box<T> {
     fn from_bauble(
         val: Val,
         allocator: &DefaultAllocator,
-    ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+    ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
         T::from_bauble(val, allocator).map(Box::new)
     }
 }
@@ -807,7 +809,7 @@ macro_rules! impl_map {
             fn from_bauble(
                 val: Val,
                 allocator: &DefaultAllocator,
-            ) -> Result<<DefaultAllocator as BaubleAllocator>::Out<Self>, ToRustError> {
+            ) -> Result<<DefaultAllocator as BaubleAllocator<'_>>::Out<Self>, ToRustError> {
                 if let Value::Map(map) = val.value.value {
                     map.into_iter()
                         .map(|(k, v)| {

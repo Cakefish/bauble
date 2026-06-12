@@ -78,14 +78,14 @@ fn resolve_type(
         }
     };
 
-    if let Some(val_type) = val_type {
-        if !types.can_infer_from(expected_type, val_type.value) {
-            return Err(ConversionError::ExpectedExactType {
-                expected: expected_type,
-                got: Some(val_type.value),
-            }
-            .spanned(span));
+    if let Some(val_type) = val_type
+        && !types.can_infer_from(expected_type, val_type.value)
+    {
+        return Err(ConversionError::ExpectedExactType {
+            expected: expected_type,
+            got: Some(val_type.value),
         }
+        .spanned(span));
     }
 
     Ok(ty)
@@ -244,7 +244,7 @@ pub struct ConvertMeta<'a> {
 }
 
 impl ConvertMeta<'_> {
-    pub fn reborrow(&mut self) -> ConvertMeta {
+    pub fn reborrow(&mut self) -> ConvertMeta<'_> {
         ConvertMeta {
             symbols: self.symbols,
             additional_objects: self.additional_objects,
@@ -835,7 +835,7 @@ where
                         |additional| {
                             ty.meta
                                 .default
-                                .map(|v| v(additional, types, *ty_id).into_spanned(span))
+                                .map(|d| d.make_value(additional, types, *ty_id).into_spanned(span))
                                 .expect("We checked that this is some in the match")
                         },
                     )?;

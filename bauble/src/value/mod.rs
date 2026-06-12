@@ -42,7 +42,7 @@ pub trait ValueTrait: Clone + std::fmt::Debug {
 
     fn value(&self) -> &Value<Self>;
 
-    fn to_any(&self) -> AnyVal;
+    fn to_any(&self) -> AnyVal<'_>;
 }
 
 /// A helper trait for extracting the spans out of a Bauble value.
@@ -77,7 +77,7 @@ pub trait ValueContainer: Clone + std::fmt::Debug {
 
     fn container_ty(&self) -> TypeId;
 
-    fn container_to_any(&self) -> AnyVal;
+    fn container_to_any(&self) -> AnyVal<'_>;
 }
 
 impl<V: ValueTrait> ValueContainer for V {
@@ -91,7 +91,7 @@ impl<V: ValueTrait> ValueContainer for V {
         ValueTrait::ty(self)
     }
 
-    fn container_to_any(&self) -> AnyVal {
+    fn container_to_any(&self) -> AnyVal<'_> {
         self.to_any()
     }
 }
@@ -115,7 +115,7 @@ impl ValueContainer for AnyVal<'_> {
         }
     }
 
-    fn container_to_any(&self) -> AnyVal {
+    fn container_to_any(&self) -> AnyVal<'_> {
         *self
     }
 }
@@ -245,7 +245,7 @@ impl ValueTrait for Val {
         &self.value
     }
 
-    fn to_any(&self) -> AnyVal {
+    fn to_any(&self) -> AnyVal<'_> {
         AnyVal::Complete(self)
     }
 }
@@ -345,7 +345,7 @@ impl ValueTrait for UnspannedVal {
         &self.value
     }
 
-    fn to_any(&self) -> AnyVal {
+    fn to_any(&self) -> AnyVal<'_> {
         AnyVal::Unspanned(self)
     }
 }
@@ -1056,8 +1056,8 @@ fn compare_objects(
     loaded: &UnspannedVal,
     orig_map: &HashMap<ObjectPath, UnspannedVal>,
     loaded_map: &HashMap<ObjectPath, (crate::Span, UnspannedVal)>,
-) -> std::result::Result<(), (UnspannedVal, UnspannedVal)> {
-    let inquality_err = || (original.clone(), loaded.clone());
+) -> std::result::Result<(), Box<(UnspannedVal, UnspannedVal)>> {
+    let inquality_err = || Box::new((original.clone(), loaded.clone()));
 
     original
         .attributes
@@ -1199,7 +1199,7 @@ pub fn compare_object_sets(
         if !matches!(k, ObjectPath::Inline(_)) {
             if let Some((span, b)) = loaded_object_map.get(k) {
                 if let Err((original, new)) =
-                    compare_objects(a, b, &original_object_map, &loaded_object_map)
+                    compare_objects(a, b, &original_object_map, &loaded_object_map).map_err(|e| *e)
                 {
                     mismatched.push((k.to_owned(), *span, original, new));
                 }

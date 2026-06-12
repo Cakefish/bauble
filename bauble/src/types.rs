@@ -23,7 +23,7 @@ use crate::{
     value::UnspannedVal,
 };
 
-#[allow(missing_docs)]
+/// Type associated data that can be given to a registered type, variant, or field.
 pub type Extra = IndexMap<String, String>;
 
 /// A trait that can be represented within a bauble context.
@@ -193,6 +193,15 @@ impl Variant {
     }
 }
 
+/// Error details for when the instantiated value of a type is not identical after roundtripping
+/// through the Bauble format.
+#[derive(Debug)]
+pub struct ConstructInequalityError {
+    src: String,
+    original: UnspannedVal,
+    new: UnspannedVal,
+}
+
 /// An error that occured within the Bauble context's type-system during [`TypeRegister::validate`].
 #[allow(missing_docs)]
 #[derive(Debug)]
@@ -203,7 +212,8 @@ pub enum TypeSystemError<'a> {
         ty: TypePath<&'a str>,
     },
     InstantiableErrors,
-    ConstructInequality(String, UnspannedVal, UnspannedVal),
+    // This variant is large, so we box it.
+    ConstructInequality(Box<ConstructInequalityError>),
     MissingObjects {
         instantiated_missing: Vec<ObjectPath>,
         loaded_unknown: Vec<ObjectPath>,
@@ -232,11 +242,12 @@ impl Display for TypeSystemError<'_> {
                 f,
                 "Errors while trying to read default instantiated objects"
             ),
-            TypeSystemError::ConstructInequality(s, a, b) => {
+            TypeSystemError::ConstructInequality(e) => {
+                let ConstructInequalityError { src, original, new } = &**e;
                 write!(
                     f,
                     "The constructed instantiated type, and the value read from the instantiated \
-                    value formatted as text are not equal.\nBauble:\n{s}\n\nInstantiated: {a:#?}\nRead: {b:#?}"
+                    value formatted as text are not equal.\nBauble:\n{src}\n\nInstantiated: {original:#?}\nRead: {new:#?}"
                 )
             }
             TypeSystemError::MissingObjects {
@@ -403,7 +414,7 @@ impl TypeRegistry {
                                 attributes: variant.attributes,
                                 extra: variant.extra,
                                 extra_validation: variant.extra_validation,
-                                default: variant.default,
+                                default: variant.default.map(DefaultMaker::new),
                                 ..Default::default()
                             },
                             kind: match variant.kind {
@@ -551,7 +562,7 @@ impl TypeRegistry {
     /// Currently this checks:
     /// - Are there any unassigned registered types?
     /// - If `assert_instanciable` is true then if all `instanciable` types have valid bauble representations.
-    pub fn validate(&self, assert_instanciable: bool) -> Result<(), TypeSystemError> {
+    pub fn validate(&self, assert_instanciable: bool) -> Result<(), TypeSystemError<'_>> {
         if !self.to_be_assigned.is_empty() {
             return Err(TypeSystemError::ToBeAssigned(
                 self.to_be_assigned
@@ -574,7 +585,6 @@ impl TypeRegistry {
                     // If the path is not writable then it cannot be validated
                     // as it cannot be written out as Bauble source.
                     || !ty.meta.path.is_representable_type()
-                    || !ty.meta.traits.contains(&self.object_trait_dependency)
                 {
                     continue;
                 }
@@ -593,6 +603,15 @@ impl TypeRegistry {
                         ty: ty.meta.path.borrow(),
                     });
                 };
+
+                // Value can't be deserialized to object if it doesn't impl the object trait, so
+                // skip converting these to the bauble text format and back.
+                //
+                // We check this after `instantiate`, so we can test the instantiation code for
+                // more types even if a full serialization roundtrip is not tested).
+                if !self.impls_object_trait(value.ty) {
+                    continue;
+                }
 
                 for (path, value) in additonal.into_objects() {
                     objects.push(crate::Object {
@@ -652,7 +671,11 @@ impl TypeRegistry {
                             .skip(span.start)
                             .take(span.end - span.start)
                             .collect();
-                        TypeSystemError::ConstructInequality(src, original, new)
+                        TypeSystemError::ConstructInequality(Box::new(ConstructInequalityError {
+                            src,
+                            original,
+                            new,
+                        }))
                     } else {
                         TypeSystemError::MissingObjects {
                             instantiated_missing: missing
@@ -905,6 +928,11 @@ impl TypeRegistry {
     }
 
     /// Create the default value of this type.
+    ///
+    /// The returned value will be assigned a `TypeId` that is for a type where
+    /// `TypeKind::instanciable` is `true`. In most cases this matches the `ty_id` provided to
+    /// `instantiate`. For trait types this is instead the `ty_id` of the type instiantiated that
+    /// implements the trait.
     pub fn instantiate(
         &self,
         ty_id: TypeId,
@@ -913,7 +941,7 @@ impl TypeRegistry {
         let ty = self.key_type(ty_id);
 
         if let Some(default) = &ty.meta.default {
-            return Some(default(additional_objects, self, ty_id).with_type(ty_id));
+            return Some(default.make_value(additional_objects, self, ty_id));
         }
 
         let construct_unnamed =
@@ -1002,7 +1030,21 @@ impl TypeRegistry {
             TypeKind::Transparent(ty) => {
                 let inner = self.key_type(*ty);
                 crate::Value::Transparent(Box::new(if let TypeKind::Trait(tr) = &inner.kind {
-                    self.iter_type_set(tr)
+                    let mut v: Vec<_> = self
+                        .iter_type_set(tr)
+                        // The transparent type may itself implement the trait, so we need to skip
+                        // it to avoid an infinite loop.
+                        // TODO: are there cases for other type kinds where this may happen? E.g. a
+                        // random struct with a trait (or reference to a trait) as a field?
+                        .filter(|ty| *ty != ty_id)
+                        .collect();
+                    v.sort_unstable_by(|a, b| {
+                        self.key_type(*a)
+                            .meta
+                            .path
+                            .cmp(&self.key_type(*b).meta.path)
+                    });
+                    v.into_iter()
                         .find_map(|ty| self.instantiate(ty, additional_objects))?
                 } else {
                     self.instantiate(*ty, additional_objects)?
@@ -1051,6 +1093,32 @@ pub type ValidationFunction =
 pub type DefaultFunction =
     fn(&mut AdditionalUnspannedObjects, &TypeRegistry, TypeId) -> UnspannedVal;
 
+/// Wrapper around `DefaultFunction` that ensures the returned value is properly assigned a
+/// concrete type ID.
+#[derive(Clone, Copy, Debug)]
+pub struct DefaultMaker(DefaultFunction);
+
+impl DefaultMaker {
+    /// Creates a new `DefaultMaker` wrapping the provided `DefaultFunction`.
+    pub fn new(f: DefaultFunction) -> Self {
+        Self(f)
+    }
+
+    /// See [`DefaultFunction`] docs.
+    pub fn make_value(
+        &self,
+        additional: &mut AdditionalUnspannedObjects,
+        types: &TypeRegistry,
+        ty: TypeId,
+    ) -> UnspannedVal {
+        // Default values not allowed for non-instanciable types.
+        debug_assert!(types.key_type(ty).kind.instanciable());
+        let mut value = (self.0)(additional, types, ty);
+        value.ty = ty;
+        value
+    }
+}
+
 /// Meta information on a type registered within a Bauble context.
 #[derive(Default, Clone, Debug)]
 pub struct TypeMeta {
@@ -1061,7 +1129,7 @@ pub struct TypeMeta {
     /// The traits implemented by the type.
     pub traits: Vec<TraitId>,
     /// Optional function to create a default value of the type.
-    pub default: Option<DefaultFunction>,
+    pub default: Option<DefaultMaker>,
     /// What attributes the type expects.
     pub attributes: NamedFields,
     /// If this type has any extra invariants that need to be checked.

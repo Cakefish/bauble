@@ -139,26 +139,6 @@ impl<'a, T> From<TextExpected<'a>> for chumsky::error::RichPattern<'a, T> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct State<T>(T);
-
-impl<'src, T: Copy, I: Input<'src>> chumsky::inspector::Inspector<'src, I> for State<T> {
-    type Checkpoint = State<T>;
-    #[inline(always)]
-    fn on_token(&mut self, _: &<I as Input<'src>>::Token) {}
-    #[inline(always)]
-    fn on_save<'parse>(&self, _: &chumsky::input::Cursor<'src, 'parse, I>) -> Self::Checkpoint {
-        *self
-    }
-    #[inline(always)]
-    fn on_rewind<'parse>(
-        &mut self,
-        c: &chumsky::input::Checkpoint<'src, 'parse, I, Self::Checkpoint>,
-    ) {
-        *self = *c.inspector();
-    }
-}
-
 // TODO Re-add error recovery
 pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>> {
     let line_comment_end = just::<_, ParserSource<'a>, Extra<'a>>('\n').or(end().map(|_| '\0'));
