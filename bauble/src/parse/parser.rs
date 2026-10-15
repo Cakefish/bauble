@@ -373,16 +373,31 @@ pub fn parser<'a>() -> impl Parser<'a, ParserSource<'a>, ParseValues, Extra<'a>>
                 .repeated()
                 .at_least(1);
 
+            let exponent = one_of("eE").then(one_of("+-").or_not()).then(digits);
+
             // A number with or without decimals.
             let num = just('-')
                 .or_not()
                 .then(int)
                 .then(just('.').ignore_then(digits.to_slice()).or_not())
+                .then(exponent.or_not())
                 .to_slice()
-                .try_map(|s: &str, span| {
-                    Ok(Value::Primitive(PrimitiveValue::Num(s.parse().map_err(
-                        |_| Rich::custom(span, "Failed to parse number"),
-                    )?)))
+                .validate(|s: &str, e, emit| {
+                    let num = if s.contains(['e', 'E']) {
+                        rust_decimal::Decimal::from_scientific(s)
+                    } else {
+                        s.parse()
+                    };
+
+                    let num = num.unwrap_or_else(|err| {
+                        emit.emit(Rich::custom(
+                            e.span(),
+                            format!("Number `{s}` does not fit: {err}"),
+                        ));
+                        rust_decimal::Decimal::ZERO
+                    });
+
+                    Value::Primitive(PrimitiveValue::Num(num))
                 });
 
             // A parser for strings, with escape characters
