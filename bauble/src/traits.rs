@@ -513,8 +513,8 @@ macro_rules! impl_tuple {
     (impl $($ident:ident)+) => {
         impl<'a, A: BaubleAllocator<'a>, $($ident: Bauble<'a, A>),+> Bauble<'a, A> for ($($ident),+) {
             fn construct_type(registry: &mut types::TypeRegistry) -> types::Type {
-                let inner = [$($ident::construct_type(registry)),+];
-                let inner_string = inner.iter().map(|ty| ty.meta.path.to_string()).reduce(
+                let inner = [$(registry.get_or_register_type::<$ident, A>()),+];
+                let inner_string = inner.iter().map(|ty| registry.key_type(*ty).meta.path.to_string()).reduce(
                     |a, b| format!("{a}, {b}")
                 ).unwrap_or(",".to_string());
                 let inner_string = format!("({inner_string})");
@@ -524,11 +524,7 @@ macro_rules! impl_tuple {
                         ..Default::default()
                     },
                     kind: types::TypeKind::Tuple(
-                        types::UnnamedFields::default().with_required([
-                            $(
-                                FieldType::from(registry.get_or_register_type::<$ident, A>())
-                            ),+
-                        ]),
+                        types::UnnamedFields::default().with_required(inner),
                     ),
                 }
             }
