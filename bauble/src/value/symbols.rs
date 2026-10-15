@@ -321,6 +321,11 @@ impl<'a> Symbols<'a> {
         self.uses
             .get(ident)
             .and_then(|reference| reference.module.clone())
+            .or_else(|| {
+                self.ctx
+                    .get_ref(TypePath::new(ident).ok()?)
+                    .and_then(|reference| reference.module)
+            })
     }
 
     fn resolve_path(&self, raw_path: &Path, kind: ResolveKind) -> Result<Spanned<PathKind>> {
@@ -718,6 +723,11 @@ impl<'a, 'b> EarlySymbols<'a, 'b> {
         self.uses
             .get(ident)
             .and_then(|reference| reference.module.clone())
+            .or_else(|| {
+                self.ctx
+                    .get_ref(TypePath::new(ident).ok()?)
+                    .and_then(|reference| reference.module)
+            })
     }
 
     fn resolve_path(&self, raw_path: &Path, kind: ResolveKind) -> Result<Spanned<PathKind>> {
